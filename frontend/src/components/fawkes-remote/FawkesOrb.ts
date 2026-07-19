@@ -1,32 +1,29 @@
-/**
- * FAWKES Orb — port fiel do jarvis (github.com/ethanplusai/jarvis)
- * com identidade visual FAWKES (violet / cyan).
- *
- * Arquitetura:
- *   - 2000 partículas com física CPU (velocity + drift)
- *   - Linhas de conexão entre partículas próximas (additive blending)
- *   - Electrons: pontos brancos que percorrem as conexões (no estado thinking)
- *   - THREE.Clock para tempo em segundos (mesma base do original)
- *   - Rotação aplicada em points + lines + electrons (sync visual)
- *
- * Paleta FAWKES:
- *   idle       → #7c3aed  violet
- *   listening  → #06b6d4  cyan
- *   thinking   → #4c1d95  deep violet
- *   responding → #a78bfa  light violet
- *   error      → #ef4444  red
- */
-
 import * as THREE from 'three';
-export type OrbState = 'idle' | 'listening' | 'thinking' | 'responding' | 'error' | 'success';
+import type { OrbState } from '../../features/fawkes-remote/types';
+import { ORB_THEMES } from './orbTheme';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
-
 const N             = 2000;
 const MAX_LINES     = 3000;
 const MAX_ELECTRONS = 200;
 
-// ── FawkesOrb ─────────────────────────────────────────────────────────────────
+function _makeCircleSprite() {
+  const size = 64;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+  
+  const gradient = ctx.createRadialGradient(size/2, size/2, 0, size/2, size/2, size/2);
+  gradient.addColorStop(0, 'rgba(255,255,255,1)');
+  gradient.addColorStop(0.2, 'rgba(255,255,255,1)');
+  gradient.addColorStop(0.5, 'rgba(255,255,255,0.2)');
+  gradient.addColorStop(1, 'rgba(255,255,255,0)');
+  
+  ctx.fillStyle = gradient;
+  ctx.fillRect(0, 0, size, size);
+  return new THREE.CanvasTexture(canvas);
+}
 
 export class FawkesOrb {
   private renderer:    THREE.WebGLRenderer;
@@ -41,22 +38,29 @@ export class FawkesOrb {
   private pos:   Float32Array;
   private vel:   Float32Array;
   private phase: Float32Array;
+  
+  // Colors (Vertex Colors)
+  private colors: Float32Array;
+  private targetColors: Float32Array;
 
   // Connection lines
   private lineGeo: THREE.BufferGeometry;
   private lineMat: THREE.LineBasicMaterial;
   private lineObj: THREE.LineSegments;
   private linePos: Float32Array;
+  private lineColors: Float32Array;
 
   // Electrons
   private electronGeo: THREE.BufferGeometry;
   private electronMat: THREE.PointsMaterial;
   private electronObj: THREE.Points;
   private electronPos: Float32Array;
+  private electronColors: Float32Array;
   private activeElectrons: Array<{
     sx: number; sy: number; sz: number;
     ex: number; ey: number; ez: number;
     t: number; speed: number;
+    color: THREE.Color;
   }> = [];
   private lastElectronSpawn = 0;
 
@@ -95,21 +99,17 @@ export class FawkesOrb {
   private destroyed = false;
 
   constructor(canvas: HTMLCanvasElement) {
-    // ── Renderer ─────────────────────────────────────────────────────────────
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5)); // Capped for mobile
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
     
-    // Size based on parent element, fallback to window
     const parent = canvas.parentElement;
     const w = parent ? parent.clientWidth : window.innerWidth;
     const h = parent ? parent.clientHeight : window.innerHeight;
     this.renderer.setSize(w, h);
-    this.renderer.setClearColor(0x050508, 1); // Fundo escuro fixo para que o AdditiveBlending brilhe forte
+    this.renderer.setClearColor(0x050508, 1);
 
-    // ── Circular sprite texture (evita quadrados) ─────────────────────────────
     const sprite = _makeCircleSprite();
 
-    // ── Scene / Camera ────────────────────────────────────────────────────────
     this.scene  = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(45, w / h, 1, 1000);
     this.camera.position.z = 80;
@@ -119,6 +119,8 @@ export class FawkesOrb {
     this.pos   = new Float32Array(N * 3);
     this.vel   = new Float32Array(N * 3);
     this.phase = new Float32Array(N);
+    this.colors = new Float32Array(N * 3);
+    this.targetColors = new Float32Array(N * 3);
 
     for (let i = 0; i < N; i++) {
       const theta = Math.random() * Math.PI * 2;
@@ -128,13 +130,22 @@ export class FawkesOrb {
       this.pos[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
       this.pos[i * 3 + 2] = r * Math.cos(phi);
       this.phase[i] = Math.random() * 1000;
+      
+      // Init with idle colors
+      const color = ORB_THEMES['idle'].colors[Math.floor(Math.random() * ORB_THEMES['idle'].colors.length)];
+      this.colors[i*3] = color.r;
+      this.colors[i*3+1] = color.g;
+      this.colors[i*3+2] = color.b;
+      this.targetColors[i*3] = color.r;
+      this.targetColors[i*3+1] = color.g;
+      this.targetColors[i*3+2] = color.b;
     }
 
     this.geo = new THREE.BufferGeometry();
     this.geo.setAttribute('position', new THREE.BufferAttribute(this.pos, 3));
+    this.geo.setAttribute('color', new THREE.BufferAttribute(this.colors, 3));
 
     this.mat = new THREE.PointsMaterial({
-      color:           0x7c3aed,
       size:            0.6,
       map:             sprite,
       alphaMap:        sprite,
@@ -144,6 +155,7 @@ export class FawkesOrb {
       blending:        THREE.AdditiveBlending,
       depthWrite:      false,
       alphaTest:       0.01,
+      vertexColors:    true,
     });
 
     this.pts = new THREE.Points(this.geo, this.mat);
@@ -151,16 +163,18 @@ export class FawkesOrb {
 
     // ── Connection lines ──────────────────────────────────────────────────────
     this.linePos = new Float32Array(MAX_LINES * 6);
+    this.lineColors = new Float32Array(MAX_LINES * 6);
     this.lineGeo = new THREE.BufferGeometry();
     this.lineGeo.setAttribute('position', new THREE.BufferAttribute(this.linePos, 3));
+    this.lineGeo.setAttribute('color', new THREE.BufferAttribute(this.lineColors, 3));
     this.lineGeo.setDrawRange(0, 0);
 
     this.lineMat = new THREE.LineBasicMaterial({
-      color:      0x7c3aed,
       transparent: true,
       opacity:    0.0,
       blending:   THREE.AdditiveBlending,
       depthWrite: false,
+      vertexColors: true,
     });
 
     this.lineObj = new THREE.LineSegments(this.lineGeo, this.lineMat);
@@ -168,12 +182,13 @@ export class FawkesOrb {
 
     // ── Electrons ─────────────────────────────────────────────────────────────
     this.electronPos = new Float32Array(MAX_ELECTRONS * 3);
+    this.electronColors = new Float32Array(MAX_ELECTRONS * 3);
     this.electronGeo = new THREE.BufferGeometry();
     this.electronGeo.setAttribute('position', new THREE.BufferAttribute(this.electronPos, 3));
+    this.electronGeo.setAttribute('color', new THREE.BufferAttribute(this.electronColors, 3));
     this.electronGeo.setDrawRange(0, 0);
 
     this.electronMat = new THREE.PointsMaterial({
-      color:           0xc4b5fd,   // violet tint
       size:            0.8,
       map:             sprite,
       alphaMap:        sprite,
@@ -183,6 +198,7 @@ export class FawkesOrb {
       blending:        THREE.AdditiveBlending,
       depthWrite:      false,
       alphaTest:       0.01,
+      vertexColors:    true,
     });
 
     this.electronObj = new THREE.Points(this.electronGeo, this.electronMat);
@@ -196,15 +212,18 @@ export class FawkesOrb {
       window.addEventListener('resize', this._onResizeFallback);
     }
     
-    // Initial resize to ensure correct aspect
     this._onResizeFallback();
-    
     this._loop();
   }
 
   // ── Public API ────────────────────────────────────────────────────────────────
 
-  set state(s: OrbState) { this._state = s; }
+  set state(s: OrbState) { 
+    if (this._state !== s) {
+      this._state = s;
+      this._assignTargetColors(s);
+    }
+  }
   get state(): OrbState  { return this._state; }
 
   setAudioLevel(v: number): void {
@@ -221,7 +240,6 @@ export class FawkesOrb {
     }
     window.removeEventListener('resize', this._onResizeFallback);
     
-    // Dispose resources properly
     this.geo.dispose();
     this.mat.dispose();
     this.lineGeo.dispose();
@@ -266,38 +284,32 @@ export class FawkesOrb {
     this.renderer.render(this.scene, this.camera);
   };
 
-  private _update(): void {
-    const t = this.clock.getElapsedTime();   // seconds — mesma base do jarvis
-
-    // ── State targets ─────────────────────────────────────────────────────────
-    switch (this._state) {
-      case 'idle':
-        this.targetRadius = 28; this.targetSpeed = 0.20; this.targetBright = 0.65;
-        this.targetSize = 0.35; this.targetLineAmount = 0.08; this.targetElectronRate = 0;
-        break;
-      case 'listening':
-        this.targetRadius = 22; this.targetSpeed = 0.30; this.targetBright = 0.85;
-        this.targetSize = 0.40; this.targetLineAmount = 0.20; this.targetElectronRate = 0;
-        break;
-      case 'thinking':
-        this.targetRadius = 16; this.targetSpeed = 0.50; this.targetBright = 0.90;
-        this.targetSize = 0.30; this.targetLineAmount = 0.35; this.targetElectronRate = 0.015;
-        break;
-      case 'responding':
-        this.targetRadius = 18; this.targetSpeed = 0.20; this.targetBright = 0.85;
-        this.targetSize = 0.40; this.targetLineAmount = 0.22; this.targetElectronRate = 0;
-        break;
-      case 'error':
-        this.targetRadius = 20; this.targetSpeed = 0.40; this.targetBright = 0.60;
-        this.targetSize = 0.25; this.targetLineAmount = 0.10; this.targetElectronRate = 0;
-        break;
-      case 'success':
-        this.targetRadius = 30; this.targetSpeed = 0.60; this.targetBright = 0.90;
-        this.targetSize = 0.50; this.targetLineAmount = 0.15; this.targetElectronRate = 0.05;
-        break;
+  private _assignTargetColors(state: OrbState) {
+    const theme = ORB_THEMES[state];
+    const palette = theme.colors;
+    for (let i = 0; i < N; i++) {
+      // Procedural pick based on phase or just random to ensure even distribution
+      const colorIndex = Math.floor(Math.random() * palette.length);
+      const color = palette[colorIndex];
+      this.targetColors[i * 3]     = color.r;
+      this.targetColors[i * 3 + 1] = color.g;
+      this.targetColors[i * 3 + 2] = color.b;
     }
+  }
 
-    // ── Lerp ─────────────────────────────────────────────────────────────────
+  private _update(): void {
+    const t = this.clock.getElapsedTime();
+
+    // ── Apply Theme Targets ───────────────────────────────────────────────────
+    const theme = ORB_THEMES[this._state];
+    this.targetRadius = theme.radius;
+    this.targetSpeed = theme.speed;
+    this.targetBright = theme.brightness;
+    this.targetSize = theme.size;
+    this.targetLineAmount = theme.lineAmount;
+    this.targetElectronRate = theme.electronRate;
+
+    // ── Lerp Configuration ───────────────────────────────────────────────────
     const lr = 0.02;
     this.currentRadius     += (this.targetRadius     - this.currentRadius)     * lr;
     this.currentSpeed      += (this.targetSpeed      - this.currentSpeed)      * lr;
@@ -305,6 +317,9 @@ export class FawkesOrb {
     this.currentSize       += (this.targetSize       - this.currentSize)       * lr;
     this.lineAmount        += (this.targetLineAmount - this.lineAmount)        * lr;
     this.electronSpawnRate += (this.targetElectronRate - this.electronSpawnRate) * lr;
+
+    this.mat.size = this.currentSize;
+    this.mat.opacity = this.currentBright;
 
     // ── Transition tumble ─────────────────────────────────────────────────────
     if (this._state !== this.lastStateForTumble) {
@@ -318,40 +333,48 @@ export class FawkesOrb {
       this.spinZ += this.transitionEnergy * 0.008 * Math.cos(t * 1.3);
     }
 
-    // ── Audio (bass/mid set externally via setAudioLevel) ────────────────────
-
     // ── Depth breathing ───────────────────────────────────────────────────────
     let zTarget = Math.sin(t * 0.12) * 8;
-    if (this._state === 'thinking')   zTarget = Math.sin(t * 0.3) * 15 + Math.sin(t * 0.9) * 6;
-    else if (this._state === 'responding') zTarget = Math.sin(t * 0.15) * 6 - this.bass * 10;
+    if (this._state === 'transcribing') zTarget = Math.sin(t * 0.3) * 15 + Math.sin(t * 0.9) * 6;
+    else if (this._state === 'executing') zTarget = Math.sin(t * 0.15) * 6 - this.bass * 10;
+    
     this.cloudZVel += (zTarget - this.cloudZ) * 0.008;
     this.cloudZVel *= 0.94;
     this.cloudZ    += this.cloudZVel;
 
-    // ── Apply rotation + z to ALL objects (jarvis pattern) ───────────────────
+    // ── Apply rotation + z ───────────────────────────────────────────────────
     this.pts.rotation.x     = this.spinX;
     this.pts.rotation.y     = this.spinY;
     this.pts.rotation.z     = this.spinZ;
     this.pts.position.z     = this.cloudZ;
+    
     this.lineObj.rotation.x = this.spinX;
     this.lineObj.rotation.y = this.spinY;
     this.lineObj.rotation.z = this.spinZ;
     this.lineObj.position.z = this.cloudZ;
+    
     this.electronObj.rotation.x = this.spinX;
     this.electronObj.rotation.y = this.spinY;
     this.electronObj.rotation.z = this.spinZ;
     this.electronObj.position.z = this.cloudZ;
 
-    // ── Particle physics ──────────────────────────────────────────────────────
+    // ── Particle physics & Colors ─────────────────────────────────────────────
     const p = this.geo.getAttribute('position') as THREE.BufferAttribute;
+    const pColor = this.geo.getAttribute('color') as THREE.BufferAttribute;
     const a = p.array as Float32Array;
+    const c = pColor.array as Float32Array;
 
     for (let i = 0; i < N; i++) {
       const i3 = i * 3;
       const x = a[i3], y = a[i3 + 1], z = a[i3 + 2];
       const px = this.phase[i];
 
-      // Oscillatory drift (time in seconds → frequências low, motion suave)
+      // Lerp colors
+      c[i3]     += (this.targetColors[i3]     - c[i3])     * lr;
+      c[i3 + 1] += (this.targetColors[i3 + 1] - c[i3 + 1]) * lr;
+      c[i3 + 2] += (this.targetColors[i3 + 2] - c[i3 + 2]) * lr;
+
+      // Oscillatory drift
       this.vel[i3]     += Math.sin(t * 0.05 + px)           * 0.001 * this.currentSpeed;
       this.vel[i3 + 1] += Math.cos(t * 0.06 + px * 1.3)     * 0.001 * this.currentSpeed;
       this.vel[i3 + 2] += Math.sin(t * 0.055 + px * 0.7)    * 0.001 * this.currentSpeed;
@@ -373,8 +396,8 @@ export class FawkesOrb {
         this.vel[i3 + 2] += (z / dist) * this.bass * 0.02;
       }
 
-      // Mid pulse (responding)
-      if (this._state === 'responding' && this.mid > 0.1) {
+      // Mid pulse
+      if (this._state === 'executing' && this.mid > 0.1) {
         const pulse = Math.sin(t * 8 + px);
         this.vel[i3]     += (x / dist) * this.mid * 0.012 * pulse;
         this.vel[i3 + 1] += (y / dist) * this.mid * 0.012 * pulse;
@@ -389,28 +412,41 @@ export class FawkesOrb {
       a[i3 + 2] += this.vel[i3 + 2];
     }
     p.needsUpdate = true;
+    pColor.needsUpdate = true;
 
     // ── Connection lines ──────────────────────────────────────────────────────
-    const activeConnections: Array<{ x1: number; y1: number; z1: number; x2: number; y2: number; z2: number }> = [];
+    const activeConnections: Array<{ x1: number; y1: number; z1: number; x2: number; y2: number; z2: number; r: number; g: number; b: number }> = [];
 
     if (this.lineAmount > 0.01) {
       const lp = this.lineGeo.getAttribute('position') as THREE.BufferAttribute;
+      const lc = this.lineGeo.getAttribute('color') as THREE.BufferAttribute;
       const la = lp.array as Float32Array;
+      const lca = lc.array as Float32Array;
+      
       let lineCount = 0;
-      const maxDist  = 4.0 * (1 + this.bass * 0.2);   // Reduzido de 5.5 para 4.0 para evitar sabre de luz
+      const maxDist  = 4.0 * (1 + this.bass * 0.2);
       const maxDist2 = maxDist * maxDist;
-      const step     = Math.max(1, Math.floor(N / 450)); // menos partículas verificadas
+      const step     = Math.max(1, Math.floor(N / 450));
 
       for (let i = 0; i < N && lineCount < MAX_LINES; i += step) {
         const i3 = i * 3;
         const x1 = a[i3], y1 = a[i3 + 1], z1 = a[i3 + 2];
+        const r1 = c[i3], g1 = c[i3 + 1], b1 = c[i3 + 2];
+        
         for (let j = i + step; j < N && lineCount < MAX_LINES; j += step) {
           const j3 = j * 3;
           const dx = a[j3] - x1, dy = a[j3 + 1] - y1, dz = a[j3 + 2] - z1;
           if (dx * dx + dy * dy + dz * dz < maxDist2) {
             const idx = lineCount * 6;
+            
+            // Positions
             la[idx]     = x1;    la[idx + 1] = y1;    la[idx + 2] = z1;
             la[idx + 3] = a[j3]; la[idx + 4] = a[j3 + 1]; la[idx + 5] = a[j3 + 2];
+            
+            // Colors (interpolate between the two points for line ends)
+            lca[idx]     = r1;      lca[idx + 1] = g1;      lca[idx + 2] = b1;
+            lca[idx + 3] = c[j3]; lca[idx + 4] = c[j3 + 1]; lca[idx + 5] = c[j3 + 2];
+            
             lineCount++;
           }
         }
@@ -418,92 +454,66 @@ export class FawkesOrb {
 
       this.lineGeo.setDrawRange(0, lineCount * 2);
       lp.needsUpdate = true;
-      this.lineMat.opacity = this.lineAmount * 0.04;  // Reduzido para não estourar brilhante demais
+      lc.needsUpdate = true;
+      this.lineMat.opacity = this.lineAmount * 0.04;
 
       // Store connections for electron spawning
-      for (let c = 0; c < Math.min(lineCount, 500); c++) {
-        const ci = c * 6;
-        activeConnections.push({ x1: la[ci], y1: la[ci + 1], z1: la[ci + 2], x2: la[ci + 3], y2: la[ci + 4], z2: la[ci + 5] });
+      for (let k = 0; k < Math.min(lineCount, 500); k++) {
+        const ci = k * 6;
+        activeConnections.push({ 
+          x1: la[ci], y1: la[ci + 1], z1: la[ci + 2], 
+          x2: la[ci + 3], y2: la[ci + 4], z2: la[ci + 5],
+          r: lca[ci], g: lca[ci + 1], b: lca[ci + 2] // Electron inherits color
+        });
       }
     } else {
       this.lineGeo.setDrawRange(0, 0);
     }
 
     // ── Electrons ─────────────────────────────────────────────────────────────
-    if (activeConnections.length > 0 && this.electronSpawnRate > 0.005) {
-      if (this.activeElectrons.length < 3 && (t - this.lastElectronSpawn) > 1.0) {
-        const conn = activeConnections[Math.floor(Math.random() * activeConnections.length)];
-        this.activeElectrons.push({
-          sx: conn.x1, sy: conn.y1, sz: conn.z1,
-          ex: conn.x2, ey: conn.y2, ez: conn.z2,
-          t:  0,
-          speed: 0.003 + Math.random() * 0.003,
-        });
+    if (this.electronSpawnRate > 0 && activeConnections.length > 0) {
+      if (t - this.lastElectronSpawn > (1.0 - this.electronSpawnRate)) {
+        if (this.activeElectrons.length < MAX_ELECTRONS) {
+          const conn = activeConnections[Math.floor(Math.random() * activeConnections.length)];
+          this.activeElectrons.push({
+            sx: conn.x1, sy: conn.y1, sz: conn.z1,
+            ex: conn.x2, ey: conn.y2, ez: conn.z2,
+            t: 0,
+            speed: 0.02 + Math.random() * 0.04,
+            color: new THREE.Color(conn.r, conn.g, conn.b)
+          });
+        }
         this.lastElectronSpawn = t;
       }
     }
 
-    const ep = this.electronGeo.getAttribute('position') as THREE.BufferAttribute;
-    const ea = ep.array as Float32Array;
     let aliveCount = 0;
+    const ep = this.electronGeo.getAttribute('position') as THREE.BufferAttribute;
+    const ec = this.electronGeo.getAttribute('color') as THREE.BufferAttribute;
+    const ea = ep.array as Float32Array;
+    const eca = ec.array as Float32Array;
 
-    for (let e = this.activeElectrons.length - 1; e >= 0; e--) {
-      const el = this.activeElectrons[e];
+    for (let i = this.activeElectrons.length - 1; i >= 0; i--) {
+      const el = this.activeElectrons[i];
       el.t += el.speed;
-      if (el.t >= 1) { this.activeElectrons.splice(e, 1); continue; }
+      if (el.t >= 1.0) {
+        this.activeElectrons.splice(i, 1);
+        continue;
+      }
       const ei = aliveCount * 3;
       ea[ei]     = el.sx + (el.ex - el.sx) * el.t;
       ea[ei + 1] = el.sy + (el.ey - el.sy) * el.t;
       ea[ei + 2] = el.sz + (el.ez - el.sz) * el.t;
+      
+      eca[ei]     = el.color.r;
+      eca[ei + 1] = el.color.g;
+      eca[ei + 2] = el.color.b;
+      
       aliveCount++;
     }
 
     this.electronGeo.setDrawRange(0, aliveCount);
     ep.needsUpdate = true;
-
-    // ── Material updates ──────────────────────────────────────────────────────
-    this.mat.opacity = this.currentBright + this.bass * 0.08;
-    this.mat.size    = this.currentSize   + this.bass * 0.05;
-
-    // Color lerp per state (FAWKES palette)
-    const targetColor = this._stateColor();
-    this.mat.color.lerp(targetColor, 0.015);
-    this.lineMat.color.lerp(targetColor, 0.015);
-
-    // ── Camera ────────────────────────────────────────────────────────────────
-    this.camera.position.x = Math.sin(t * 0.02) * 5;
-    this.camera.position.y = Math.cos(t * 0.03) * 3;
-    this.camera.lookAt(0, 0, this.cloudZ * 0.2);
+    ec.needsUpdate = true;
   }
-
-  private _stateColor(): THREE.Color {
-    switch (this._state) {
-      case 'listening':  return new THREE.Color(0x06b6d4);
-      case 'thinking':   return new THREE.Color(0x4c1d95);
-      case 'responding': return new THREE.Color(0xa78bfa);
-      case 'error':      return new THREE.Color(0xef4444);
-      case 'success':    return new THREE.Color(0x4ade80);
-      default:           return new THREE.Color(0x7c3aed);
-    }
-  }
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/** Gera textura circular suave para evitar partículas quadradas. */
-function _makeCircleSprite(): THREE.Texture {
-  const size = 64;
-  const c    = document.createElement('canvas');
-  c.width = c.height = size;
-  const ctx = c.getContext('2d')!;
-  const r   = size / 2;
-  const grd = ctx.createRadialGradient(r, r, 0, r, r, r);
-  grd.addColorStop(0,   'rgba(255,255,255,1)');
-  grd.addColorStop(0.4, 'rgba(255,255,255,0.8)');
-  grd.addColorStop(1,   'rgba(255,255,255,0)');
-  ctx.fillStyle = grd;
-  ctx.fillRect(0, 0, size, size);
-  const tex = new THREE.CanvasTexture(c);
-  tex.needsUpdate = true;
-  return tex;
 }

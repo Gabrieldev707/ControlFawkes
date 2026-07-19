@@ -1,24 +1,12 @@
 import React, { useRef, useEffect } from 'react';
-import { FawkesOrb, type OrbState } from './FawkesOrb';
-import type { RemoteState } from '../../features/fawkes-remote/types';
+import { FawkesOrb } from './FawkesOrb';
+import type { OrbState } from '../../features/fawkes-remote/types';
 
 interface RemoteOrbProps {
-  state: RemoteState;
+  state: OrbState;
 }
 
-// Map RemoteState to OrbState
-function mapState(s: RemoteState): OrbState {
-  switch(s) {
-    case 'LISTENING': return 'listening';
-    case 'TRANSCRIBING': return 'transcribing';
-    case 'NEEDS_SELECTION': return 'needs_selection';
-    case 'THINKING': return 'thinking';
-    case 'EXECUTING': return 'executing';
-    case 'ERROR': return 'error';
-    case 'SUCCESS': return 'success';
-    default: return 'idle';
-  }
-}
+
 
 export const RemoteOrb: React.FC<RemoteOrbProps> = ({ state }) => {
   const mountRef = useRef<HTMLDivElement>(null);
@@ -51,10 +39,10 @@ export const RemoteOrb: React.FC<RemoteOrbProps> = ({ state }) => {
   // Sync state changes
   useEffect(() => {
     if (orbRef.current) {
-      orbRef.current.state = mapState(state);
+      orbRef.current.state = state; // We no longer use mapState since they are strictly equal
     }
   }, [state]);
 
-  // Give the container some relative size/boundaries, similar to what we had
-  return <div ref={mountRef} className="remote-orb" style={{ width: '100%', height: '100%', maxWidth: 300, maxHeight: 300 }} />;
+  // Give the container relative size without inline limits
+  return <div ref={mountRef} className="remote-orb-container" />;
 };

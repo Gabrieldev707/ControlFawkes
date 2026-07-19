@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import type { RemoteState } from './types';
+import React, { useState, useCallback, useRef } from 'react';
+import type { OrbState, Platform, ServerMessage } from './types';
+import { useWebSocket } from '../../hooks/useWebSocket';
 import { 
   RemoteOrb, 
   ConnectionStatus, 
@@ -10,49 +11,87 @@ import {
 import '../../styles/fawkes-remote.css';
 
 export const FawkesRemotePage: React.FC = () => {
-  const [state, setState] = useState<RemoteState>('CONNECTING');
+  const [orbState, setOrbState] = useState<OrbState>('idle');
+  const [selectedPlatform, setSelectedPlatform] = useState<Platform | null>(null);
+  
+  const currentRequestId = useRef<string | null>(null);
+  const successTimeoutRef = useRef<number | null>(null);
 
-  useEffect(() => {
-    // Esqueleto de WebSocket
-    const ws = new WebSocket(import.meta.env.VITE_WS_URL || 'ws://localhost:8100/ws');
-    
-    ws.onopen = () => {
-      console.log('WS Connected');
-      // O backend vai mandar um STATE_UPDATE logo em seguida
-    };
+  const handleMessage = useCallback((msg: ServerMessage) => {
+    if (msg.type === 'STATE_UPDATE') {
+      // Backend sent state update, not strictly mapped to visual orb state in Phase 1.5
+      return;
+    }
 
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        if (data.type === 'STATE_UPDATE') {
-          setState(data.state as RemoteState);
-        }
-      } catch (err) {
-        console.error('Error parsing WS message', err);
-      }
-    };
+    // Only process responses for our current request
+    if ('requestId' in msg && msg.requestId !== currentRequestId.current) {
+      return;
+    }
 
-    ws.onerror = () => setState('ERROR');
-    ws.onclose = () => setState('DISCONNECTED');
-
-    return () => {
-      ws.close();
-    };
+    if (msg.type === 'COMMAND_RESULT') {
+      setOrbState('success');
+      
+      // Clear selection after a delay and return to idle
+      if (successTimeoutRef.current) clearTimeout(successTimeoutRef.current);
+      successTimeoutRef.current = window.setTimeout(() => {
+        setOrbState('idle');
+        setSelectedPlatform(null);
+        currentRequestId.current = null;
+      }, 2000);
+      
+    } else if (msg.type === 'ERROR') {
+      setOrbState('error');
+      
+      if (successTimeoutRef.current) clearTimeout(successTimeoutRef.current);
+      successTimeoutRef.current = window.setTimeout(() => {
+        setOrbState('idle');
+        setSelectedPlatform(null);
+        currentRequestId.current = null;
+      }, 3000);
+    }
   }, []);
+
+  const { connectionState, sendMessage } = useWebSocket({
+    onMessage: handleMessage
+  });
+
+  const handlePlatformSelect = (platform: Platform) => {
+    if (connectionState !== 'connected') return;
+    if (orbState === 'executing') return;
+    
+    // Clear previous timeouts
+    if (successTimeoutRef.current) clearTimeout(successTimeoutRef.current);
+    
+    const reqId = crypto.randomUUID();
+    currentRequestId.current = reqId;
+    
+    setSelectedPlatform(platform);
+    setOrbState('executing');
+    
+    sendMessage({
+      type: 'PLATFORM_SELECTED',
+      requestId: reqId,
+      payload: { platform }
+    });
+  };
 
   return (
     <div className="remote-container">
       <div className="remote-header">
         <h1 className="remote-title">FAWKES</h1>
-        <ConnectionStatus state={state} />
+        <ConnectionStatus state={connectionState} />
       </div>
 
       <div className="orb-container">
-        <RemoteOrb state={state} />
+        <RemoteOrb state={orbState} />
       </div>
 
       <div className="input-area">
-        <PlatformGrid />
+        <PlatformGrid 
+          selectedPlatform={selectedPlatform}
+          disabled={connectionState !== 'connected'}
+          onSelect={handlePlatformSelect}
+        />
         
         <div className="main-controls">
           <TextInput />
