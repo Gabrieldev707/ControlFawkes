@@ -24,9 +24,9 @@ export const ORB_THEMES: Record<OrbState, OrbTheme> = {
     ],
     radius: 28,
     speed: 0.20,
-    brightness: 0.65,
-    size: 0.35,
-    lineAmount: 0.08,
+    brightness: 0.85, // aumentado de 0.65
+    size: 0.60,       // levemente maior (era 0.35)
+    lineAmount: 0.15, // aumentado de 0.08
     electronRate: 0,
   },
   listening: {
@@ -39,9 +39,9 @@ export const ORB_THEMES: Record<OrbState, OrbTheme> = {
     ],
     radius: 22,
     speed: 0.30,
-    brightness: 0.85,
-    size: 0.40,
-    lineAmount: 0.20,
+    brightness: 0.95,
+    size: 0.65,
+    lineAmount: 0.25,
     electronRate: 0,
   },
   transcribing: {
@@ -54,9 +54,9 @@ export const ORB_THEMES: Record<OrbState, OrbTheme> = {
     ],
     radius: 16,
     speed: 0.50,
-    brightness: 0.90,
-    size: 0.30,
-    lineAmount: 0.35,
+    brightness: 1.0,
+    size: 0.55,
+    lineAmount: 0.40,
     electronRate: 0.015,
   },
   needs_selection: {
@@ -69,9 +69,9 @@ export const ORB_THEMES: Record<OrbState, OrbTheme> = {
     ],
     radius: 18,
     speed: 0.20,
-    brightness: 0.85,
-    size: 0.40,
-    lineAmount: 0.22,
+    brightness: 0.95,
+    size: 0.65,
+    lineAmount: 0.30,
     electronRate: 0,
   },
   executing: {
@@ -84,9 +84,9 @@ export const ORB_THEMES: Record<OrbState, OrbTheme> = {
     ],
     radius: 16,
     speed: 0.60,
-    brightness: 0.95,
-    size: 0.35,
-    lineAmount: 0.35,
+    brightness: 1.0,
+    size: 0.60,
+    lineAmount: 0.40,
     electronRate: 0.02,
   },
   success: {
@@ -99,8 +99,8 @@ export const ORB_THEMES: Record<OrbState, OrbTheme> = {
     ],
     radius: 30,
     speed: 0.60,
-    brightness: 0.90,
-    size: 0.50,
+    brightness: 0.95,
+    size: 0.70,
     lineAmount: 0.15,
     electronRate: 0.05,
   },
@@ -114,9 +114,9 @@ export const ORB_THEMES: Record<OrbState, OrbTheme> = {
     ],
     radius: 20,
     speed: 0.40,
-    brightness: 0.60,
-    size: 0.25,
-    lineAmount: 0.10,
+    brightness: 0.85,
+    size: 0.50,
+    lineAmount: 0.15,
     electronRate: 0,
   }
 };

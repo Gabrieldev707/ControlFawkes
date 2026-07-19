@@ -112,7 +112,7 @@ export class FawkesOrb {
 
     this.scene  = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(45, w / h, 1, 1000);
-    this.camera.position.z = 80;
+    this.camera.position.z = 70; // Voltar um pouco, mas ainda mais perto que 80
     this.clock  = new THREE.Clock();
 
     // ── Particle data ─────────────────────────────────────────────────────────
@@ -146,11 +146,11 @@ export class FawkesOrb {
     this.geo.setAttribute('color', new THREE.BufferAttribute(this.colors, 3));
 
     this.mat = new THREE.PointsMaterial({
-      size:            0.6,
+      size:            0.6, // Voltar ao normal
       map:             sprite,
       alphaMap:        sprite,
       transparent:     true,
-      opacity:         0.6,
+      opacity:         1.0, // Mas manter intenso
       sizeAttenuation: true,
       blending:        THREE.AdditiveBlending,
       depthWrite:      false,
@@ -171,7 +171,7 @@ export class FawkesOrb {
 
     this.lineMat = new THREE.LineBasicMaterial({
       transparent: true,
-      opacity:    0.0,
+      opacity:    0.15, // Suave
       blending:   THREE.AdditiveBlending,
       depthWrite: false,
       vertexColors: true,
@@ -189,11 +189,11 @@ export class FawkesOrb {
     this.electronGeo.setDrawRange(0, 0);
 
     this.electronMat = new THREE.PointsMaterial({
-      size:            0.8,
+      size:            0.9, // Pouco maior
       map:             sprite,
       alphaMap:        sprite,
       transparent:     true,
-      opacity:         0.7,
+      opacity:         0.9, // Mais visível
       sizeAttenuation: true,
       blending:        THREE.AdditiveBlending,
       depthWrite:      false,
@@ -424,7 +424,7 @@ export class FawkesOrb {
       const lca = lc.array as Float32Array;
       
       let lineCount = 0;
-      const maxDist  = 4.0 * (1 + this.bass * 0.2);
+      const maxDist  = 5.0 * (1 + this.bass * 0.2); // Voltar perto do original
       const maxDist2 = maxDist * maxDist;
       const step     = Math.max(1, Math.floor(N / 450));
 
