@@ -1,0 +1,199 @@
+:root {
+  /* Cores e Superfícies (baseadas no OrcTech tokens.css) */
+  --bg-app: #050508;
+  --bg-panel: rgba(255, 255, 255, 0.03);
+  --bg-panel-hover: rgba(255, 255, 255, 0.05);
+  
+  --border-default: #1a1a2e;
+  --border-accent: rgba(124, 58, 237, 0.35);
+
+  --accent: #7c3aed; /* Violeta */
+  --accent-bright: #a78bfa;
+  --accent-glow: rgba(124, 58, 237, 0.45);
+
+  --cyan: #06b6d4;
+  --green: #4ade80;
+  --red: #f87171;
+
+  --text-primary: #e2e8f0;
+  --text-secondary: #94a3b8;
+
+  --font-ui: system-ui, -apple-system, sans-serif;
+  
+  --radius-lg: 14px;
+  --radius-full: 9999px;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background-color: var(--bg-app);
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden; /* Mobile app feel */
+}
+
+/* Layout Principal */
+.remote-container {
+  display: flex;
+  flex-direction: column;
+  height: 100dvh; /* dvh for mobile */
+  padding: env(safe-area-inset-top, 20px) 20px env(safe-area-inset-bottom, 20px) 20px;
+  max-width: 500px;
+  margin: 0 auto;
+  position: relative;
+}
+
+/* Header */
+.remote-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 20px;
+}
+
+.remote-title {
+  font-size: 1.2rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: 0.05em;
+}
+
+.status-badge {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  padding: 4px 10px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-full);
+}
+
+.status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+.status-dot.connected { background: var(--green); box-shadow: 0 0 8px var(--green); }
+.status-dot.disconnected { background: var(--red); box-shadow: 0 0 8px var(--red); }
+.status-dot.connecting { background: var(--cyan); box-shadow: 0 0 8px var(--cyan); }
+
+/* Orb Container */
+.orb-container {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  min-height: 250px;
+  margin-top: -10px;
+  position: relative;
+}
+
+/* Input Area */
+.input-area {
+  padding: 10px 0 20px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.platform-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.platform-btn {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  padding: 12px 8px;
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.22, 1, 0.36, 1);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  min-height: 80px;
+}
+
+.platform-logo {
+  width: 48px;
+  height: 48px;
+  object-fit: contain;
+  transition: all 0.25s ease;
+  filter: drop-shadow(0 2px 4px rgba(0,0,0,0.5));
+}
+
+.platform-btn:active {
+  background: var(--bg-panel-hover);
+  border-color: var(--accent);
+  color: var(--text-primary);
+  transform: scale(0.96);
+  box-shadow: 0 0 16px var(--accent-glow);
+}
+
+.platform-btn:active .platform-logo {
+  transform: scale(1.1);
+}
+
+/* Controls */
+.main-controls {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+}
+
+.text-input-wrapper {
+  flex: 1;
+  position: relative;
+}
+
+.text-input-wrapper input {
+  width: 100%;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-full);
+  padding: 14px 20px;
+  color: var(--text-primary);
+  font-size: 1rem;
+  outline: none;
+  transition: border-color 0.2s;
+}
+
+.text-input-wrapper input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+
+.voice-btn {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-default);
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.voice-btn:active {
+  background: var(--accent);
+  border-color: var(--accent-bright);
+  box-shadow: var(--shadow-glow);
+  transform: scale(0.95);
+}
