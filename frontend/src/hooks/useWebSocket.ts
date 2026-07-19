@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { ConnectionState, ClientMessage, ServerMessage } from '../features/fawkes-remote/types';
+import { isServerMessage } from '../features/fawkes-remote/types';
 
 interface UseWebSocketOptions {
   onMessage?: (message: ServerMessage) => void;
@@ -41,9 +42,11 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
         const data = JSON.parse(event.data);
         if (import.meta.env.DEV) console.log('[WS] Received:', data);
         
-        // Let the controller handle specific messages
-        if (onMessage) {
-          onMessage(data as ServerMessage);
+        // Let the controller handle specific messages if valid
+        if (onMessage && isServerMessage(data)) {
+          onMessage(data);
+        } else {
+          console.warn('[WS] Invalid server message format', data);
         }
       } catch (e) {
         console.error('[WS] Failed to parse message', e);
@@ -87,8 +90,9 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
         clearTimeout(reconnectTimeoutRef.current);
       }
       if (wsRef.current) {
-        wsRef.current.close();
+        const ws = wsRef.current;
         wsRef.current = null;
+        ws.close();
       }
     };
   }, [connect]);

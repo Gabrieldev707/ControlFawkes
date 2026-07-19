@@ -1,19 +1,19 @@
-import React, { useState, useCallback, useRef } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import type { OrbState, Platform, ServerMessage } from './types';
 import { useWebSocket } from '../../hooks/useWebSocket';
-import { 
-  RemoteOrb, 
-  ConnectionStatus, 
-  PlatformGrid, 
-  VoiceButton, 
-  TextInput 
+import {
+  RemoteOrb,
+  ConnectionStatus,
+  PlatformGrid,
+  VoiceButton,
+  TextInput
 } from '../../components/fawkes-remote';
 import '../../styles/fawkes-remote.css';
 
 export const FawkesRemotePage: React.FC = () => {
   const [orbState, setOrbState] = useState<OrbState>('idle');
   const [selectedPlatform, setSelectedPlatform] = useState<Platform | null>(null);
-  
+
   const currentRequestId = useRef<string | null>(null);
   const successTimeoutRef = useRef<number | null>(null);
 
@@ -29,19 +29,25 @@ export const FawkesRemotePage: React.FC = () => {
     }
 
     if (msg.type === 'COMMAND_RESULT') {
-      setOrbState('success');
+      if (msg.requestId !== currentRequestId.current) return;
       
+      if (msg.success) {
+        setOrbState('success');
+      } else {
+        setOrbState('error');
+      }
+
       // Clear selection after a delay and return to idle
       if (successTimeoutRef.current) clearTimeout(successTimeoutRef.current);
       successTimeoutRef.current = window.setTimeout(() => {
         setOrbState('idle');
         setSelectedPlatform(null);
         currentRequestId.current = null;
-      }, 2000);
-      
+      }, msg.success ? 2000 : 3000);
+
     } else if (msg.type === 'ERROR') {
       setOrbState('error');
-      
+
       if (successTimeoutRef.current) clearTimeout(successTimeoutRef.current);
       successTimeoutRef.current = window.setTimeout(() => {
         setOrbState('idle');
@@ -55,24 +61,42 @@ export const FawkesRemotePage: React.FC = () => {
     onMessage: handleMessage
   });
 
+  useEffect(() => {
+    return () => {
+      if (successTimeoutRef.current) {
+        clearTimeout(successTimeoutRef.current);
+      }
+    };
+  }, []);
+
   const handlePlatformSelect = (platform: Platform) => {
     if (connectionState !== 'connected') return;
     if (orbState === 'executing') return;
-    
+
     // Clear previous timeouts
     if (successTimeoutRef.current) clearTimeout(successTimeoutRef.current);
-    
+
     const reqId = crypto.randomUUID();
     currentRequestId.current = reqId;
-    
+
     setSelectedPlatform(platform);
     setOrbState('executing');
-    
-    sendMessage({
+
+    const sent = sendMessage({
       type: 'PLATFORM_SELECTED',
       requestId: reqId,
       payload: { platform }
     });
+
+    if (!sent) {
+      setOrbState('error');
+      currentRequestId.current = null;
+      setSelectedPlatform(null);
+
+      successTimeoutRef.current = window.setTimeout(() => {
+        setOrbState('idle');
+      }, 3000);
+    }
   };
 
   return (
@@ -87,12 +111,12 @@ export const FawkesRemotePage: React.FC = () => {
       </div>
 
       <div className="input-area">
-        <PlatformGrid 
+        <PlatformGrid
           selectedPlatform={selectedPlatform}
-          disabled={connectionState !== 'connected'}
+          disabled={connectionState !== 'connected' || orbState === 'executing'}
           onSelect={handlePlatformSelect}
         />
-        
+
         <div className="main-controls">
           <TextInput />
           <VoiceButton />

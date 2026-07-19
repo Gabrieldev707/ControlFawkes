@@ -79,7 +79,7 @@ export interface CommandResultMessage {
   requestId: string;
   success: boolean;
   message: string;
-  data?: any;
+  data?: unknown;
 }
 
 export interface ErrorMessage {
@@ -93,3 +93,28 @@ export type ServerMessage =
   | StateUpdateMessage
   | CommandResultMessage
   | ErrorMessage;
+
+export function isServerMessage(data: unknown): data is ServerMessage {
+  if (typeof data !== 'object' || data === null) return false;
+
+  const msg = data as Record<string, unknown>;
+  const type = msg.type;
+
+  if (type === 'STATE_UPDATE') {
+    return ['disconnected', 'connecting', 'connected', 'error'].includes(msg.state as string);
+  }
+
+  if (type === 'COMMAND_RESULT') {
+    return typeof msg.requestId === 'string' &&
+           typeof msg.success === 'boolean' &&
+           typeof msg.message === 'string';
+  }
+
+  if (type === 'ERROR') {
+    return typeof msg.requestId === 'string' &&
+           typeof msg.code === 'string' &&
+           typeof msg.message === 'string';
+  }
+
+  return false;
+}
