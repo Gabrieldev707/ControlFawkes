@@ -263,7 +263,7 @@ describe('FawkesRemotePage authentication', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Controle' }))
 
-    expect(screen.getByRole('heading', { name: 'Controle remoto' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Mídia' })).toBeTruthy()
     expect(screen.queryByLabelText('Comando de texto')).toBeNull()
     expect(websocketMock.sendMessage).not.toHaveBeenCalled()
 
@@ -350,6 +350,36 @@ describe('FawkesRemotePage authentication', () => {
       type: 'PLATFORM_SELECTED',
       requestId: expect.any(String),
       payload: { platform: 'NETFLIX' },
+    })
+  })
+
+  it('sends an allowlisted media action from the Control screen', () => {
+    render(<FawkesRemotePage />)
+    act(() => {
+      websocketMock.onMessage?.({
+        protocolVersion: 1,
+        type: 'PAIR_RESULT',
+        requestId: 'pair-1',
+        success: true,
+        message: 'Pareamento concluído.',
+        deviceId: 'device-1',
+        token: 'new-secure-token-value',
+      })
+      websocketMock.onMessage?.({
+        protocolVersion: 1,
+        type: 'STATE_UPDATE',
+        state: 'READY',
+        message: 'Computador pronto.',
+      })
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Controle' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Play/Pause' }))
+
+    expect(websocketMock.sendMessage).toHaveBeenCalledWith({
+      protocolVersion: 1,
+      type: 'MEDIA_PLAY_PAUSE',
+      requestId: expect.any(String),
     })
   })
 })

@@ -88,6 +88,34 @@ describe('protocol v1 runtime validation', () => {
     })).toBe(true)
   })
 
+  it('accepts an allowlisted media-control result', () => {
+    expect(isServerMessage({
+      protocolVersion: 1,
+      type: 'COMMAND_RESULT',
+      requestId: 'media-1',
+      success: true,
+      message: 'Play/pause executado.',
+      data: {
+        intent: 'MEDIA_CONTROL',
+        action: 'MEDIA_PLAY_PAUSE',
+        executed: true,
+      },
+    })).toBe(true)
+    expect(isServerMessage({
+      protocolVersion: 1,
+      type: 'COMMAND_RESULT',
+      requestId: 'media-2',
+      success: true,
+      message: 'Tecla enviada.',
+      data: {
+        intent: 'MEDIA_CONTROL',
+        action: 'PRESS_ARBITRARY_KEY',
+        executed: true,
+      },
+    })).toBe(false)
+    expect(isErrorCode('MEDIA_CONTROL_FAILED')).toBe(true)
+  })
+
   it('accepts only the closed error-code set', () => {
     expect(isErrorCode('PIN_EXPIRED')).toBe(true)
     expect(isErrorCode('PLATFORM_OPEN_FAILED')).toBe(true)

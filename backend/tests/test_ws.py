@@ -1,12 +1,13 @@
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import Mock
+from unittest.mock import Mock, call
 
 from app.api import websocket as websocket_module
 from app.main import app
 from app.protocol.dispatcher import Dispatcher
 from app.security.device_store import DeviceStore
 from app.security.pairing import PairingService
+from app.media.windows_adapter import WindowsMediaAdapter
 
 
 @pytest.fixture
@@ -17,12 +18,23 @@ def browser_open_mock(monkeypatch):
 
 
 @pytest.fixture
-def dispatcher(tmp_path, monkeypatch, browser_open_mock):
+def windows_key_event_mock(monkeypatch):
+    emitter = Mock()
+    monkeypatch.setattr("ctypes.windll.user32.keybd_event", emitter)
+    return emitter
+
+
+@pytest.fixture
+def dispatcher(tmp_path, monkeypatch, browser_open_mock, windows_key_event_mock):
     store = DeviceStore(
         filepath=tmp_path / "paired_devices.json",
         lockpath=tmp_path / "paired_devices.lock",
     )
-    instance = Dispatcher(device_store=store, pairing_service=PairingService(store))
+    instance = Dispatcher(
+        device_store=store,
+        pairing_service=PairingService(store),
+        media_adapter=WindowsMediaAdapter(windows_key_event_mock),
+    )
     monkeypatch.setattr(websocket_module, "dispatcher", instance)
     return instance
 
@@ -131,6 +143,18 @@ def test_websocket_rejects_unauthenticated_commands(client):
             "type": "TEXT_COMMAND",
             "requestId": "req-1",
             "payload": {"query": "ajuda"},
+        })
+
+        assert websocket.receive_json()["code"] == "UNAUTHORIZED"
+
+
+def test_websocket_rejects_unauthenticated_media_control(client):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "MEDIA_PLAY_PAUSE",
+            "requestId": "media-1",
         })
 
         assert websocket.receive_json()["code"] == "UNAUTHORIZED"
@@ -357,6 +381,96 @@ def test_platform_selection_rejects_a_frontend_supplied_url(
 
         assert websocket.receive_json()["code"] == "INVALID_PAYLOAD"
         browser_open_mock.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("action", "virtual_key", "message"),
+    [
+        ("MEDIA_PLAY_PAUSE", 0xB3, "Play/pause executado."),
+        ("MEDIA_PREVIOUS", 0xB1, "Faixa anterior executada."),
+        ("MEDIA_NEXT", 0xB0, "Próxima faixa executada."),
+        ("MEDIA_SEEK_BACK", 0x25, "Retrocesso de 10 segundos executado."),
+        ("MEDIA_SEEK_FORWARD", 0x27, "Avanço de 10 segundos executado."),
+        ("MEDIA_FULLSCREEN", 0x7A, "Fullscreen executado."),
+        ("MEDIA_EXIT_FULLSCREEN", 0x1B, "Saída do fullscreen executada."),
+    ],
+)
+def test_authenticated_media_control_uses_only_allowlisted_windows_keys(
+    client,
+    dispatcher,
+    windows_key_event_mock,
+    action,
+    virtual_key,
+    message,
+):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": action,
+            "requestId": "media-1",
+        })
+
+        result = websocket.receive_json()
+
+        assert result == {
+            "protocolVersion": 1,
+            "type": "COMMAND_RESULT",
+            "requestId": "media-1",
+            "success": True,
+            "message": message,
+            "data": {
+                "intent": "MEDIA_CONTROL",
+                "action": action,
+                "executed": True,
+            },
+        }
+        assert windows_key_event_mock.call_args_list == [
+            call(virtual_key, 0, 0, 0),
+            call(virtual_key, 0, 2, 0),
+        ]
+
+
+def test_media_control_rejects_arbitrary_key_payload(
+    client,
+    dispatcher,
+    windows_key_event_mock,
+):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "MEDIA_PLAY_PAUSE",
+            "requestId": "media-1",
+            "payload": {"key": "A"},
+        })
+
+        assert websocket.receive_json()["code"] == "INVALID_PAYLOAD"
+        windows_key_event_mock.assert_not_called()
+
+
+def test_media_control_reports_adapter_failure(
+    client,
+    dispatcher,
+    windows_key_event_mock,
+):
+    windows_key_event_mock.side_effect = OSError("Windows input unavailable")
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "MEDIA_PLAY_PAUSE",
+            "requestId": "media-1",
+        })
+
+        error = websocket.receive_json()
+
+        assert error["code"] == "MEDIA_CONTROL_FAILED"
+        assert error["message"] == "Controle de mídia indisponível."
 
 
 def test_authenticated_invalid_platform_is_rejected(client, dispatcher):

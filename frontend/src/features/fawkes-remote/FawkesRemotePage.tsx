@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 
 import type {
   AuthState,
+  MediaAction,
   OrbState,
   Platform,
   ServerMessage,
@@ -15,6 +16,7 @@ import { HomeShortcuts } from '../../components/navigation/HomeShortcuts'
 import { RemoteNavigation } from '../../components/navigation/RemoteNavigation'
 import { RemoteFeatureScreen } from '../../pages/remote/RemoteFeatureScreen'
 import { PlatformsScreen } from '../../pages/remote/PlatformsScreen'
+import { RemoteControlScreen } from '../../pages/remote/RemoteControlScreen'
 import {
   AuthenticationStatus,
   ConnectionStatus,
@@ -49,6 +51,7 @@ export const FawkesRemotePage: React.FC = () => {
   const [pairingMessage, setPairingMessage] = useState('')
   const [statusMessage, setStatusMessage] = useState('Conectando ao computador...')
   const [statusError, setStatusError] = useState(false)
+  const [currentMediaAction, setCurrentMediaAction] = useState<MediaAction | null>(null)
   const { currentScreen, navigate, goBack } = useRemoteNavigation()
 
   const currentRequestId = useRef<string | null>(null)
@@ -127,6 +130,7 @@ export const FawkesRemotePage: React.FC = () => {
       successTimeoutRef.current = window.setTimeout(() => {
         setOrbState('idle')
         setSelectedPlatform(null)
+        setCurrentMediaAction(null)
         currentRequestId.current = null
         setStatusMessage('Computador pronto.')
       }, 2000)
@@ -141,6 +145,7 @@ export const FawkesRemotePage: React.FC = () => {
       successTimeoutRef.current = window.setTimeout(() => {
         setOrbState('idle')
         setSelectedPlatform(null)
+        setCurrentMediaAction(null)
         currentRequestId.current = null
         setStatusMessage('Computador pronto.')
         setStatusError(false)
@@ -250,6 +255,31 @@ export const FawkesRemotePage: React.FC = () => {
     return accepted
   }
 
+  const handleMediaAction = (action: MediaAction) => {
+    if (controlsDisabled) return
+    if (successTimeoutRef.current) clearTimeout(successTimeoutRef.current)
+
+    const requestId = generateRequestId()
+    currentRequestId.current = requestId
+    setCurrentMediaAction(action)
+    setOrbState('executing')
+    setStatusMessage('Executando controle de mídia...')
+    setStatusError(false)
+
+    const accepted = sendMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: action,
+      requestId,
+    })
+    if (!accepted) {
+      currentRequestId.current = null
+      setCurrentMediaAction(null)
+      setOrbState('error')
+      setStatusMessage('Conexão indisponível. Tente novamente.')
+      setStatusError(true)
+    }
+  }
+
   const attemptPairing = (pin: string) => {
     setPairingMessage('')
     const accepted = sendMessage({
@@ -321,6 +351,16 @@ export const FawkesRemotePage: React.FC = () => {
                 <HomeShortcuts onNavigate={navigate} />
               </div>
             </main>
+          ) : currentScreen === 'REMOTE_CONTROL' ? (
+            <RemoteControlScreen
+              disabled={controlsDisabled}
+              currentAction={currentMediaAction}
+              statusMessage={statusMessage}
+              statusError={statusError}
+              onAction={handleMediaAction}
+              onNavigate={navigate}
+              onBack={goBack}
+            />
           ) : currentScreen === 'PLATFORMS' ? (
             <PlatformsScreen
               selectedPlatform={selectedPlatform}

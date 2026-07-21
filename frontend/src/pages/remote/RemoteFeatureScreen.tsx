@@ -1,6 +1,5 @@
 import {
   ArrowLeft,
-  Gamepad2,
   Keyboard,
   MousePointer2,
   Settings,
@@ -10,7 +9,7 @@ import {
 import type { NavigableScreen } from '../../state/currentScreen'
 
 
-type FeatureScreen = Exclude<NavigableScreen, 'HOME' | 'PLATFORMS'>
+type FeatureScreen = Exclude<NavigableScreen, 'HOME' | 'PLATFORMS' | 'REMOTE_CONTROL'>
 
 interface RemoteFeatureScreenProps {
   screen: FeatureScreen
@@ -18,11 +17,6 @@ interface RemoteFeatureScreenProps {
 }
 
 const SCREEN_CONTENT = {
-  REMOTE_CONTROL: {
-    title: 'Controle remoto',
-    description: 'Os controles de mídia serão conectados em uma próxima fatia.',
-    icon: Gamepad2,
-  },
   TOUCHPAD: {
     title: 'Touchpad',
     description: 'A superfície de ponteiro será ativada depois da validação dos controles.',
@@ -46,7 +40,7 @@ const SCREEN_CONTENT = {
 } as const satisfies Record<FeatureScreen, {
   title: string
   description: string
-  icon: typeof Gamepad2
+  icon: typeof Keyboard
 }>
 
 export function RemoteFeatureScreen({ screen, onBack }: RemoteFeatureScreenProps) {

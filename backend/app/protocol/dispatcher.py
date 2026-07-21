@@ -15,6 +15,8 @@ from app.schemas.ws import (
     ErrorCode,
     ErrorMessage,
     HelpCommandData,
+    MediaCommandData,
+    MediaControlMessage,
     Platform,
     PlatformCommandData,
     PlatformSelectedMessage,
@@ -31,9 +33,17 @@ from app.commands.parser import (
 from app.security.device_store import DeviceStore
 from app.security.pairing import PairingService
 from app.platforms.launcher import PlatformLauncher
+from app.media.actions import MEDIA_ACTIONS, MEDIA_ACTION_MESSAGES
+from app.media.windows_adapter import WindowsMediaAdapter
 
 
-KNOWN_CLIENT_TYPES = {"AUTH", "PAIR_DEVICE", "PLATFORM_SELECTED", "TEXT_COMMAND"}
+KNOWN_CLIENT_TYPES = {
+    "AUTH",
+    "PAIR_DEVICE",
+    "PLATFORM_SELECTED",
+    "TEXT_COMMAND",
+    *MEDIA_ACTIONS,
+}
 
 
 class Dispatcher:
@@ -42,10 +52,12 @@ class Dispatcher:
         device_store: DeviceStore | None = None,
         pairing_service: PairingService | None = None,
         platform_launcher: PlatformLauncher | None = None,
+        media_adapter: WindowsMediaAdapter | None = None,
     ) -> None:
         self.device_store = device_store or DeviceStore()
         self.pairing_service = pairing_service or PairingService(self.device_store)
         self.platform_launcher = platform_launcher or PlatformLauncher()
+        self.media_adapter = media_adapter or WindowsMediaAdapter()
         self._client_adapter = TypeAdapter(ClientMessage)
         self._authenticated: dict[WebSocket, str] = {}
 
@@ -143,6 +155,10 @@ class Dispatcher:
             await self._handle_text_command(websocket, message)
             return
 
+        if isinstance(message, MediaControlMessage):
+            await self._handle_media_control(websocket, message)
+            return
+
         await self._send_error(
             websocket,
             message.requestId,
@@ -201,6 +217,27 @@ class Dispatcher:
             requestId=request_id,
             message=f"{label} aberto.",
             data=PlatformCommandData(platform=platform, executed=True),
+        )
+        await websocket.send_json(response.model_dump())
+
+    async def _handle_media_control(
+        self,
+        websocket: WebSocket,
+        message: MediaControlMessage,
+    ) -> None:
+        if not self.media_adapter.execute(message.type):
+            await self._send_error(
+                websocket,
+                message.requestId,
+                "MEDIA_CONTROL_FAILED",
+                "Controle de mídia indisponível.",
+            )
+            return
+
+        response = CommandResultMessage(
+            requestId=message.requestId,
+            message=MEDIA_ACTION_MESSAGES[message.type],
+            data=MediaCommandData(action=message.type),
         )
         await websocket.send_json(response.model_dump())
 

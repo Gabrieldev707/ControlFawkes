@@ -3,6 +3,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.schemas.auth import AuthMessage, PairDeviceMessage
+from app.media.actions import MediaAction
 
 
 ProtocolVersion = Literal[1]
@@ -29,6 +30,7 @@ ErrorCode = Literal[
     "TOO_MANY_ATTEMPTS",
     "PROTOCOL_VERSION_MISMATCH",
     "PLATFORM_OPEN_FAILED",
+    "MEDIA_CONTROL_FAILED",
     "INTERNAL_ERROR",
 ]
 
@@ -63,8 +65,20 @@ class TextCommandMessage(BaseModel):
     payload: TextCommandPayload
 
 
+class MediaControlMessage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    protocolVersion: ProtocolVersion
+    type: MediaAction
+    requestId: str = Field(min_length=1, max_length=128)
+
+
 ClientMessage = Annotated[
-    AuthMessage | PairDeviceMessage | PlatformSelectedMessage | TextCommandMessage,
+    AuthMessage
+    | PairDeviceMessage
+    | PlatformSelectedMessage
+    | TextCommandMessage
+    | MediaControlMessage,
     Field(discriminator="type"),
 ]
 
@@ -94,6 +108,14 @@ class HelpCommandData(BaseModel):
     executed: Literal[False] = False
 
 
+class MediaCommandData(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    intent: Literal["MEDIA_CONTROL"] = "MEDIA_CONTROL"
+    action: MediaAction
+    executed: Literal[True] = True
+
+
 class CommandResultMessage(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -102,7 +124,7 @@ class CommandResultMessage(BaseModel):
     requestId: str
     success: Literal[True] = True
     message: str
-    data: PlatformCommandData | HelpCommandData
+    data: PlatformCommandData | HelpCommandData | MediaCommandData
 
 
 class ErrorMessage(BaseModel):

@@ -61,6 +61,7 @@ export const ERROR_CODES = [
   'TOO_MANY_ATTEMPTS',
   'PROTOCOL_VERSION_MISMATCH',
   'PLATFORM_OPEN_FAILED',
+  'MEDIA_CONTROL_FAILED',
   'INTERNAL_ERROR',
 ] as const
 
@@ -91,11 +92,28 @@ export interface TextCommandMessage extends ClientMessageBase {
   payload: { query: string }
 }
 
+export const MEDIA_ACTIONS = [
+  'MEDIA_PLAY_PAUSE',
+  'MEDIA_PREVIOUS',
+  'MEDIA_NEXT',
+  'MEDIA_SEEK_BACK',
+  'MEDIA_SEEK_FORWARD',
+  'MEDIA_FULLSCREEN',
+  'MEDIA_EXIT_FULLSCREEN',
+] as const
+
+export type MediaAction = (typeof MEDIA_ACTIONS)[number]
+
+export interface MediaControlMessage extends ClientMessageBase {
+  type: MediaAction
+}
+
 export type ClientMessage =
   | AuthMessage
   | PairDeviceMessage
   | PlatformSelectedMessage
   | TextCommandMessage
+  | MediaControlMessage
 
 export interface StateUpdateMessage {
   protocolVersion: ProtocolVersion
@@ -134,13 +152,19 @@ export interface HelpCommandData {
   executed: false
 }
 
+export interface MediaCommandData {
+  intent: 'MEDIA_CONTROL'
+  action: MediaAction
+  executed: true
+}
+
 export interface CommandResultMessage {
   protocolVersion: ProtocolVersion
   type: 'COMMAND_RESULT'
   requestId: string
   success: true
   message: string
-  data: PlatformCommandData | HelpCommandData
+  data: PlatformCommandData | HelpCommandData | MediaCommandData
 }
 
 export interface ErrorMessage {

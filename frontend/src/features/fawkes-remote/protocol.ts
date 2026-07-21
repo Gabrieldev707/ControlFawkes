@@ -1,5 +1,6 @@
 import {
   ERROR_CODES,
+  MEDIA_ACTIONS,
   isPlatform,
   type ErrorCode,
   type ServerMessage,
@@ -53,6 +54,15 @@ function isHelpData(value: unknown): boolean {
     && value.executed === false
 }
 
+function isMediaData(value: unknown): boolean {
+  return isRecord(value)
+    && hasOnlyKeys(value, ['intent', 'action', 'executed'])
+    && value.intent === 'MEDIA_CONTROL'
+    && typeof value.action === 'string'
+    && MEDIA_ACTIONS.includes(value.action as (typeof MEDIA_ACTIONS)[number])
+    && value.executed === true
+}
+
 export function isServerMessage(value: unknown): value is ServerMessage {
   if (!isRecord(value) || value.protocolVersion !== 1 || typeof value.type !== 'string') {
     return false
@@ -87,7 +97,7 @@ export function isServerMessage(value: unknown): value is ServerMessage {
         && isRequestId(value.requestId)
         && value.success === true
         && isMessage(value.message)
-        && (isPlatformData(value.data) || isHelpData(value.data))
+        && (isPlatformData(value.data) || isHelpData(value.data) || isMediaData(value.data))
     case 'ERROR':
       return hasOnlyKeys(value, ['protocolVersion', 'type', 'requestId', 'code', 'message'])
         && isRequestId(value.requestId)
