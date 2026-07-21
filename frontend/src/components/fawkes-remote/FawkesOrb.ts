@@ -1,10 +1,10 @@
 import * as THREE from 'three';
 import type { OrbState } from '../../features/fawkes-remote/types';
 import { ORB_THEMES } from './orbTheme';
+import { getRadialSpring } from './orbPhysics';
+import { getOrbQuality } from './orbQuality';
 
-// ── Constants ─────────────────────────────────────────────────────────────────
-const N             = 2000;
-const MAX_LINES     = 3000;
+// ── Constants & Helpers ───────────────────────────────────────────────────────
 const MAX_ELECTRONS = 200;
 
 function _makeCircleSprite() {
@@ -25,11 +25,27 @@ function _makeCircleSprite() {
   return new THREE.CanvasTexture(canvas);
 }
 
+export interface AttractorTarget {
+  x: number; // normalized canvas-local coordinate, -1 to 1
+  y: number; // normalized canvas-local coordinate, -1 to 1
+  intensity: number; // 0 to 1
+  color: THREE.Color;
+}
+
 export class FawkesOrb {
   private renderer:    THREE.WebGLRenderer;
   private scene:       THREE.Scene;
   private camera:      THREE.PerspectiveCamera;
   private clock:       THREE.Clock;
+
+  // Adaptive Quality
+  private isMobile: boolean;
+  private N: number;
+  private maxLinesActive: number;
+  private lastFrameTime = 0;
+  private lowFpsFrames = 0;
+  private qualityMode: 'high' | 'low' = 'high';
+  private pointSizeScale: number;
 
   // Particles
   private geo:   THREE.BufferGeometry;
@@ -38,6 +54,7 @@ export class FawkesOrb {
   private pos:   Float32Array;
   private vel:   Float32Array;
   private phase: Float32Array;
+  private radialRatio: Float32Array;
   
   // Colors (Vertex Colors)
   private colors: Float32Array;
@@ -68,7 +85,6 @@ export class FawkesOrb {
   private _state: OrbState = 'idle';
   private audioLevel = 0;
   private bass = 0;
-  private mid  = 0;
 
   private targetRadius     = 28;
   private targetSpeed      = 0.2;
@@ -95,34 +111,48 @@ export class FawkesOrb {
   private cloudZ    = 0;
   private cloudZVel = 0;
 
+  // Attractor
+  private attractorTarget: AttractorTarget | null = null;
+  private attractorPos3D = new THREE.Vector3();
+  private attractorIntensity = 0;
+  private baseAttractorColor = new THREE.Color();
+
   private rafId = 0;
   private destroyed = false;
 
   constructor(canvas: HTMLCanvasElement) {
-    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
-    
+    this.isMobile = window.innerWidth <= 768;
+    const quality = getOrbQuality(this.isMobile);
+    this.N = quality.particleCount;
+    this.maxLinesActive = quality.maxLines;
+    this.pointSizeScale = quality.pointSizeScale;
+
+    this.renderer = new THREE.WebGLRenderer({ canvas, antialias: quality.antialias, alpha: true });
+    // Limit pixel ratio on mobile to save GPU fill rate
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, quality.pixelRatioCap));
+
     const parent = canvas.parentElement;
     const w = parent ? parent.clientWidth : window.innerWidth;
     const h = parent ? parent.clientHeight : window.innerHeight;
     this.renderer.setSize(w, h);
-    this.renderer.setClearColor(0x050508, 1);
+    this.renderer.setClearColor(0x050508, 0);
 
     const sprite = _makeCircleSprite();
 
     this.scene  = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(45, w / h, 1, 1000);
-    this.camera.position.z = 70; // Voltar um pouco, mas ainda mais perto que 80
+    this.camera.position.z = 70;
     this.clock  = new THREE.Clock();
 
     // ── Particle data ─────────────────────────────────────────────────────────
-    this.pos   = new Float32Array(N * 3);
-    this.vel   = new Float32Array(N * 3);
-    this.phase = new Float32Array(N);
-    this.colors = new Float32Array(N * 3);
-    this.targetColors = new Float32Array(N * 3);
+    this.pos   = new Float32Array(this.N * 3);
+    this.vel   = new Float32Array(this.N * 3);
+    this.phase = new Float32Array(this.N);
+    this.radialRatio = new Float32Array(this.N);
+    this.colors = new Float32Array(this.N * 3);
+    this.targetColors = new Float32Array(this.N * 3);
 
-    for (let i = 0; i < N; i++) {
+    for (let i = 0; i < this.N; i++) {
       const theta = Math.random() * Math.PI * 2;
       const phi   = Math.acos(2 * Math.random() - 1);
       const r     = Math.pow(Math.random(), 0.5) * 25;
@@ -130,8 +160,8 @@ export class FawkesOrb {
       this.pos[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
       this.pos[i * 3 + 2] = r * Math.cos(phi);
       this.phase[i] = Math.random() * 1000;
-      
-      // Init with idle colors
+      this.radialRatio[i] = Math.max(0.12, r / 25);
+
       const color = ORB_THEMES['idle'].colors[Math.floor(Math.random() * ORB_THEMES['idle'].colors.length)];
       this.colors[i*3] = color.r;
       this.colors[i*3+1] = color.g;
@@ -146,11 +176,10 @@ export class FawkesOrb {
     this.geo.setAttribute('color', new THREE.BufferAttribute(this.colors, 3));
 
     this.mat = new THREE.PointsMaterial({
-      size:            0.6, // Voltar ao normal
+      size:            0.6,
       map:             sprite,
-      alphaMap:        sprite,
       transparent:     true,
-      opacity:         1.0, // Mas manter intenso
+      opacity:         0.9,
       sizeAttenuation: true,
       blending:        THREE.AdditiveBlending,
       depthWrite:      false,
@@ -162,8 +191,8 @@ export class FawkesOrb {
     this.scene.add(this.pts);
 
     // ── Connection lines ──────────────────────────────────────────────────────
-    this.linePos = new Float32Array(MAX_LINES * 6);
-    this.lineColors = new Float32Array(MAX_LINES * 6);
+    this.linePos = new Float32Array(this.maxLinesActive * 6);
+    this.lineColors = new Float32Array(this.maxLinesActive * 6);
     this.lineGeo = new THREE.BufferGeometry();
     this.lineGeo.setAttribute('position', new THREE.BufferAttribute(this.linePos, 3));
     this.lineGeo.setAttribute('color', new THREE.BufferAttribute(this.lineColors, 3));
@@ -171,7 +200,7 @@ export class FawkesOrb {
 
     this.lineMat = new THREE.LineBasicMaterial({
       transparent: true,
-      opacity:    0.15, // Suave
+      opacity:    0.15,
       blending:   THREE.AdditiveBlending,
       depthWrite: false,
       vertexColors: true,
@@ -189,11 +218,10 @@ export class FawkesOrb {
     this.electronGeo.setDrawRange(0, 0);
 
     this.electronMat = new THREE.PointsMaterial({
-      size:            0.9, // Pouco maior
+      size:            0.6,
       map:             sprite,
-      alphaMap:        sprite,
       transparent:     true,
-      opacity:         0.9, // Mais visível
+      opacity:         0.6,
       sizeAttenuation: true,
       blending:        THREE.AdditiveBlending,
       depthWrite:      false,
@@ -211,8 +239,9 @@ export class FawkesOrb {
     } else {
       window.addEventListener('resize', this._onResizeFallback);
     }
-    
+
     this._onResizeFallback();
+    this.lastFrameTime = performance.now();
     this._loop();
   }
 
@@ -229,7 +258,22 @@ export class FawkesOrb {
   setAudioLevel(v: number): void {
     this.audioLevel = Math.max(0, Math.min(1, v));
     this.bass = this.audioLevel * 0.8;
-    this.mid  = this.audioLevel * 0.5;
+  }
+
+  setAttractorTarget(target: AttractorTarget | null) {
+    this.attractorTarget = target;
+    if (target) {
+      // Viewport coordinates are converted before reaching the Three.js layer.
+      const ndcX = Math.max(-1, Math.min(1, target.x));
+      const ndcY = Math.max(-1, Math.min(1, target.y));
+
+      const vec = new THREE.Vector3(ndcX, ndcY, 0.5);
+      vec.unproject(this.camera);
+      const dir = vec.sub(this.camera.position).normalize();
+      const distance = (this.cloudZ - this.camera.position.z) / dir.z;
+      this.attractorPos3D.copy(this.camera.position).add(dir.multiplyScalar(distance));
+      this.baseAttractorColor.copy(target.color);
+    }
   }
 
   destroy(): void {
@@ -239,14 +283,14 @@ export class FawkesOrb {
       this.resizeObserver.disconnect();
     }
     window.removeEventListener('resize', this._onResizeFallback);
-    
+
     this.geo.dispose();
     this.mat.dispose();
     this.lineGeo.dispose();
     this.lineMat.dispose();
     this.electronGeo.dispose();
     this.electronMat.dispose();
-    
+
     this.renderer.dispose();
   }
 
@@ -277,9 +321,27 @@ export class FawkesOrb {
     }
   };
 
-  private _loop = (): void => {
+  private _loop = (time?: number): void => {
     if (this.destroyed) return;
     this.rafId = requestAnimationFrame(this._loop);
+
+    // FPS Monitor for Adaptive Quality
+    if (time) {
+      const delta = time - this.lastFrameTime;
+      this.lastFrameTime = time;
+      if (delta > 35) { // < ~28 fps
+        this.lowFpsFrames++;
+        if (this.lowFpsFrames > 30 && this.qualityMode === 'high') {
+          this.qualityMode = 'low';
+        }
+      } else if (delta < 20) {
+        this.lowFpsFrames = Math.max(0, this.lowFpsFrames - 1);
+        if (this.lowFpsFrames === 0 && this.qualityMode === 'low') {
+          this.qualityMode = 'high';
+        }
+      }
+    }
+
     this._update();
     this.renderer.render(this.scene, this.camera);
   };
@@ -287,8 +349,7 @@ export class FawkesOrb {
   private _assignTargetColors(state: OrbState) {
     const theme = ORB_THEMES[state];
     const palette = theme.colors;
-    for (let i = 0; i < N; i++) {
-      // Procedural pick based on phase or just random to ensure even distribution
+    for (let i = 0; i < this.N; i++) {
       const colorIndex = Math.floor(Math.random() * palette.length);
       const color = palette[colorIndex];
       this.targetColors[i * 3]     = color.r;
@@ -309,17 +370,25 @@ export class FawkesOrb {
     this.targetLineAmount = theme.lineAmount;
     this.targetElectronRate = theme.electronRate;
 
+    // Degrade quality if low FPS
+    const effectiveLineAmount = this.qualityMode === 'low' ? this.targetLineAmount * 0.3 : this.targetLineAmount;
+    const effectiveSpeed = this.targetSpeed * (this.qualityMode === 'low' ? 0.8 : 1.0);
+
     // ── Lerp Configuration ───────────────────────────────────────────────────
     const lr = 0.02;
     this.currentRadius     += (this.targetRadius     - this.currentRadius)     * lr;
-    this.currentSpeed      += (this.targetSpeed      - this.currentSpeed)      * lr;
+    this.currentSpeed      += (effectiveSpeed        - this.currentSpeed)      * lr;
     this.currentBright     += (this.targetBright     - this.currentBright)     * lr;
     this.currentSize       += (this.targetSize       - this.currentSize)       * lr;
-    this.lineAmount        += (this.targetLineAmount - this.lineAmount)        * lr;
+    this.lineAmount        += (effectiveLineAmount   - this.lineAmount)        * lr;
     this.electronSpawnRate += (this.targetElectronRate - this.electronSpawnRate) * lr;
 
-    this.mat.size = this.currentSize;
+    this.mat.size = this.currentSize * this.pointSizeScale;
     this.mat.opacity = this.currentBright;
+
+    // Attractor lerp
+    const targetAttractorIntensity = this.attractorTarget ? this.attractorTarget.intensity : 0;
+    this.attractorIntensity += (targetAttractorIntensity - this.attractorIntensity) * 0.05;
 
     // ── Transition tumble ─────────────────────────────────────────────────────
     if (this._state !== this.lastStateForTumble) {
@@ -337,6 +406,11 @@ export class FawkesOrb {
     let zTarget = Math.sin(t * 0.12) * 8;
     if (this._state === 'transcribing') zTarget = Math.sin(t * 0.3) * 15 + Math.sin(t * 0.9) * 6;
     else if (this._state === 'executing') zTarget = Math.sin(t * 0.15) * 6 - this.bass * 10;
+
+    // Attractor depth bias
+    if (this.attractorIntensity > 0.1) {
+      zTarget -= this.attractorIntensity * 15; // Pull orb slightly towards camera
+    }
     
     this.cloudZVel += (zTarget - this.cloudZ) * 0.008;
     this.cloudZVel *= 0.94;
@@ -364,49 +438,73 @@ export class FawkesOrb {
     const a = p.array as Float32Array;
     const c = pColor.array as Float32Array;
 
-    for (let i = 0; i < N; i++) {
+    const timeScale = t * 0.15;
+    const ax = this.attractorPos3D.x;
+    const ay = this.attractorPos3D.y;
+    const az = this.attractorPos3D.z;
+    const aCol = this.baseAttractorColor;
+
+    for (let i = 0; i < this.N; i++) {
       const i3 = i * 3;
       const x = a[i3], y = a[i3 + 1], z = a[i3 + 2];
       const px = this.phase[i];
 
-      // Lerp colors
-      c[i3]     += (this.targetColors[i3]     - c[i3])     * lr;
-      c[i3 + 1] += (this.targetColors[i3 + 1] - c[i3 + 1]) * lr;
-      c[i3 + 2] += (this.targetColors[i3 + 2] - c[i3 + 2]) * lr;
+      // Lerp colors (Base target + Attractor influence)
+      let tr = this.targetColors[i3], tg = this.targetColors[i3 + 1], tb = this.targetColors[i3 + 2];
+      if (this.attractorIntensity > 0.05) {
+        // Particles closer to the bottom/attractor get more color shift
+        const dToAttractor = Math.sqrt((x - ax)**2 + (y - ay)**2 + (z - az)**2) || 1;
+        const colorInfluence = Math.max(0, 1 - (dToAttractor / 40)) * this.attractorIntensity;
+        tr += (aCol.r - tr) * colorInfluence;
+        tg += (aCol.g - tg) * colorInfluence;
+        tb += (aCol.b - tb) * colorInfluence;
+      }
 
-      // Oscillatory drift
-      this.vel[i3]     += Math.sin(t * 0.05 + px)           * 0.001 * this.currentSpeed;
-      this.vel[i3 + 1] += Math.cos(t * 0.06 + px * 1.3)     * 0.001 * this.currentSpeed;
-      this.vel[i3 + 2] += Math.sin(t * 0.055 + px * 0.7)    * 0.001 * this.currentSpeed;
-      this.vel[i3]     += Math.sin(t * 0.02 + px * 2.1 + y * 0.1) * 0.0008 * this.currentSpeed;
-      this.vel[i3 + 1] += Math.cos(t * 0.025 + px * 1.7 + z * 0.1) * 0.0008 * this.currentSpeed;
-      this.vel[i3 + 2] += Math.sin(t * 0.022 + px * 0.9 + x * 0.1) * 0.0008 * this.currentSpeed;
+      c[i3]     += (tr - c[i3])     * lr;
+      c[i3 + 1] += (tg - c[i3 + 1]) * lr;
+      c[i3 + 2] += (tb - c[i3 + 2]) * lr;
 
-      // Centering pull
+      // Vortex Physics (Directional flow instead of random drift)
+      // Curl noise approximation
+      const nx = Math.sin(timeScale + y * 0.1) * Math.cos(timeScale + z * 0.1);
+      const ny = Math.sin(timeScale + z * 0.1) * Math.cos(timeScale + x * 0.1);
+      const nz = Math.sin(timeScale + x * 0.1) * Math.cos(timeScale + y * 0.1);
+
+      this.vel[i3]     += nx * 0.002 * this.currentSpeed;
+      this.vel[i3 + 1] += ny * 0.002 * this.currentSpeed;
+      this.vel[i3 + 2] += nz * 0.002 * this.currentSpeed;
+
+      // Attractor pull
+      if (this.attractorIntensity > 0) {
+        // Create a vortex around the attractor line, and a gentle pull towards it
+        const dx = ax - x, dy = ay - y, dz = az - z;
+        const distToA = Math.sqrt(dx*dx + dy*dy + dz*dz) || 0.1;
+        const pullStr = (1 / (distToA * 0.1 + 1)) * 0.03 * this.attractorIntensity;
+
+        // Direct pull
+        this.vel[i3]     += (dx / distToA) * pullStr;
+        this.vel[i3 + 1] += (dy / distToA) * pullStr;
+        this.vel[i3 + 2] += (dz / distToA) * pullStr;
+
+        // Vortex spin around attractor
+        const spinStr = 0.01 * this.attractorIntensity;
+        this.vel[i3]     += (-dy / distToA) * spinStr;
+        this.vel[i3 + 1] += (dx / distToA) * spinStr;
+      }
+
+      // Radial spring keeps each particle near its original shell while allowing motion.
       const dist = Math.sqrt(x * x + y * y + z * z) || 0.01;
-      const pull = Math.max(0, dist - this.currentRadius) * 0.002 + 0.0003;
+      const pull = getRadialSpring(dist, this.radialRatio[i] * this.currentRadius);
       this.vel[i3]     -= (x / dist) * pull;
       this.vel[i3 + 1] -= (y / dist) * pull;
       this.vel[i3 + 2] -= (z / dist) * pull;
 
-      // Bass push
-      if (this.bass > 0.05) {
-        this.vel[i3]     += (x / dist) * this.bass * 0.02;
-        this.vel[i3 + 1] += (y / dist) * this.bass * 0.02;
-        this.vel[i3 + 2] += (z / dist) * this.bass * 0.02;
-      }
-
-      // Mid pulse
-      if (this._state === 'executing' && this.mid > 0.1) {
-        const pulse = Math.sin(t * 8 + px);
-        this.vel[i3]     += (x / dist) * this.mid * 0.012 * pulse;
-        this.vel[i3 + 1] += (y / dist) * this.mid * 0.012 * pulse;
-      }
-
       // Damping + integrate
-      this.vel[i3]     *= 0.992;
-      this.vel[i3 + 1] *= 0.992;
-      this.vel[i3 + 2] *= 0.992;
+      const damping = 0.985 + (Math.sin(px) * 0.005); // Heterogeneous damping for depth
+      this.vel[i3]     *= damping;
+      this.vel[i3 + 1] *= damping;
+      this.vel[i3 + 2] *= damping;
+
       a[i3]     += this.vel[i3];
       a[i3 + 1] += this.vel[i3 + 1];
       a[i3 + 2] += this.vel[i3 + 2];
@@ -424,26 +522,24 @@ export class FawkesOrb {
       const lca = lc.array as Float32Array;
       
       let lineCount = 0;
-      const maxDist  = 5.0 * (1 + this.bass * 0.2); // Voltar perto do original
+      const maxDist  = 6.0 * (1 + this.bass * 0.2);
       const maxDist2 = maxDist * maxDist;
-      const step     = Math.max(1, Math.floor(N / 450));
+      const step     = Math.max(1, Math.floor(this.N / (this.qualityMode === 'low' ? 300 : 450)));
 
-      for (let i = 0; i < N && lineCount < MAX_LINES; i += step) {
+      for (let i = 0; i < this.N && lineCount < this.maxLinesActive; i += step) {
         const i3 = i * 3;
         const x1 = a[i3], y1 = a[i3 + 1], z1 = a[i3 + 2];
         const r1 = c[i3], g1 = c[i3 + 1], b1 = c[i3 + 2];
         
-        for (let j = i + step; j < N && lineCount < MAX_LINES; j += step) {
+        for (let j = i + step; j < this.N && lineCount < this.maxLinesActive; j += step) {
           const j3 = j * 3;
           const dx = a[j3] - x1, dy = a[j3 + 1] - y1, dz = a[j3 + 2] - z1;
           if (dx * dx + dy * dy + dz * dz < maxDist2) {
             const idx = lineCount * 6;
             
-            // Positions
             la[idx]     = x1;    la[idx + 1] = y1;    la[idx + 2] = z1;
             la[idx + 3] = a[j3]; la[idx + 4] = a[j3 + 1]; la[idx + 5] = a[j3 + 2];
             
-            // Colors (interpolate between the two points for line ends)
             lca[idx]     = r1;      lca[idx + 1] = g1;      lca[idx + 2] = b1;
             lca[idx + 3] = c[j3]; lca[idx + 4] = c[j3 + 1]; lca[idx + 5] = c[j3 + 2];
             
@@ -455,7 +551,7 @@ export class FawkesOrb {
       this.lineGeo.setDrawRange(0, lineCount * 2);
       lp.needsUpdate = true;
       lc.needsUpdate = true;
-      this.lineMat.opacity = this.lineAmount * 0.04;
+      this.lineMat.opacity = this.lineAmount * 0.35;
 
       // Store connections for electron spawning
       for (let k = 0; k < Math.min(lineCount, 500); k++) {
@@ -463,7 +559,7 @@ export class FawkesOrb {
         activeConnections.push({ 
           x1: la[ci], y1: la[ci + 1], z1: la[ci + 2], 
           x2: la[ci + 3], y2: la[ci + 4], z2: la[ci + 5],
-          r: lca[ci], g: lca[ci + 1], b: lca[ci + 2] // Electron inherits color
+          r: lca[ci], g: lca[ci + 1], b: lca[ci + 2]
         });
       }
     } else {
@@ -479,7 +575,7 @@ export class FawkesOrb {
             sx: conn.x1, sy: conn.y1, sz: conn.z1,
             ex: conn.x2, ey: conn.y2, ez: conn.z2,
             t: 0,
-            speed: 0.02 + Math.random() * 0.04,
+            speed: 0.008 + Math.random() * 0.015,
             color: new THREE.Color(conn.r, conn.g, conn.b)
           });
         }
