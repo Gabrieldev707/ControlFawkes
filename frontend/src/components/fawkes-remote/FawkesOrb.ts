@@ -17,7 +17,7 @@ function _makeCircleSprite() {
   const gradient = ctx.createRadialGradient(size/2, size/2, 0, size/2, size/2, size/2);
   gradient.addColorStop(0, 'rgba(255,255,255,1)');
   gradient.addColorStop(0.2, 'rgba(255,255,255,1)');
-  gradient.addColorStop(0.5, 'rgba(255,255,255,0.2)');
+  gradient.addColorStop(0.5, 'rgba(255,255,255,0.32)');
   gradient.addColorStop(1, 'rgba(255,255,255,0)');
   
   ctx.fillStyle = gradient;
@@ -72,14 +72,14 @@ export class FawkesOrb {
 
   private targetRadius     = 28;
   private targetSpeed      = 0.2;
-  private targetBright     = 0.5;
+  private targetBright     = 0.84;
   private targetSize       = 0.35;
   private targetLineAmount = 0.15;
   private targetElectronRate = 0;
 
   private currentRadius     = 28;
   private currentSpeed      = 0.2;
-  private currentBright     = 0.5;
+  private currentBright     = 0.84;
   private currentSize       = 0.35;
   private lineAmount        = 0.15;
   private electronSpawnRate = 0;
@@ -150,7 +150,7 @@ export class FawkesOrb {
       map:             sprite,
       alphaMap:        sprite,
       transparent:     true,
-      opacity:         0.6,
+      opacity:         0.84,
       sizeAttenuation: true,
       blending:        THREE.AdditiveBlending,
       depthWrite:      false,
@@ -193,7 +193,7 @@ export class FawkesOrb {
       map:             sprite,
       alphaMap:        sprite,
       transparent:     true,
-      opacity:         0.7,
+      opacity:         0.85,
       sizeAttenuation: true,
       blending:        THREE.AdditiveBlending,
       depthWrite:      false,
@@ -455,7 +455,7 @@ export class FawkesOrb {
       this.lineGeo.setDrawRange(0, lineCount * 2);
       lp.needsUpdate = true;
       lc.needsUpdate = true;
-      this.lineMat.opacity = this.lineAmount * 0.04;
+      this.lineMat.opacity = this.lineAmount * 0.065;
 
       // Store connections for electron spawning
       for (let k = 0; k < Math.min(lineCount, 500); k++) {
