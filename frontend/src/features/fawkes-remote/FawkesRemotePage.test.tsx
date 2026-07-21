@@ -97,6 +97,7 @@ describe('FawkesRemotePage authentication', () => {
 
     expect(localStorage.getItem('controlfawkes.deviceId')).toBe('device-1')
     expect(localStorage.getItem('controlfawkes.token')).toBe('new-secure-token-value')
+    expect(screen.getByText('Dispositivo autenticado')).toBeTruthy()
     expect((screen.getByRole('button', { name: 'Netflix' }) as HTMLButtonElement).disabled).toBe(true)
 
     act(() => {
@@ -234,5 +235,53 @@ describe('FawkesRemotePage authentication', () => {
     })
 
     expect(screen.getByRole('alert').textContent).toBe('Não entendi esse comando.')
+  })
+
+  it('navigates from Home to the control screen and back without sending a command', () => {
+    render(<FawkesRemotePage />)
+    act(() => {
+      websocketMock.onMessage?.({
+        protocolVersion: 1,
+        type: 'PAIR_RESULT',
+        requestId: 'pair-1',
+        success: true,
+        message: 'Pareamento concluído.',
+        deviceId: 'device-1',
+        token: 'new-secure-token-value',
+      })
+    })
+
+    expect(screen.getByRole('button', { name: 'Controle' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Touchpad' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Teclado' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Volume' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Plataformas' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Configurações' })).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Controle' }))
+
+    expect(screen.getByRole('heading', { name: 'Controle remoto' })).toBeTruthy()
+    expect(screen.queryByLabelText('Comando de texto')).toBeNull()
+    expect(websocketMock.sendMessage).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Voltar' }))
+
+    expect(screen.getByLabelText('Comando de texto')).toBeTruthy()
+
+    const destinations = [
+      ['Touchpad', 'Touchpad'],
+      ['Teclado', 'Teclado'],
+      ['Volume', 'Volume'],
+      ['Plataformas', 'Plataformas'],
+      ['Configurações', 'Configurações'],
+    ] as const
+
+    for (const [buttonName, headingName] of destinations) {
+      fireEvent.click(screen.getByRole('button', { name: buttonName }))
+      expect(screen.getByRole('heading', { name: headingName })).toBeTruthy()
+      fireEvent.click(screen.getByRole('button', { name: 'Voltar' }))
+    }
+
+    expect(websocketMock.sendMessage).not.toHaveBeenCalled()
   })
 })

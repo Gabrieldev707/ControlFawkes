@@ -9,8 +9,13 @@ import type {
 } from './types'
 import { PROTOCOL_VERSION } from './types'
 import { useWebSocket } from '../../hooks/useWebSocket'
+import { useRemoteNavigation } from '../../hooks/useRemoteNavigation'
 import { generateRequestId } from '../../utils/uuid'
+import { HomeShortcuts } from '../../components/navigation/HomeShortcuts'
+import { RemoteNavigation } from '../../components/navigation/RemoteNavigation'
+import { RemoteFeatureScreen } from '../../pages/remote/RemoteFeatureScreen'
 import {
+  AuthenticationStatus,
   ConnectionStatus,
   PairingScreen,
   PlatformGrid,
@@ -42,6 +47,7 @@ export const FawkesRemotePage: React.FC = () => {
   const [pairingMessage, setPairingMessage] = useState('')
   const [statusMessage, setStatusMessage] = useState('Conectando ao computador...')
   const [statusError, setStatusError] = useState(false)
+  const { currentScreen, navigate, goBack } = useRemoteNavigation()
 
   const currentRequestId = useRef<string | null>(null)
   const successTimeoutRef = useRef<number | null>(null)
@@ -276,28 +282,45 @@ export const FawkesRemotePage: React.FC = () => {
         />
       ) : (
         <>
-          <div className="orb-container">
-            <RemoteOrb state={orbState} />
-          </div>
+          {currentScreen === 'HOME' ? (
+            <main className="remote-home">
+              <div className="orb-container">
+                <RemoteOrb state={orbState} />
+              </div>
 
-          <RemoteStatusText message={statusMessage} error={statusError} />
-
-          <div className="input-area">
-            <PlatformGrid
-              selectedPlatform={selectedPlatform}
-              disabled={controlsDisabled}
-              onSelect={handlePlatformSelect}
-            />
-
-            <div className="main-controls">
-              <TextInput
-                disabled={controlsDisabled}
-                executing={orbState === 'executing'}
-                onSubmit={handleTextSubmit}
+              <RemoteStatusText message={statusMessage} error={statusError} />
+              <AuthenticationStatus
+                authState={authState}
+                connected={connectionState === 'connected'}
               />
-              <VoiceButton />
-            </div>
-          </div>
+
+              <div className="input-area">
+                <PlatformGrid
+                  selectedPlatform={selectedPlatform}
+                  disabled={controlsDisabled}
+                  onSelect={handlePlatformSelect}
+                />
+
+                <div className="main-controls">
+                  <TextInput
+                    disabled={controlsDisabled}
+                    executing={orbState === 'executing'}
+                    onSubmit={handleTextSubmit}
+                  />
+                  <VoiceButton />
+                </div>
+
+                <HomeShortcuts onNavigate={navigate} />
+              </div>
+            </main>
+          ) : (
+            <RemoteFeatureScreen screen={currentScreen} onBack={goBack} />
+          )}
+
+          <RemoteNavigation
+            currentScreen={currentScreen}
+            onNavigate={navigate}
+          />
         </>
       )}
     </div>
