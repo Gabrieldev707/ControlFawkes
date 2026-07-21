@@ -11,6 +11,7 @@ describe('useWebSocket', () => {
     readyState: number;
     onopen: any = null;
     onclose: any = null;
+    onerror: any = null;
     onmessage: any = null;
     send: any;
     close: any;
@@ -202,5 +203,34 @@ describe('useWebSocket', () => {
     
     // Should still only have 1 instance because it was CONNECTING
     expect(wsInstances.length).toBe(1);
+  });
+
+  it('ignora eventos tardios de um socket substituído', () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const { result } = renderHook(() => useWebSocket({ maxRetries: 2 }));
+    const firstSocket = wsInstances[0];
+
+    act(() => {
+      firstSocket.readyState = MockWebSocket.CLOSED;
+      firstSocket.onclose({});
+      vi.advanceTimersByTime(1000);
+    });
+    expect(wsInstances).toHaveLength(2);
+
+    act(() => {
+      wsInstances[1].readyState = MockWebSocket.OPEN;
+      wsInstances[1].onopen({});
+    });
+    expect(result.current.connectionState).toBe('connected');
+
+    act(() => {
+      firstSocket.onerror(new Event('error'));
+      firstSocket.onclose({});
+      vi.advanceTimersByTime(5000);
+    });
+
+    expect(result.current.connectionState).toBe('connected');
+    expect(wsInstances).toHaveLength(2);
+    expect(consoleError).not.toHaveBeenCalled();
   });
 });

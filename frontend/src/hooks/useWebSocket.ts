@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import type { ConnectionState, ClientMessage, ServerMessage } from '../features/fawkes-remote/types';
-import { isServerMessage } from '../features/fawkes-remote/types';
+import { isServerMessage } from '../features/fawkes-remote/protocol';
 
 interface UseWebSocketOptions {
   onMessage?: (message: ServerMessage) => void;
@@ -32,12 +32,14 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
     wsRef.current = ws;
     
     ws.onopen = () => {
+      if (wsRef.current !== ws) return;
       if (import.meta.env.DEV) console.log('[WS] Connected to', wsUrl);
       setConnectionState('connected');
       retryCount.current = 0;
     };
     
     ws.onmessage = (event) => {
+      if (wsRef.current !== ws) return;
       try {
         const data = JSON.parse(event.data);
         if (import.meta.env.DEV) console.log('[WS] Received:', data);
@@ -54,6 +56,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
     };
     
     ws.onclose = () => {
+      if (wsRef.current !== ws) return;
       if (import.meta.env.DEV) console.log('[WS] Disconnected');
       
       // If we are unmounting, we don't want to reconnect
@@ -76,6 +79,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
     };
     
     ws.onerror = (err) => {
+      if (wsRef.current !== ws) return;
       if (import.meta.env.DEV) console.error('[WS] Error:', err);
       // onclose will handle the reconnection
     };

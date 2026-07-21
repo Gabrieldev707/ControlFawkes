@@ -5,6 +5,13 @@ export type ConnectionState =
   | 'connected'
   | 'error';
 
+export type AuthState =
+  | 'checking'
+  | 'pairing_required'
+  | 'pairing'
+  | 'authenticated'
+  | 'rejected';
+
 // Orb Visual State
 export type OrbState =
   | 'idle'
@@ -41,8 +48,46 @@ export interface AuthMessage {
   type: 'AUTH';
   requestId: string;
   payload: {
+    deviceId: string;
     token: string;
   };
+}
+
+export interface PairDeviceMessage {
+  type: 'PAIR_DEVICE';
+  requestId: string;
+  payload: {
+    pin: string;
+    deviceName: string;
+  };
+}
+
+export interface VolumeGetMessage {
+  type: 'VOLUME_GET';
+  requestId: string;
+  payload: Record<string, never>;
+}
+
+export interface VolumeSetMessage {
+  type: 'VOLUME_SET';
+  requestId: string;
+  payload: {
+    level: number;
+  };
+}
+
+export interface VolumeStepMessage {
+  type: 'VOLUME_STEP';
+  requestId: string;
+  payload: {
+    delta: -5 | 5;
+  };
+}
+
+export interface VolumeToggleMuteMessage {
+  type: 'VOLUME_TOGGLE_MUTE';
+  requestId: string;
+  payload: Record<string, never>;
 }
 
 export interface PlatformSelectedMessage {
@@ -63,15 +108,48 @@ export interface TextCommandMessage {
 
 export type ClientMessage =
   | AuthMessage
+  | PairDeviceMessage
+  | VolumeGetMessage
+  | VolumeSetMessage
+  | VolumeStepMessage
+  | VolumeToggleMuteMessage
   | PlatformSelectedMessage
   | TextCommandMessage;
 
 // -----------------------------------------------------------------------------
 // Server Protocol (Sent by Backend)
 // -----------------------------------------------------------------------------
+export interface AuthRequiredMessage {
+  type: 'AUTH_REQUIRED';
+}
+
+export interface AuthResultMessage {
+  type: 'AUTH_RESULT';
+  requestId: string;
+  success: boolean;
+  deviceId?: string;
+  message: string;
+}
+
+export interface PairResultMessage {
+  type: 'PAIR_RESULT';
+  requestId: string;
+  success: boolean;
+  deviceId?: string;
+  token?: string;
+  message: string;
+}
+
+export interface VolumeStateMessage {
+  type: 'VOLUME_STATE';
+  requestId: string;
+  level: number;
+  muted: boolean;
+}
+
 export interface StateUpdateMessage {
   type: 'STATE_UPDATE';
-  state: ConnectionState; // Ou outro estado interno do servidor
+  state: ConnectionState;
 }
 
 export interface CommandResultMessage {
@@ -90,31 +168,10 @@ export interface ErrorMessage {
 }
 
 export type ServerMessage =
+  | AuthRequiredMessage
+  | AuthResultMessage
+  | PairResultMessage
+  | VolumeStateMessage
   | StateUpdateMessage
   | CommandResultMessage
   | ErrorMessage;
-
-export function isServerMessage(data: unknown): data is ServerMessage {
-  if (typeof data !== 'object' || data === null) return false;
-
-  const msg = data as Record<string, unknown>;
-  const type = msg.type;
-
-  if (type === 'STATE_UPDATE') {
-    return ['disconnected', 'connecting', 'connected', 'error'].includes(msg.state as string);
-  }
-
-  if (type === 'COMMAND_RESULT') {
-    return typeof msg.requestId === 'string' &&
-           typeof msg.success === 'boolean' &&
-           typeof msg.message === 'string';
-  }
-
-  if (type === 'ERROR') {
-    return typeof msg.requestId === 'string' &&
-           typeof msg.code === 'string' &&
-           typeof msg.message === 'string';
-  }
-
-  return false;
-}
