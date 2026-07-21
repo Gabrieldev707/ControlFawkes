@@ -9,7 +9,7 @@
 - Frontend inicial: lint e build passando; script de teste ausente
 - Testes manuais: `PENDING USER VALIDATION`
 
-## Fase 1.6 — Em andamento
+## Fase 1.6 — Implementação concluída, aguardando aprovação
 
 ### Objetivo
 
@@ -25,7 +25,9 @@ Consolidar protocolo, autenticação local, comandos de texto, reconexão, feedb
 
 ### Estado atual
 
-Especificação aprovada registrada. A Fatia 1 foi implementada e verificada; a Fase 1.6 continua em andamento.
+As cinco fatias foram implementadas e verificadas na branch isolada. A validação
+física pelo iPhone e a aprovação explícita da fase continuam pendentes; nenhuma
+fase posterior deve começar antes disso.
 
 ### Fatia 1 concluída — Protocolo versionado e autenticação no backend
 
@@ -342,6 +344,77 @@ npm run build
 #### Próxima fatia
 
 CI, README independente, auditoria final, execução local integrada e roteiro de validação manual.
+
+### Fatia 5 concluída — CI, documentação e verificação integrada
+
+#### Objetivo
+
+Tornar a fundação reproduzível em um checkout limpo, documentar operação e
+segurança e comprovar o fluxo local sem incluir capacidades de fases futuras.
+
+#### Implementado
+
+- CI separado para frontend e backend em push e pull request;
+- dependências de teste do backend declaradas no arquivo de requisitos;
+- README completo para instalação, rede local, pareamento, comandos, protocolo,
+  testes, segurança, troubleshooting e limites da fase;
+- documento legado corrigido para a arquitetura independente, mantendo o Fawkes
+  original somente como referência visual;
+- artefatos locais, dados de pareamento e caches explicitamente ignorados;
+- roteiro de validação manual pelo iPhone documentado.
+
+#### Verificação automatizada final
+
+```text
+Frontend: 42 testes passando em 9 arquivos
+Backend: 54 testes passando
+Lint: sem erros
+Build: concluído
+Python compileall: sem erros
+pip check: nenhuma dependência quebrada
+```
+
+O build mantém um aviso não bloqueante de chunk acima de 500 kB. O backend
+mantém um aviso não bloqueante de depreciação do TestClient do Starlette.
+
+#### Verificação local integrada
+
+- frontend e `/health` responderam HTTP 200 pelo IPv4 Wi-Fi `192.168.0.168`;
+- WebSocket real percorreu `AUTH_REQUIRED → PAIR_RESULT → READY`;
+- `abre spotify` percorreu `BUSY → COMMAND_RESULT → READY`, com
+  `executed: false`;
+- autenticação por credencial persistida foi aceita;
+- texto desconhecido retornou `UNKNOWN_COMMAND`;
+- o dispositivo temporário foi revogado e a credencial passou a retornar
+  `INVALID_TOKEN`;
+- o dispositivo temporário usado na verificação foi removido do store.
+
+A verificação visual automatizada não pôde ser executada porque o binário
+`agent-browser` do plugin não está instalado no ambiente. A carga HTTP, os
+componentes e os fluxos de interface permanecem cobertos por build e testes. O
+teste físico no iPhone continua corretamente marcado como pendente.
+
+#### Auditoria de escopo e segurança
+
+- nenhum arquivo em `backend/data/`, `.env` ou `.env.local` é rastreado;
+- nenhum token real ou PIN temporário foi versionado;
+- nenhuma referência a automação de navegador, shell, Windows, volume ou
+  touchpad foi encontrada no código executável da fase;
+- `feat/windows-controls-phase-2` permanece em
+  `1160ded9d460b76cdf4374439084355592ab337a`;
+- o merge-base da branch atual com a base solicitada é
+  `4a58c1c267b44c694ccd718d4ba2ffe744c9519d`;
+- nenhum merge ou cherry-pick da Fase 2 foi realizado.
+
+#### Commit
+
+`feat: complete phase 1.6 foundation`
+
+#### Próximo passo
+
+Executar o roteiro físico no iPhone e aguardar aprovação explícita da Fase 1.6.
+Não iniciar controle real do Windows, navegador ou a fase MVP antes dessa
+aprovação.
 
 ### Limitações
 
