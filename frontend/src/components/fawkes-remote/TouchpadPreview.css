@@ -1,0 +1,189 @@
+.touchpad-view {
+  min-height: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  overscroll-behavior: none;
+  padding: 2px 1px 10px;
+}
+
+.touchpad-view__heading {
+  flex: 0 0 auto;
+}
+
+.touchpad-surface {
+  min-height: 250px;
+  flex: 1;
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+  touch-action: none;
+  overscroll-behavior: none;
+  user-select: none;
+  color: #c9c2d6;
+  background:
+    radial-gradient(circle at 50% 48%, rgba(169, 139, 255, .15), transparent 25%),
+    radial-gradient(circle at 18% 12%, rgba(142, 231, 213, .055), transparent 30%),
+    linear-gradient(145deg, rgba(27, 21, 45, .96), rgba(13, 11, 23, .98));
+  border: 1px solid rgba(196, 181, 253, .2);
+  border-radius: 24px;
+  box-shadow:
+    inset 0 1px rgba(255, 255, 255, .035),
+    inset 0 0 44px rgba(139, 92, 246, .035),
+    0 12px 34px rgba(0, 0, 0, .2);
+}
+
+.touchpad-orientation-lines {
+  position: absolute;
+  inset: 16px;
+  z-index: -1;
+  opacity: .45;
+  background:
+    linear-gradient(90deg, transparent calc(50% - .5px), rgba(196, 181, 253, .12) 50%, transparent calc(50% + .5px)),
+    linear-gradient(transparent calc(50% - .5px), rgba(196, 181, 253, .12) 50%, transparent calc(50% + .5px)),
+    repeating-radial-gradient(circle at center, transparent 0 52px, rgba(142, 231, 213, .065) 53px 54px, transparent 55px 80px);
+  mask-image: radial-gradient(ellipse at center, #000 0 58%, transparent 88%);
+}
+
+.touchpad-corner-mark {
+  width: 24px;
+  height: 24px;
+  position: absolute;
+  border-color: rgba(142, 231, 213, .42);
+  border-style: solid;
+  filter: drop-shadow(0 0 5px rgba(142, 231, 213, .13));
+}
+
+.touchpad-corner-mark--top-left {
+  top: 18px;
+  left: 18px;
+  border-width: 1px 0 0 1px;
+  border-radius: 7px 0 0;
+}
+
+.touchpad-corner-mark--top-right {
+  top: 18px;
+  right: 18px;
+  border-width: 1px 1px 0 0;
+  border-radius: 0 7px 0 0;
+}
+
+.touchpad-corner-mark--bottom-left {
+  bottom: 18px;
+  left: 18px;
+  border-width: 0 0 1px 1px;
+  border-radius: 0 0 0 7px;
+}
+
+.touchpad-corner-mark--bottom-right {
+  right: 18px;
+  bottom: 18px;
+  border-width: 0 1px 1px 0;
+  border-radius: 0 0 7px;
+}
+
+.touchpad-core {
+  width: clamp(82px, 24vw, 112px);
+  aspect-ratio: 1;
+  position: relative;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(196, 181, 253, .14);
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(196, 181, 253, .14), rgba(139, 92, 246, .04) 46%, transparent 70%);
+  box-shadow: 0 0 42px rgba(139, 92, 246, .11), inset 0 0 22px rgba(142, 231, 213, .035);
+}
+
+.touchpad-core__ring {
+  width: 56%;
+  aspect-ratio: 1;
+  border: 1px solid rgba(142, 231, 213, .2);
+  border-radius: 50%;
+}
+
+.touchpad-core__point {
+  width: 6px;
+  height: 6px;
+  position: absolute;
+  border-radius: 50%;
+  background: rgba(232, 225, 246, .78);
+  box-shadow: 0 0 12px rgba(196, 181, 253, .5);
+}
+
+.touchpad-surface__copy {
+  position: absolute;
+  left: 24px;
+  right: 24px;
+  bottom: 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  text-align: center;
+}
+
+.touchpad-surface__copy span {
+  color: #d5cede;
+  font-size: .78rem;
+  font-weight: 600;
+  letter-spacing: .025em;
+}
+
+.touchpad-surface__copy small {
+  color: #888092;
+  font-size: .62rem;
+  letter-spacing: .035em;
+}
+
+.touchpad-preview-actions {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.touchpad-preview-actions button {
+  min-width: 0;
+  min-height: 62px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 8px;
+  color: #9d95aa;
+  background: linear-gradient(145deg, rgba(255, 255, 255, .045), rgba(255, 255, 255, .018));
+  border: 1px solid rgba(196, 181, 253, .12);
+  border-radius: 14px;
+  box-shadow: inset 0 1px rgba(255, 255, 255, .025), 0 4px 12px rgba(0, 0, 0, .14);
+  opacity: .78;
+  cursor: not-allowed;
+}
+
+.touchpad-preview-actions svg {
+  width: 19px;
+  height: 19px;
+}
+
+.touchpad-preview-actions span {
+  font-size: .65rem;
+  font-weight: 600;
+}
+
+@media (max-height: 620px) {
+  .touchpad-surface {
+    min-height: 190px;
+  }
+
+  .touchpad-view .view-heading {
+    margin-block: 8px 10px;
+  }
+
+  .touchpad-preview-actions button {
+    min-height: 54px;
+  }
+}
