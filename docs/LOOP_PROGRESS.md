@@ -106,6 +106,88 @@ Exigir autenticação antes de comandos e oferecer pareamento local com PIN temp
 
 Protocolo TypeScript fechado, tela de pareamento, persistência local de credenciais e autenticação automática no frontend.
 
+### Fatia 2 concluída — Pareamento e autenticação no frontend
+
+#### Objetivo
+
+Aplicar o protocolo v1 no cliente, permitir pareamento por PIN e reutilizar credenciais locais sem liberar comandos antes de `READY`.
+
+#### Implementado
+
+- unions TypeScript fechadas para conexão, servidor, autenticação, orb, mensagens e erros;
+- validação runtime de mensagens com versão, campos e códigos exatos;
+- descarte de mensagens WebSocket inválidas;
+- formulário acessível de PIN com filtro numérico e estados desconectado/pendente/erro;
+- armazenamento local de `deviceId` e token sob chaves do ControlFawkes;
+- `AUTH` automático uma única vez por conexão;
+- remoção de credenciais quando o backend rejeita o token;
+- comandos bloqueados até conexão, autenticação e estado `READY`;
+- todas as mensagens existentes do frontend incluem `protocolVersion: 1`;
+- gerador UUID v4 com fallback para `getRandomValues()` em HTTP local quando `randomUUID()` não existe.
+
+#### Arquivos criados
+
+- `frontend/src/components/fawkes-remote/PairingScreen.tsx`
+- `frontend/src/components/fawkes-remote/PairingScreen.test.tsx`
+- `frontend/src/features/fawkes-remote/protocol.ts`
+- `frontend/src/features/fawkes-remote/protocol.test.ts`
+- `frontend/src/features/fawkes-remote/FawkesRemotePage.test.tsx`
+- `frontend/src/test/setup.ts`
+- `frontend/src/utils/uuid.ts`
+- `frontend/src/utils/uuid.test.ts`
+- `frontend/vitest.config.ts`
+
+#### Arquivos alterados
+
+- `frontend/package.json`
+- `frontend/src/components/fawkes-remote/index.ts`
+- `frontend/src/features/fawkes-remote/FawkesRemotePage.tsx`
+- `frontend/src/features/fawkes-remote/types.ts`
+- `frontend/src/hooks/useWebSocket.ts`
+- `frontend/src/styles/fawkes-remote.css`
+
+#### Testes executados
+
+```text
+npm run test -- --run
+npm run lint
+npm run build
+.venv\Scripts\python.exe -m pytest -q
+```
+
+#### Resultado
+
+- Frontend: 21 testes passando em 5 arquivos.
+- Frontend lint: sem erros.
+- Frontend build: concluído; permanece apenas o aviso conhecido de chunk acima de 500 kB.
+- Backend: 25 testes passando.
+
+#### Problemas encontrados
+
+- O jsdom não era limpo automaticamente entre testes do formulário.
+- A assinatura genérica do Web Crypto mudou no TypeScript 6.
+- `crypto.randomUUID()` não é uma dependência segura para todo acesso HTTP por IP local.
+
+#### Correções realizadas
+
+- Cleanup global da Testing Library foi configurado no Vitest.
+- O buffer aleatório foi tipado explicitamente como `Uint8Array<ArrayBuffer>`.
+- Foi adicionado UUID v4 com fonte aleatória injetável e fallback testado.
+
+#### Limitações
+
+- O campo textual ainda não envia `TEXT_COMMAND`.
+- O botão de voz ainda será desabilitado e marcado como “Em breve” na próxima fatia.
+- Reconexão contínua e eventos de retorno da rede ainda não foram implementados.
+
+#### Commit
+
+`feat: add frontend pairing flow`
+
+#### Próxima fatia
+
+Parser determinístico, comando textual autenticado e mensagens reais sincronizadas com a orb.
+
 ### Limitações
 
 - Nenhuma ação real de plataforma ou do Windows será executada nesta fase.

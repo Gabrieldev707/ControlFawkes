@@ -218,3 +218,94 @@ body {
   box-shadow: var(--shadow-glow);
   transform: scale(0.95);
 }
+
+/* Local pairing */
+.pairing-panel {
+  position: relative;
+  z-index: 20;
+  margin: auto 0;
+  padding: 24px;
+  border: 1px solid var(--border-accent);
+  border-radius: var(--radius-lg);
+  background: rgba(10, 10, 18, 0.94);
+  box-shadow: 0 24px 80px rgba(0, 0, 0, 0.48), 0 0 32px rgba(124, 58, 237, 0.12);
+}
+
+.pairing-kicker {
+  margin-bottom: 6px;
+  color: var(--accent-bright);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.pairing-panel h2 {
+  font-size: 1.35rem;
+  line-height: 1.2;
+}
+
+.pairing-instructions {
+  margin-top: 8px;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.pairing-form {
+  display: grid;
+  gap: 10px;
+  margin-top: 20px;
+}
+
+.pairing-form label {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+.pairing-form input {
+  width: 100%;
+  padding: 14px 16px;
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  outline: none;
+  background: var(--bg-panel);
+  color: var(--text-primary);
+  font: 600 1.3rem/1 var(--font-ui);
+  letter-spacing: 0.28em;
+  text-align: center;
+}
+
+.pairing-form input:focus-visible {
+  border-color: var(--accent-bright);
+  box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.2);
+}
+
+.pairing-form button {
+  min-height: 46px;
+  border: 1px solid var(--accent-bright);
+  border-radius: 10px;
+  background: var(--accent);
+  color: white;
+  font: 700 0.9rem/1 var(--font-ui);
+  cursor: pointer;
+}
+
+.pairing-form button:disabled,
+.pairing-form input:disabled {
+  cursor: not-allowed;
+  opacity: 0.52;
+}
+
+.pairing-message {
+  min-height: 1.25rem;
+  margin-top: 12px;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  text-align: center;
+}
+
+.pairing-message--error {
+  color: var(--red);
+}
