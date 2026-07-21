@@ -2,11 +2,13 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 
 import type {
   AuthState,
+  KeyboardAction,
   MediaAction,
   OrbState,
   Platform,
   PointerAction,
   PointerPayload,
+  SafeKey,
   ServerMessage,
   ServerState,
   VolumeAction,
@@ -22,6 +24,7 @@ import { PlatformsScreen } from '../../pages/remote/PlatformsScreen'
 import { RemoteControlScreen } from '../../pages/remote/RemoteControlScreen'
 import { VolumeScreen } from '../../pages/remote/VolumeScreen'
 import { TouchpadScreen } from '../../pages/remote/TouchpadScreen'
+import { KeyboardScreen } from '../../pages/remote/KeyboardScreen'
 import {
   AuthenticationStatus,
   ConnectionStatus,
@@ -48,6 +51,21 @@ function clearStoredCredentials(): void {
   localStorage.removeItem(TOKEN_KEY)
 }
 
+function containsUnsafeKeyboardCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index)
+    if (codeUnit <= 0x1f || (codeUnit >= 0x7f && codeUnit <= 0x9f)) return true
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1)
+      if (next < 0xdc00 || next > 0xdfff) return true
+      index += 1
+    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      return true
+    }
+  }
+  return false
+}
+
 export const FawkesRemotePage: React.FC = () => {
   const [orbState, setOrbState] = useState<OrbState>('idle')
   const [selectedPlatform, setSelectedPlatform] = useState<Platform | null>(null)
@@ -59,6 +77,7 @@ export const FawkesRemotePage: React.FC = () => {
   const [currentMediaAction, setCurrentMediaAction] = useState<MediaAction | null>(null)
   const [currentVolumeAction, setCurrentVolumeAction] = useState<VolumeAction | null>(null)
   const [currentPointerAction, setCurrentPointerAction] = useState<PointerAction | null>(null)
+  const [currentKeyboardAction, setCurrentKeyboardAction] = useState<KeyboardAction | null>(null)
   const [volumeLevel, setVolumeLevel] = useState<number | null>(null)
   const [volumeMuted, setVolumeMuted] = useState(false)
   const { currentScreen, navigate, goBack } = useRemoteNavigation()
@@ -145,6 +164,14 @@ export const FawkesRemotePage: React.FC = () => {
         setStatusError(false)
         return
       }
+      if (message.data.intent === 'KEYBOARD_CONTROL') {
+        setCurrentKeyboardAction(null)
+        currentRequestId.current = null
+        setOrbState('idle')
+        setStatusMessage(message.message)
+        setStatusError(false)
+        return
+      }
       setOrbState('success')
       setStatusMessage(message.message)
       setStatusError(false)
@@ -155,6 +182,7 @@ export const FawkesRemotePage: React.FC = () => {
         setCurrentMediaAction(null)
         setCurrentVolumeAction(null)
         setCurrentPointerAction(null)
+        setCurrentKeyboardAction(null)
         currentRequestId.current = null
         setStatusMessage('Computador pronto.')
       }, 2000)
@@ -172,6 +200,7 @@ export const FawkesRemotePage: React.FC = () => {
         setCurrentMediaAction(null)
         setCurrentVolumeAction(null)
         setCurrentPointerAction(null)
+        setCurrentKeyboardAction(null)
         currentRequestId.current = null
         setStatusMessage('Computador pronto.')
         setStatusError(false)
@@ -228,6 +257,11 @@ export const FawkesRemotePage: React.FC = () => {
   const pointerDisabled = connectionState !== 'connected'
     || authState !== 'authenticated'
     || serverState !== 'READY'
+
+  const keyboardDisabled = connectionState !== 'connected'
+    || authState !== 'authenticated'
+    || serverState !== 'READY'
+    || currentKeyboardAction !== null
 
   const showOrbPreview = import.meta.env.DEV
     && new URLSearchParams(window.location.search).get('orb-preview') === '1'
@@ -396,6 +430,54 @@ export const FawkesRemotePage: React.FC = () => {
     }
   }, [pointerDisabled, sendMessage])
 
+  const handleKeyboardText = useCallback((text: string): boolean => {
+    if (
+      keyboardDisabled
+      || !text.trim()
+      || text.length > 256
+      || containsUnsafeKeyboardCharacter(text)
+    ) return false
+    const requestId = generateRequestId()
+    currentRequestId.current = requestId
+    setCurrentKeyboardAction('KEYBOARD_TEXT')
+    setStatusMessage('Enviando texto...')
+    setStatusError(false)
+    const accepted = sendMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: 'KEYBOARD_TEXT',
+      requestId,
+      payload: { text },
+    })
+    if (!accepted) {
+      currentRequestId.current = null
+      setCurrentKeyboardAction(null)
+      setStatusMessage('Teclado remoto desconectado.')
+      setStatusError(true)
+    }
+    return accepted
+  }, [keyboardDisabled, sendMessage])
+
+  const handleKeyboardKey = useCallback((key: SafeKey) => {
+    if (keyboardDisabled) return
+    const requestId = generateRequestId()
+    currentRequestId.current = requestId
+    setCurrentKeyboardAction('KEYBOARD_KEY')
+    setStatusMessage('Enviando tecla...')
+    setStatusError(false)
+    const accepted = sendMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: 'KEYBOARD_KEY',
+      requestId,
+      payload: { key },
+    })
+    if (!accepted) {
+      currentRequestId.current = null
+      setCurrentKeyboardAction(null)
+      setStatusMessage('Teclado remoto desconectado.')
+      setStatusError(true)
+    }
+  }, [keyboardDisabled, sendMessage])
+
   useEffect(() => {
     if (currentScreen !== 'VOLUME') {
       hasLoadedVolumeScreen.current = false
@@ -522,6 +604,16 @@ export const FawkesRemotePage: React.FC = () => {
               statusMessage={statusMessage}
               statusError={statusError}
               onAction={handlePointerAction}
+              onBack={goBack}
+            />
+          ) : currentScreen === 'KEYBOARD' ? (
+            <KeyboardScreen
+              disabled={keyboardDisabled}
+              loading={currentKeyboardAction !== null}
+              statusMessage={statusMessage}
+              statusError={statusError}
+              onText={handleKeyboardText}
+              onKey={handleKeyboardKey}
               onBack={goBack}
             />
           ) : (

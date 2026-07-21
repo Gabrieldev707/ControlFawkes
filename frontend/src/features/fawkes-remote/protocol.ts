@@ -88,6 +88,14 @@ function isPointerData(value: unknown): boolean {
     && value.executed === true
 }
 
+function isKeyboardData(value: unknown): boolean {
+  return isRecord(value)
+    && hasOnlyKeys(value, ['intent', 'action', 'executed'])
+    && value.intent === 'KEYBOARD_CONTROL'
+    && (value.action === 'KEYBOARD_TEXT' || value.action === 'KEYBOARD_KEY')
+    && value.executed === true
+}
+
 export function isServerMessage(value: unknown): value is ServerMessage {
   if (!isRecord(value) || value.protocolVersion !== 1 || typeof value.type !== 'string') {
     return false
@@ -128,6 +136,7 @@ export function isServerMessage(value: unknown): value is ServerMessage {
           || isMediaData(value.data)
           || isVolumeData(value.data)
           || isPointerData(value.data)
+          || isKeyboardData(value.data)
         )
     case 'ERROR':
       return hasOnlyKeys(value, ['protocolVersion', 'type', 'requestId', 'code', 'message'])

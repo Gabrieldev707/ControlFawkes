@@ -221,3 +221,17 @@ fundação segura.
 Nenhum desses riscos exige apagar a branch antiga. Ela permanece preservada
 como fonte histórica e visual; cada recuperação será reimplementada ou adaptada
 explicitamente na nova branch.
+
+## Resultado da recuperação no MVP
+
+A execução confirmou as decisões desta auditoria:
+
+- navegação e layouts foram adaptados conceitualmente, sem transplantar o monólito;
+- o adapter de volume preservou COM em thread, lock e releitura, com interface injetável;
+- touchpad e teclado foram reimplementados porque não existiam funcionalmente na Fase 2;
+- protocolo, autenticação, WebSocket e orb da branch antiga não foram copiados;
+- nenhum merge ou cherry-pick foi realizado;
+- `feat/windows-controls-phase-2` permanece intacta em `1160ded9d460b76cdf4374439084355592ab337a`.
+
+O histórico da branch `feat/controlfawkes-loop-mvp` mantém um commit por fatia,
+permitindo revisão ou integração futura sem misturar diretamente as branches.

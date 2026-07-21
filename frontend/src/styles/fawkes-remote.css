@@ -1102,6 +1102,134 @@ body {
   opacity: 0.42;
 }
 
+.keyboard-screen {
+  padding: 0 2px 20px;
+}
+
+.keyboard-screen__heading {
+  margin-top: 8px;
+}
+
+.keyboard-screen__heading h2 {
+  margin-top: 4px;
+  color: var(--text-primary);
+  font-size: 1.7rem;
+  font-weight: 600;
+  letter-spacing: -0.035em;
+}
+
+.keyboard-screen__heading > p:last-child {
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.keyboard-screen > .remote-status-text {
+  justify-content: flex-start;
+  min-height: 42px;
+  margin: 5px 0;
+  padding-right: 0;
+  padding-left: 0;
+  text-align: left;
+}
+
+.keyboard-text {
+  padding: 16px;
+  border: 1px solid var(--border-default);
+  border-radius: 19px;
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.keyboard-text > label {
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  font-weight: 600;
+}
+
+.keyboard-text > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 46px;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.keyboard-text input {
+  min-width: 0;
+  height: 48px;
+  padding: 0 14px;
+  border: 1px solid var(--border-default);
+  border-radius: 13px;
+  outline: none;
+  background: rgba(4, 4, 9, 0.72);
+  color: var(--text-primary);
+  font: 400 0.85rem/1 var(--font-ui);
+}
+
+.keyboard-text input:focus {
+  border-color: var(--accent-bright);
+  box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.12);
+}
+
+.keyboard-text button {
+  display: grid;
+  width: 46px;
+  height: 48px;
+  place-items: center;
+  border: 1px solid var(--border-accent);
+  border-radius: 13px;
+  background: rgba(124, 58, 237, 0.13);
+  color: var(--accent-bright);
+}
+
+.keyboard-text > span {
+  display: block;
+  margin-top: 8px;
+  color: var(--text-tertiary);
+  font-size: 0.62rem;
+  text-align: right;
+}
+
+.keyboard-keys {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.keyboard-keys button {
+  display: grid;
+  min-height: 52px;
+  place-items: center;
+  border: 1px solid var(--border-default);
+  border-radius: 13px;
+  background: linear-gradient(145deg, rgba(255, 255, 255, 0.05), rgba(124, 58, 237, 0.025));
+  color: var(--text-secondary);
+  font: 600 0.7rem/1 var(--font-ui);
+}
+
+.keyboard-keys button:active:not(:disabled) {
+  border-color: var(--accent-bright);
+  color: var(--text-primary);
+  transform: scale(0.96);
+}
+
+.keyboard-text button:disabled,
+.keyboard-text input:disabled,
+.keyboard-keys button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.keyboard-screen__notice {
+  margin: 12px auto 0;
+  max-width: 315px;
+  color: var(--text-tertiary);
+  font-size: 0.64rem;
+  line-height: 1.45;
+  text-align: center;
+}
+
 /* Compact bottom navigation */
 .remote-navigation {
   display: grid;

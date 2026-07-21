@@ -7,7 +7,7 @@ import {
 import type { NavigableScreen } from '../../state/currentScreen'
 
 
-type FeatureScreen = Exclude<NavigableScreen, 'HOME' | 'PLATFORMS' | 'REMOTE_CONTROL' | 'VOLUME' | 'TOUCHPAD'>
+type FeatureScreen = Exclude<NavigableScreen, 'HOME' | 'PLATFORMS' | 'REMOTE_CONTROL' | 'VOLUME' | 'TOUCHPAD' | 'KEYBOARD'>
 
 interface RemoteFeatureScreenProps {
   screen: FeatureScreen
@@ -15,11 +15,6 @@ interface RemoteFeatureScreenProps {
 }
 
 const SCREEN_CONTENT = {
-  KEYBOARD: {
-    title: 'Teclado',
-    description: 'A entrada remota de texto será adicionada com validação e limites próprios.',
-    icon: Keyboard,
-  },
   SETTINGS: {
     title: 'Configurações',
     description: 'Preferências locais e informações do dispositivo ficarão organizadas aqui.',

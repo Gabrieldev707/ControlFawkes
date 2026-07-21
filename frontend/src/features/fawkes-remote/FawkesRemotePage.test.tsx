@@ -471,4 +471,37 @@ describe('FawkesRemotePage authentication', () => {
       requestId: expect.any(String),
     })
   })
+
+  it('sends remote text without history and only allowlisted special keys', () => {
+    render(<FawkesRemotePage />)
+    act(() => {
+      websocketMock.onMessage?.({
+        protocolVersion: 1,
+        type: 'PAIR_RESULT',
+        requestId: 'pair-1',
+        success: true,
+        message: 'Pareamento concluído.',
+        deviceId: 'device-1',
+        token: 'new-secure-token-value',
+      })
+      websocketMock.onMessage?.({
+        protocolVersion: 1,
+        type: 'STATE_UPDATE',
+        state: 'READY',
+        message: 'Computador pronto.',
+      })
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Teclado' }))
+    const input = screen.getByLabelText('Texto para enviar')
+    fireEvent.change(input, { target: { value: 'Olá' } })
+    fireEvent.submit(input.closest('form')!)
+
+    expect(websocketMock.sendMessage).toHaveBeenCalledWith({
+      protocolVersion: 1,
+      type: 'KEYBOARD_TEXT',
+      requestId: expect.any(String),
+      payload: { text: 'Olá' },
+    })
+  })
 })

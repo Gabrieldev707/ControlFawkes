@@ -4,9 +4,9 @@ Controle remoto mobile-first para comunicação local entre um iPhone e um
 computador. Este é um projeto independente: o Fawkes original serve somente
 como referência visual e não é alterado nem necessário em tempo de execução.
 
-## Estado da Fase 1.6
+## Estado do MVP funcional
 
-A fundação atual oferece:
+O MVP atual oferece:
 
 - frontend React responsivo para celular;
 - backend FastAPI acessível na rede local;
@@ -18,9 +18,15 @@ A fundação atual oferece:
 - estados reais `AUTH_REQUIRED`, `READY`, `BUSY` e erro;
 - reconexão contínua com backoff e retomada por rede/visibilidade;
 - testes automatizados e CI.
+- navegação entre Home, controle, touchpad, teclado, volume, plataformas e ajustes;
+- abertura real e allowlisted de Netflix, Max, Prime Video, Disney+, YouTube e Spotify;
+- play/pause, faixa anterior/próxima, seek e fullscreen por teclas fixas do Windows;
+- leitura, ajuste, delta e mudo do volume principal pelo Core Audio;
+- touchpad relativo com agrupamento por frame, limite backend de 60 movimentos/s e failsafe;
+- texto Unicode limitado e nove teclas especiais seguras no teclado remoto.
 
-Reconhecer uma plataforma **não a abre** nesta fase. A resposta informa
-`executed: false`, evitando apresentar uma intenção como ação concluída.
+Toda confirmação funcional depende do retorno do adapter. Falha nativa produz
+`ERROR`; a interface não apresenta sucesso otimista.
 
 ## Estrutura
 
@@ -125,13 +131,16 @@ LLM, pesquisa aberta ou execução arbitrária.
 ## Protocolo resumido
 
 O endpoint WebSocket é `/ws`. Toda mensagem do cliente inclui
-`protocolVersion: 1`, `type`, `requestId` e `payload`. Uma conexão começa em
+`protocolVersion: 1`, `type` e `requestId`; `payload` existe somente quando o
+tipo exige dados. Uma conexão começa em
 `AUTH_REQUIRED`; `PAIR_DEVICE` ou `AUTH` válidos levam a `READY`. Um
 `TEXT_COMMAND` autenticado produz `BUSY`, seguido por `COMMAND_RESULT` ou
 `ERROR`, e então `READY`.
 
 Payloads com campos extras, JSON inválido, versões incompatíveis e comandos
 antes da autenticação são rejeitados com códigos explícitos.
+
+O contrato completo está em [docs/PROTOCOL.md](docs/PROTOCOL.md).
 
 ## Verificação
 
@@ -154,23 +163,15 @@ cd backend
 O CI repete lint, build e testes do frontend e toda a suíte do backend em cada
 push e pull request.
 
-Roteiro manual pelo iPhone:
-
-1. confirmar que a tela de pareamento abre pelo IPv4 do computador;
-2. testar PIN incorreto e depois o PIN válido;
-3. recarregar a página e confirmar autenticação automática;
-4. enviar `abre spotify` e verificar que a interface diz apenas que o comando
-   foi reconhecido, sem abrir nada;
-5. enviar texto desconhecido e verificar o erro visível;
-6. desligar e religar o Wi-Fi e confirmar a reconexão;
-7. revogar o dispositivo, recarregar a página e confirmar novo pareamento.
+O roteiro físico completo de 16 passos está em [docs/TESTING.md](docs/TESTING.md).
 
 ## Limites atuais
 
-A Fase 1.6 não implementa controle do Windows, abertura real de plataformas,
-navegação, seleção de conteúdo, playback, volume, touchpad, teclado remoto,
-transcrição ou voz. O botão de voz permanece desabilitado como “Em breve”.
-Essas capacidades só podem avançar depois da aprovação explícita desta fase.
+O MVP controla a janela/aplicativo atualmente ativo. Não escolhe conteúdo,
+não confirma reprodução dentro de serviços, não controla TV e não automatiza
+login. Voz e transcrição permanecem desabilitadas. Seek e fullscreen dependem
+dos atalhos aceitos pelo aplicativo ativo. O teste físico final no iPhone
+permanece responsabilidade do usuário.
 
 Se o iPhone não acessar a página, confirme o IPv4, o perfil privado da rede e
 as regras do firewall; verifique também se o roteador não usa isolamento de

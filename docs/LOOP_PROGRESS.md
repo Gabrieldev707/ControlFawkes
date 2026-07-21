@@ -421,3 +421,45 @@ aprovação.
 - Nenhuma ação real de plataforma ou do Windows será executada nesta fase.
 - Validação pelo iPhone depende de teste manual do usuário na rede local.
 - Diretórios locais não rastreados provenientes do checkout anterior não serão removidos nem versionados.
+
+## Loop MVP funcional — concluído na branch isolada
+
+Branch: `feat/controlfawkes-loop-mvp`
+Base aprovada: `125b9f57a0020a1f19b6ba2b018f862112ef7665`
+
+As dez fatias foram executadas em ordem, sem merge ou cherry-pick da Fase 2:
+
+1. auditoria de recuperação;
+2. navegação e telas;
+3. aliases determinísticos;
+4. Spotify real;
+5. feedback e orb mobile;
+6. seis plataformas allowlisted;
+7. mídia e fullscreen autenticados;
+8. volume real do Windows;
+9. touchpad relativo com rate limit e failsafe;
+10. teclado Unicode e teclas especiais seguras.
+
+### Estado funcional
+
+- parser e launchers retornam confirmação real;
+- volume sempre relê nível e mudo do Core Audio;
+- touchpad agrupa deltas por frame e o backend limita 60 movimentos/s;
+- teclado não guarda ou ecoa texto e rejeita atalhos arbitrários;
+- telas de 390×844 foram verificadas sem overflow ou colisão com a navegação;
+- adapters reais foram substituídos por mocks em toda automação.
+
+### Verificação final
+
+```text
+Frontend lint: PASS
+Frontend build: PASS (aviso conhecido de chunk > 500 kB)
+Frontend tests: 71 PASS
+Backend tests: 156 PASS (aviso conhecido do TestClient)
+AUTOMATED TESTS: PASS
+MANUAL TESTS: PENDING USER VALIDATION
+```
+
+O roteiro físico completo está em `docs/TESTING.md`. A integração recomendada é
+revisar esta branch e então escolher merge/PR separado; nenhuma branch histórica
+foi modificada ou apagada.

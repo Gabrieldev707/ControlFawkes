@@ -167,6 +167,32 @@ describe('protocol v1 runtime validation', () => {
     expect(isErrorCode('POINTER_RATE_LIMITED')).toBe(true)
   })
 
+  it('accepts keyboard confirmations without text or key echoes', () => {
+    const message = {
+      protocolVersion: 1,
+      type: 'COMMAND_RESULT',
+      requestId: 'keyboard-1',
+      success: true,
+      message: 'Texto enviado.',
+      data: {
+        intent: 'KEYBOARD_CONTROL',
+        action: 'KEYBOARD_TEXT',
+        executed: true,
+      },
+    }
+
+    expect(isServerMessage(message)).toBe(true)
+    expect(isServerMessage({
+      ...message,
+      data: { ...message.data, text: 'não pode ecoar' },
+    })).toBe(false)
+    expect(isServerMessage({
+      ...message,
+      data: { ...message.data, action: 'KEYBOARD_SHORTCUT' },
+    })).toBe(false)
+    expect(isErrorCode('KEYBOARD_CONTROL_FAILED')).toBe(true)
+  })
+
   it('accepts only the closed error-code set', () => {
     expect(isErrorCode('PIN_EXPIRED')).toBe(true)
     expect(isErrorCode('PLATFORM_OPEN_FAILED')).toBe(true)

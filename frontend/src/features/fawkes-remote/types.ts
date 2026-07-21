@@ -65,6 +65,7 @@ export const ERROR_CODES = [
   'SYSTEM_VOLUME_FAILED',
   'POINTER_CONTROL_FAILED',
   'POINTER_RATE_LIMITED',
+  'KEYBOARD_CONTROL_FAILED',
   'INTERNAL_ERROR',
 ] as const
 
@@ -166,6 +167,31 @@ export interface PointerButtonMessage extends ClientMessageBase {
   type: Exclude<PointerAction, 'POINTER_MOVE' | 'POINTER_SCROLL'>
 }
 
+export const SAFE_KEYS = [
+  'ENTER',
+  'BACKSPACE',
+  'ESCAPE',
+  'ARROW_UP',
+  'ARROW_DOWN',
+  'ARROW_LEFT',
+  'ARROW_RIGHT',
+  'TAB',
+  'SPACE',
+] as const
+
+export type SafeKey = (typeof SAFE_KEYS)[number]
+export type KeyboardAction = 'KEYBOARD_TEXT' | 'KEYBOARD_KEY'
+
+export interface KeyboardTextMessage extends ClientMessageBase {
+  type: 'KEYBOARD_TEXT'
+  payload: { text: string }
+}
+
+export interface KeyboardKeyMessage extends ClientMessageBase {
+  type: 'KEYBOARD_KEY'
+  payload: { key: SafeKey }
+}
+
 export type ClientMessage =
   | AuthMessage
   | PairDeviceMessage
@@ -179,6 +205,8 @@ export type ClientMessage =
   | PointerMoveMessage
   | PointerScrollMessage
   | PointerButtonMessage
+  | KeyboardTextMessage
+  | KeyboardKeyMessage
 
 export interface StateUpdateMessage {
   protocolVersion: ProtocolVersion
@@ -237,6 +265,12 @@ export interface PointerCommandData {
   executed: true
 }
 
+export interface KeyboardCommandData {
+  intent: 'KEYBOARD_CONTROL'
+  action: KeyboardAction
+  executed: true
+}
+
 export interface CommandResultMessage {
   protocolVersion: ProtocolVersion
   type: 'COMMAND_RESULT'
@@ -248,6 +282,7 @@ export interface CommandResultMessage {
     | MediaCommandData
     | VolumeCommandData
     | PointerCommandData
+    | KeyboardCommandData
 }
 
 export interface ErrorMessage {

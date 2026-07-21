@@ -21,6 +21,7 @@ from app.schemas.pointer import (
     PointerScrollMessage,
     PointerUpMessage,
 )
+from app.schemas.keyboard import KeyboardAction, KeyboardKeyMessage, KeyboardTextMessage
 
 
 ProtocolVersion = Literal[1]
@@ -51,6 +52,7 @@ ErrorCode = Literal[
     "SYSTEM_VOLUME_FAILED",
     "POINTER_CONTROL_FAILED",
     "POINTER_RATE_LIMITED",
+    "KEYBOARD_CONTROL_FAILED",
     "INTERNAL_ERROR",
 ]
 
@@ -109,7 +111,9 @@ ClientMessage = Annotated[
     | PointerRightClickMessage
     | PointerScrollMessage
     | PointerDownMessage
-    | PointerUpMessage,
+    | PointerUpMessage
+    | KeyboardTextMessage
+    | KeyboardKeyMessage,
     Field(discriminator="type"),
 ]
 
@@ -165,6 +169,14 @@ class PointerCommandData(BaseModel):
     executed: Literal[True] = True
 
 
+class KeyboardCommandData(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    intent: Literal["KEYBOARD_CONTROL"] = "KEYBOARD_CONTROL"
+    action: KeyboardAction
+    executed: Literal[True] = True
+
+
 class CommandResultMessage(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -179,6 +191,7 @@ class CommandResultMessage(BaseModel):
         | MediaCommandData
         | VolumeCommandData
         | PointerCommandData
+        | KeyboardCommandData
     )
 
 

@@ -10,6 +10,7 @@ from app.security.pairing import PairingService
 from app.media.windows_adapter import WindowsMediaAdapter
 from app.windows.volume import VolumeState, WindowsVolumeAdapter, WindowsVolumeError
 from app.input.pointer import PointerRateLimiter, WindowsPointerAdapter
+from app.input.keyboard import WindowsKeyboardAdapter
 
 
 @pytest.fixture
@@ -50,6 +51,14 @@ def pointer_adapter_mock():
 
 
 @pytest.fixture
+def keyboard_adapter_mock():
+    adapter = Mock(spec=WindowsKeyboardAdapter)
+    adapter.write_text.return_value = True
+    adapter.press_key.return_value = True
+    return adapter
+
+
+@pytest.fixture
 def dispatcher(
     tmp_path,
     monkeypatch,
@@ -57,6 +66,7 @@ def dispatcher(
     windows_key_event_mock,
     volume_adapter_mock,
     pointer_adapter_mock,
+    keyboard_adapter_mock,
 ):
     store = DeviceStore(
         filepath=tmp_path / "paired_devices.json",
@@ -69,6 +79,7 @@ def dispatcher(
         volume_adapter=volume_adapter_mock,
         pointer_adapter=pointer_adapter_mock,
         pointer_rate_limiter=PointerRateLimiter(max_updates=60),
+        keyboard_adapter=keyboard_adapter_mock,
     )
     monkeypatch.setattr(websocket_module, "dispatcher", instance)
     return instance
@@ -771,6 +782,142 @@ def test_pointer_disconnect_releases_a_held_button(
         pointer_adapter_mock.pointer_up.reset_mock()
 
     pointer_adapter_mock.pointer_up.assert_called_once_with()
+
+
+def test_keyboard_requires_authentication(client, keyboard_adapter_mock):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "KEYBOARD_TEXT",
+            "requestId": "keyboard-1",
+            "payload": {"text": "Olá"},
+        })
+
+        assert websocket.receive_json()["code"] == "UNAUTHORIZED"
+        keyboard_adapter_mock.write_text.assert_not_called()
+
+
+def test_authenticated_keyboard_text_is_sent_without_echoing_or_storing_it(
+    client,
+    dispatcher,
+    keyboard_adapter_mock,
+):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "KEYBOARD_TEXT",
+            "requestId": "keyboard-1",
+            "payload": {"text": "Olá, Fawkes!"},
+        })
+
+        result = websocket.receive_json()
+        assert result == {
+            "protocolVersion": 1,
+            "type": "COMMAND_RESULT",
+            "requestId": "keyboard-1",
+            "success": True,
+            "message": "Texto enviado.",
+            "data": {
+                "intent": "KEYBOARD_CONTROL",
+                "action": "KEYBOARD_TEXT",
+                "executed": True,
+            },
+        }
+        assert "Olá" not in str(result)
+        keyboard_adapter_mock.write_text.assert_called_once_with("Olá, Fawkes!")
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "ENTER",
+        "BACKSPACE",
+        "ESCAPE",
+        "ARROW_UP",
+        "ARROW_DOWN",
+        "ARROW_LEFT",
+        "ARROW_RIGHT",
+        "TAB",
+        "SPACE",
+    ],
+)
+def test_authenticated_keyboard_uses_only_allowlisted_special_keys(
+    client,
+    dispatcher,
+    keyboard_adapter_mock,
+    key,
+):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "KEYBOARD_KEY",
+            "requestId": "keyboard-1",
+            "payload": {"key": key},
+        })
+
+        result = websocket.receive_json()
+        assert result["data"] == {
+            "intent": "KEYBOARD_CONTROL",
+            "action": "KEYBOARD_KEY",
+            "executed": True,
+        }
+        keyboard_adapter_mock.press_key.assert_called_once_with(key)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        {"type": "KEYBOARD_TEXT", "payload": {"text": ""}},
+        {"type": "KEYBOARD_TEXT", "payload": {"text": "   "}},
+        {"type": "KEYBOARD_TEXT", "payload": {"text": "a" * 257}},
+        {"type": "KEYBOARD_TEXT", "payload": {"text": "linha\nenter"}},
+        {"type": "KEYBOARD_TEXT", "payload": {"text": 123}},
+        {"type": "KEYBOARD_TEXT", "payload": {"text": "\ud800"}},
+        {"type": "KEYBOARD_KEY", "payload": {"key": "CTRL_ALT_DELETE"}},
+        {"type": "KEYBOARD_KEY", "payload": {"key": "A", "ctrl": True}},
+    ],
+)
+def test_keyboard_rejects_unsafe_text_and_arbitrary_shortcuts(
+    client,
+    dispatcher,
+    keyboard_adapter_mock,
+    message,
+):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "requestId": "keyboard-1",
+            **message,
+        })
+
+        assert websocket.receive_json()["code"] == "INVALID_PAYLOAD"
+        keyboard_adapter_mock.write_text.assert_not_called()
+        keyboard_adapter_mock.press_key.assert_not_called()
+
+
+def test_keyboard_adapter_failure_is_reported(client, dispatcher, keyboard_adapter_mock):
+    keyboard_adapter_mock.write_text.return_value = False
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "KEYBOARD_TEXT",
+            "requestId": "keyboard-1",
+            "payload": {"text": "Olá"},
+        })
+
+        error = websocket.receive_json()
+        assert error["code"] == "KEYBOARD_CONTROL_FAILED"
+        assert error["message"] == "Teclado remoto indisponível."
 
 
 def test_authenticated_invalid_platform_is_rejected(client, dispatcher):

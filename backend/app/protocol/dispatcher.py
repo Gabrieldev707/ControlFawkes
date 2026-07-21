@@ -15,6 +15,9 @@ from app.schemas.ws import (
     ErrorCode,
     ErrorMessage,
     HelpCommandData,
+    KeyboardCommandData,
+    KeyboardKeyMessage,
+    KeyboardTextMessage,
     MediaCommandData,
     MediaControlMessage,
     PointerClickMessage,
@@ -52,6 +55,8 @@ from app.schemas.volume import VOLUME_ACTIONS
 from app.windows.volume import WindowsVolumeAdapter, WindowsVolumeError
 from app.input.pointer import PointerRateLimiter, WindowsPointerAdapter
 from app.schemas.pointer import POINTER_ACTIONS
+from app.input.keyboard import WindowsKeyboardAdapter
+from app.schemas.keyboard import KEYBOARD_ACTIONS
 
 
 KNOWN_CLIENT_TYPES = {
@@ -62,6 +67,7 @@ KNOWN_CLIENT_TYPES = {
     *MEDIA_ACTIONS,
     *VOLUME_ACTIONS,
     *POINTER_ACTIONS,
+    *KEYBOARD_ACTIONS,
 }
 
 
@@ -75,6 +81,7 @@ class Dispatcher:
         volume_adapter: WindowsVolumeAdapter | None = None,
         pointer_adapter: WindowsPointerAdapter | None = None,
         pointer_rate_limiter: PointerRateLimiter | None = None,
+        keyboard_adapter: WindowsKeyboardAdapter | None = None,
     ) -> None:
         self.device_store = device_store or DeviceStore()
         self.pairing_service = pairing_service or PairingService(self.device_store)
@@ -83,6 +90,7 @@ class Dispatcher:
         self.volume_adapter = volume_adapter or WindowsVolumeAdapter()
         self.pointer_adapter = pointer_adapter or WindowsPointerAdapter()
         self.pointer_rate_limiter = pointer_rate_limiter or PointerRateLimiter()
+        self.keyboard_adapter = keyboard_adapter or WindowsKeyboardAdapter()
         self._client_adapter = TypeAdapter(ClientMessage)
         self._authenticated: dict[WebSocket, str] = {}
         self._held_pointer_buttons: set[WebSocket] = set()
@@ -117,7 +125,13 @@ class Dispatcher:
         await websocket.send_json(response.model_dump())
 
     async def dispatch(self, websocket: WebSocket, raw: str) -> None:
-        if len(raw.encode("utf-8")) > 8192:
+        try:
+            raw_size = len(raw.encode("utf-8"))
+        except UnicodeEncodeError:
+            await self._send_error(websocket, "unknown", "INVALID_PAYLOAD", "Payload inválido.")
+            return
+
+        if raw_size > 8192:
             await self._send_error(websocket, "unknown", "INVALID_PAYLOAD", "Mensagem muito grande.")
             return
 
@@ -209,6 +223,10 @@ class Dispatcher:
             ),
         ):
             await self._handle_pointer_control(websocket, message)
+            return
+
+        if isinstance(message, (KeyboardTextMessage, KeyboardKeyMessage)):
+            await self._handle_keyboard_control(websocket, message)
             return
 
         await self._send_error(
@@ -387,6 +405,34 @@ class Dispatcher:
             requestId=message.requestId,
             message="Comando do touchpad executado.",
             data=PointerCommandData(action=message.type),
+        )
+        await websocket.send_json(response.model_dump())
+
+    async def _handle_keyboard_control(
+        self,
+        websocket: WebSocket,
+        message: KeyboardTextMessage | KeyboardKeyMessage,
+    ) -> None:
+        if isinstance(message, KeyboardTextMessage):
+            executed = self.keyboard_adapter.write_text(message.payload.text)
+            response_message = "Texto enviado."
+        else:
+            executed = self.keyboard_adapter.press_key(message.payload.key)
+            response_message = "Tecla enviada."
+
+        if not executed:
+            await self._send_error(
+                websocket,
+                message.requestId,
+                "KEYBOARD_CONTROL_FAILED",
+                "Teclado remoto indisponível.",
+            )
+            return
+
+        response = CommandResultMessage(
+            requestId=message.requestId,
+            message=response_message,
+            data=KeyboardCommandData(action=message.type),
         )
         await websocket.send_json(response.model_dump())
 
