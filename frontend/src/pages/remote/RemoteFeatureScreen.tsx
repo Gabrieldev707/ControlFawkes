@@ -2,7 +2,6 @@ import {
   ArrowLeft,
   Gamepad2,
   Keyboard,
-  LayoutGrid,
   MousePointer2,
   Settings,
   Volume2,
@@ -11,7 +10,7 @@ import {
 import type { NavigableScreen } from '../../state/currentScreen'
 
 
-type FeatureScreen = Exclude<NavigableScreen, 'HOME'>
+type FeatureScreen = Exclude<NavigableScreen, 'HOME' | 'PLATFORMS'>
 
 interface RemoteFeatureScreenProps {
   screen: FeatureScreen
@@ -38,11 +37,6 @@ const SCREEN_CONTENT = {
     title: 'Volume',
     description: 'O volume do Windows será conectado por um adaptador isolado e testável.',
     icon: Volume2,
-  },
-  PLATFORMS: {
-    title: 'Plataformas',
-    description: 'Os atalhos de streaming serão ligados somente após a allowlist do backend.',
-    icon: LayoutGrid,
   },
   SETTINGS: {
     title: 'Configurações',

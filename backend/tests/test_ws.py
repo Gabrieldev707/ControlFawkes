@@ -215,7 +215,24 @@ def test_websocket_rejects_invalid_and_revoked_tokens(client, dispatcher):
         assert data["code"] == "INVALID_TOKEN"
 
 
-def test_authenticated_platform_is_recognized_without_execution(client, dispatcher):
+@pytest.mark.parametrize(
+    ("platform", "label", "url"),
+    [
+        ("YOUTUBE", "YouTube", "https://www.youtube.com"),
+        ("NETFLIX", "Netflix", "https://www.netflix.com"),
+        ("MAX", "Max", "https://www.max.com"),
+        ("PRIME_VIDEO", "Prime Video", "https://www.primevideo.com"),
+        ("DISNEY_PLUS", "Disney+", "https://www.disneyplus.com"),
+    ],
+)
+def test_authenticated_streaming_selection_opens_only_the_official_url(
+    client,
+    dispatcher,
+    browser_open_mock,
+    platform,
+    label,
+    url,
+):
     with client.websocket_connect("/ws") as websocket:
         receive_auth_required(websocket)
         pair(websocket, dispatcher)
@@ -223,19 +240,24 @@ def test_authenticated_platform_is_recognized_without_execution(client, dispatch
             "protocolVersion": 1,
             "type": "PLATFORM_SELECTED",
             "requestId": "platform-1",
-            "payload": {"platform": "NETFLIX"},
+            "payload": {"platform": platform},
         })
 
-        data = websocket.receive_json()
+        result = websocket.receive_json()
 
-        assert data["type"] == "COMMAND_RESULT"
-        assert data["requestId"] == "platform-1"
-        assert data["success"] is True
-        assert data["data"] == {
-            "intent": "OPEN_PLATFORM",
-            "platform": "NETFLIX",
-            "executed": False,
+        assert result == {
+            "protocolVersion": 1,
+            "type": "COMMAND_RESULT",
+            "requestId": "platform-1",
+            "success": True,
+            "message": f"{label} aberto.",
+            "data": {
+                "intent": "OPEN_PLATFORM",
+                "platform": platform,
+                "executed": True,
+            },
         }
+        browser_open_mock.assert_called_once_with(url, new=2, autoraise=True)
 
 
 def test_authenticated_spotify_selection_opens_only_the_official_url(
@@ -274,10 +296,23 @@ def test_authenticated_spotify_selection_opens_only_the_official_url(
         )
 
 
-def test_spotify_open_failure_returns_a_real_error(
+@pytest.mark.parametrize(
+    ("platform", "label"),
+    [
+        ("SPOTIFY", "Spotify"),
+        ("YOUTUBE", "YouTube"),
+        ("NETFLIX", "Netflix"),
+        ("MAX", "Max"),
+        ("PRIME_VIDEO", "Prime Video"),
+        ("DISNEY_PLUS", "Disney+"),
+    ],
+)
+def test_platform_open_failure_returns_a_real_error(
     client,
     dispatcher,
     browser_open_mock,
+    platform,
+    label,
 ):
     browser_open_mock.return_value = False
 
@@ -287,8 +322,8 @@ def test_spotify_open_failure_returns_a_real_error(
         websocket.send_json({
             "protocolVersion": 1,
             "type": "PLATFORM_SELECTED",
-            "requestId": "platform-spotify",
-            "payload": {"platform": "SPOTIFY"},
+            "requestId": "platform-1",
+            "payload": {"platform": platform},
         })
 
         error = websocket.receive_json()
@@ -296,9 +331,9 @@ def test_spotify_open_failure_returns_a_real_error(
         assert error == {
             "protocolVersion": 1,
             "type": "ERROR",
-            "requestId": "platform-spotify",
+            "requestId": "platform-1",
             "code": "PLATFORM_OPEN_FAILED",
-            "message": "Não foi possível abrir o Spotify.",
+            "message": f"Não foi possível abrir o {label}.",
         }
 
 

@@ -14,6 +14,7 @@ import { generateRequestId } from '../../utils/uuid'
 import { HomeShortcuts } from '../../components/navigation/HomeShortcuts'
 import { RemoteNavigation } from '../../components/navigation/RemoteNavigation'
 import { RemoteFeatureScreen } from '../../pages/remote/RemoteFeatureScreen'
+import { PlatformsScreen } from '../../pages/remote/PlatformsScreen'
 import {
   AuthenticationStatus,
   ConnectionStatus,
@@ -320,6 +321,15 @@ export const FawkesRemotePage: React.FC = () => {
                 <HomeShortcuts onNavigate={navigate} />
               </div>
             </main>
+          ) : currentScreen === 'PLATFORMS' ? (
+            <PlatformsScreen
+              selectedPlatform={selectedPlatform}
+              disabled={controlsDisabled}
+              statusMessage={statusMessage}
+              statusError={statusError}
+              onSelect={handlePlatformSelect}
+              onBack={goBack}
+            />
           ) : (
             <RemoteFeatureScreen screen={currentScreen} onBack={goBack} />
           )}

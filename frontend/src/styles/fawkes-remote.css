@@ -609,6 +609,58 @@ body {
   text-transform: uppercase;
 }
 
+.platforms-screen {
+  padding: 0 2px;
+}
+
+.platforms-screen__heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.platforms-screen__icon {
+  display: grid;
+  place-items: center;
+  width: 48px;
+  height: 48px;
+  flex: 0 0 auto;
+  border: 1px solid var(--border-accent);
+  border-radius: 15px;
+  background: rgba(124, 58, 237, 0.08);
+  color: var(--accent-bright);
+}
+
+.platforms-screen__heading h2 {
+  margin-top: 3px;
+  color: var(--text-primary);
+  font-size: 1.55rem;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+}
+
+.platforms-screen__intro {
+  max-width: 350px;
+  margin: 14px 0 8px;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.platforms-screen > .remote-status-text {
+  justify-content: flex-start;
+  min-height: 48px;
+  margin: 0 0 8px;
+  padding-right: 0;
+  padding-left: 0;
+  text-align: left;
+}
+
+.platforms-screen__grid {
+  padding-bottom: 24px;
+}
+
 /* Compact bottom navigation */
 .remote-navigation {
   display: grid;

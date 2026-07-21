@@ -32,6 +32,7 @@ vi.mock('../../components/fawkes-remote/RemoteOrb', () => ({
 
 describe('FawkesRemotePage authentication', () => {
   beforeEach(() => {
+    window.history.replaceState({}, '', '/')
     localStorage.clear()
     websocketMock.connectionState = 'connected'
     websocketMock.onMessage = undefined
@@ -319,5 +320,36 @@ describe('FawkesRemotePage authentication', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Testar estado listening' }))
     expect(screen.getByLabelText('Orb do Fawkes').getAttribute('data-state')).toBe('listening')
+  })
+
+  it('sends an authenticated platform selection from the Platforms screen', () => {
+    render(<FawkesRemotePage />)
+    act(() => {
+      websocketMock.onMessage?.({
+        protocolVersion: 1,
+        type: 'PAIR_RESULT',
+        requestId: 'pair-1',
+        success: true,
+        message: 'Pareamento concluído.',
+        deviceId: 'device-1',
+        token: 'new-secure-token-value',
+      })
+      websocketMock.onMessage?.({
+        protocolVersion: 1,
+        type: 'STATE_UPDATE',
+        state: 'READY',
+        message: 'Computador pronto.',
+      })
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Plataformas' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Netflix' }))
+
+    expect(websocketMock.sendMessage).toHaveBeenCalledWith({
+      protocolVersion: 1,
+      type: 'PLATFORM_SELECTED',
+      requestId: expect.any(String),
+      payload: { platform: 'NETFLIX' },
+    })
   })
 })

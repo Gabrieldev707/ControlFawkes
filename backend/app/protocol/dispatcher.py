@@ -187,27 +187,19 @@ class Dispatcher:
         request_id: str,
         platform: Platform,
     ) -> None:
-        if platform != "SPOTIFY":
-            response = CommandResultMessage(
-                requestId=request_id,
-                message=f"Comando reconhecido: abrir {PLATFORM_LABELS[platform]}.",
-                data=PlatformCommandData(platform=platform),
-            )
-            await websocket.send_json(response.model_dump())
-            return
-
+        label = PLATFORM_LABELS[platform]
         if not self.platform_launcher.open(platform):
             await self._send_error(
                 websocket,
                 request_id,
                 "PLATFORM_OPEN_FAILED",
-                "Não foi possível abrir o Spotify.",
+                f"Não foi possível abrir o {label}.",
             )
             return
 
         response = CommandResultMessage(
             requestId=request_id,
-            message="Spotify aberto.",
+            message=f"{label} aberto.",
             data=PlatformCommandData(platform=platform, executed=True),
         )
         await websocket.send_json(response.model_dump())
