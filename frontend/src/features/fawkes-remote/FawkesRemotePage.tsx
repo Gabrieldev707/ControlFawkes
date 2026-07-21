@@ -18,6 +18,7 @@ import {
   AuthenticationStatus,
   ConnectionStatus,
   PairingScreen,
+  OrbStatePreview,
   PlatformGrid,
   RemoteOrb,
   RemoteStatusText,
@@ -191,6 +192,9 @@ export const FawkesRemotePage: React.FC = () => {
     || serverState !== 'READY'
     || orbState === 'executing'
 
+  const showOrbPreview = import.meta.env.DEV
+    && new URLSearchParams(window.location.search).get('orb-preview') === '1'
+
   const handlePlatformSelect = (platform: Platform) => {
     if (controlsDisabled) return
     if (successTimeoutRef.current) clearTimeout(successTimeoutRef.current)
@@ -286,6 +290,9 @@ export const FawkesRemotePage: React.FC = () => {
             <main className="remote-home">
               <div className="orb-container">
                 <RemoteOrb state={orbState} />
+                {showOrbPreview ? (
+                  <OrbStatePreview state={orbState} onChange={setOrbState} />
+                ) : null}
               </div>
 
               <RemoteStatusText message={statusMessage} error={statusError} />

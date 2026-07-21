@@ -11,6 +11,13 @@ export interface OrbTheme {
   electronRate: number;
 }
 
+export const ORB_VISUAL_TUNING = {
+  spriteMidHaloOpacity: 0.42,
+  lineOpacityMultiplier: 0.085,
+  electronOpacity: 1,
+  initialPointOpacity: 1,
+} as const;
+
 export const ORB_THEMES: Record<OrbState, OrbTheme> = {
   idle: {
     colors: [
@@ -24,7 +31,7 @@ export const ORB_THEMES: Record<OrbState, OrbTheme> = {
     ],
     radius: 28,
     speed: 0.20,
-    brightness: 0.84,
+    brightness: 1.0,
     size: 0.35,
     lineAmount: 0.08,
     electronRate: 0,
@@ -39,7 +46,7 @@ export const ORB_THEMES: Record<OrbState, OrbTheme> = {
     ],
     radius: 22,
     speed: 0.30,
-    brightness: 0.94,
+    brightness: 1.0,
     size: 0.40,
     lineAmount: 0.20,
     electronRate: 0,
@@ -54,7 +61,7 @@ export const ORB_THEMES: Record<OrbState, OrbTheme> = {
     ],
     radius: 16,
     speed: 0.50,
-    brightness: 0.96,
+    brightness: 1.0,
     size: 0.30,
     lineAmount: 0.35,
     electronRate: 0.015,
@@ -69,7 +76,7 @@ export const ORB_THEMES: Record<OrbState, OrbTheme> = {
     ],
     radius: 18,
     speed: 0.20,
-    brightness: 0.92,
+    brightness: 1.0,
     size: 0.40,
     lineAmount: 0.22,
     electronRate: 0,
@@ -84,7 +91,7 @@ export const ORB_THEMES: Record<OrbState, OrbTheme> = {
     ],
     radius: 16,
     speed: 0.60,
-    brightness: 0.98,
+    brightness: 1.0,
     size: 0.35,
     lineAmount: 0.35,
     electronRate: 0.02,
@@ -99,7 +106,7 @@ export const ORB_THEMES: Record<OrbState, OrbTheme> = {
     ],
     radius: 30,
     speed: 0.60,
-    brightness: 0.96,
+    brightness: 1.0,
     size: 0.50,
     lineAmount: 0.15,
     electronRate: 0.05,
@@ -114,7 +121,7 @@ export const ORB_THEMES: Record<OrbState, OrbTheme> = {
     ],
     radius: 20,
     speed: 0.40,
-    brightness: 0.72,
+    brightness: 0.94,
     size: 0.25,
     lineAmount: 0.10,
     electronRate: 0,

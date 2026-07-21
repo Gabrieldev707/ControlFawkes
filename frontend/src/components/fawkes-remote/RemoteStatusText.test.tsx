@@ -5,6 +5,20 @@ import { RemoteStatusText } from './RemoteStatusText'
 
 
 describe('RemoteStatusText', () => {
+  it.each([
+    'Computador conectado.',
+    'Comando reconhecido: abrir Spotify.',
+    'Spotify aberto.',
+    'Não entendi esse comando.',
+    'Tentando reconectar...',
+    'Dispositivo não autorizado.',
+    'Controle do Windows indisponível.',
+  ])('preserves the complete status message: %s', (message) => {
+    render(<RemoteStatusText message={message} error={false} />)
+
+    expect(screen.getByText(message).textContent).toBe(message)
+  })
+
   it('announces a backend success politely', () => {
     render(<RemoteStatusText message="Comando reconhecido: abrir Spotify." error={false} />)
 

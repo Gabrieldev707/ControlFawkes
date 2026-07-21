@@ -24,7 +24,9 @@ vi.mock('../../hooks/useWebSocket', () => ({
 }))
 
 vi.mock('../../components/fawkes-remote/RemoteOrb', () => ({
-  RemoteOrb: () => <div aria-label="Orb do Fawkes" />,
+  RemoteOrb: ({ state }: { state: string }) => (
+    <div aria-label="Orb do Fawkes" data-state={state} />
+  ),
 }))
 
 
@@ -283,5 +285,39 @@ describe('FawkesRemotePage authentication', () => {
     }
 
     expect(websocketMock.sendMessage).not.toHaveBeenCalled()
+  })
+
+  it('shows all orb states only when the development preview is requested', () => {
+    window.history.pushState({}, '', '/?orb-preview=1')
+    render(<FawkesRemotePage />)
+    act(() => {
+      websocketMock.onMessage?.({
+        protocolVersion: 1,
+        type: 'PAIR_RESULT',
+        requestId: 'pair-1',
+        success: true,
+        message: 'Pareamento concluído.',
+        deviceId: 'device-1',
+        token: 'new-secure-token-value',
+      })
+    })
+
+    const preview = screen.getByRole('group', { name: 'Teste visual da orb' })
+    const labels = [
+      'idle',
+      'listening',
+      'transcribing',
+      'needs_selection',
+      'executing',
+      'success',
+      'error',
+    ]
+
+    for (const label of labels) {
+      expect(preview.querySelector(`[aria-label="Testar estado ${label}"]`)).toBeTruthy()
+    }
+
+    fireEvent.click(screen.getByRole('button', { name: 'Testar estado listening' }))
+    expect(screen.getByLabelText('Orb do Fawkes').getAttribute('data-state')).toBe('listening')
   })
 })

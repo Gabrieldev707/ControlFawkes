@@ -20,14 +20,17 @@ export type AuthState =
   | 'authenticated'
   | 'rejected'
 
-export type OrbState =
-  | 'idle'
-  | 'listening'
-  | 'transcribing'
-  | 'needs_selection'
-  | 'executing'
-  | 'success'
-  | 'error'
+export const ORB_STATES = [
+  'idle',
+  'listening',
+  'transcribing',
+  'needs_selection',
+  'executing',
+  'success',
+  'error',
+] as const
+
+export type OrbState = (typeof ORB_STATES)[number]
 
 export const PLATFORMS = [
   'NETFLIX',
