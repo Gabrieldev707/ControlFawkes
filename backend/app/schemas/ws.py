@@ -1,13 +1,18 @@
 from typing import Any, Literal, Optional, Annotated
 from pydantic import BaseModel, Field, ConfigDict
 
+from app.schemas.auth import (
+    AuthMessage, PairDeviceMessage,
+    AuthRequiredMessage, AuthResultMessage, PairResultMessage
+)
+from app.schemas.volume import (
+    VolumeGetMessage, VolumeSetMessage, VolumeStepMessage, VolumeToggleMuteMessage,
+    VolumeStateMessage
+)
+
 # -----------------------------------------------------------------------------
 # Base Models
 # -----------------------------------------------------------------------------
-class AuthPayload(BaseModel):
-    model_config = ConfigDict(extra='forbid')
-    token: str
-
 class PlatformSelectedPayload(BaseModel):
     model_config = ConfigDict(extra='forbid')
     platform: Literal['NETFLIX', 'MAX', 'PRIME_VIDEO', 'DISNEY_PLUS', 'YOUTUBE', 'SPOTIFY']
@@ -19,12 +24,6 @@ class TextCommandPayload(BaseModel):
 # -----------------------------------------------------------------------------
 # Client Messages
 # -----------------------------------------------------------------------------
-class AuthMessage(BaseModel):
-    model_config = ConfigDict(extra='forbid')
-    type: Literal['AUTH']
-    requestId: str
-    payload: AuthPayload
-
 class PlatformSelectedMessage(BaseModel):
     model_config = ConfigDict(extra='forbid')
     type: Literal['PLATFORM_SELECTED']
@@ -38,7 +37,9 @@ class TextCommandMessage(BaseModel):
     payload: TextCommandPayload
 
 ClientMessage = Annotated[
-    AuthMessage | PlatformSelectedMessage | TextCommandMessage,
+    AuthMessage | PairDeviceMessage |
+    VolumeGetMessage | VolumeSetMessage | VolumeStepMessage | VolumeToggleMuteMessage |
+    PlatformSelectedMessage | TextCommandMessage,
     Field(discriminator='type')
 ]
 
