@@ -4,3 +4,4 @@ export * from './PlatformGrid';
 export * from './VoiceButton';
 export * from './TextInput';
 export * from './PairingScreen';
+export * from './RemoteStatusText';

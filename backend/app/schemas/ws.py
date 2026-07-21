@@ -85,6 +85,14 @@ class PlatformCommandData(BaseModel):
     executed: Literal[False] = False
 
 
+class HelpCommandData(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    intent: Literal["SHOW_HELP"] = "SHOW_HELP"
+    commands: list[str]
+    executed: Literal[False] = False
+
+
 class CommandResultMessage(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -93,7 +101,7 @@ class CommandResultMessage(BaseModel):
     requestId: str
     success: Literal[True] = True
     message: str
-    data: PlatformCommandData
+    data: PlatformCommandData | HelpCommandData
 
 
 class ErrorMessage(BaseModel):

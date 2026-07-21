@@ -43,6 +43,16 @@ function isPlatformData(value: unknown): boolean {
     && value.executed === false
 }
 
+function isHelpData(value: unknown): boolean {
+  return isRecord(value)
+    && hasOnlyKeys(value, ['intent', 'commands', 'executed'])
+    && value.intent === 'SHOW_HELP'
+    && Array.isArray(value.commands)
+    && value.commands.length > 0
+    && value.commands.every((command) => typeof command === 'string' && command.length > 0)
+    && value.executed === false
+}
+
 export function isServerMessage(value: unknown): value is ServerMessage {
   if (!isRecord(value) || value.protocolVersion !== 1 || typeof value.type !== 'string') {
     return false
@@ -77,7 +87,7 @@ export function isServerMessage(value: unknown): value is ServerMessage {
         && isRequestId(value.requestId)
         && value.success === true
         && isMessage(value.message)
-        && isPlatformData(value.data)
+        && (isPlatformData(value.data) || isHelpData(value.data))
     case 'ERROR':
       return hasOnlyKeys(value, ['protocolVersion', 'type', 'requestId', 'code', 'message'])
         && isRequestId(value.requestId)

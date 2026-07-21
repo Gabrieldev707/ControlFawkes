@@ -249,3 +249,78 @@ def test_health_endpoint_remains_available(client):
 
     assert response.status_code == 200
     assert response.json() == {"status": "ok", "service": "fawkes-remote"}
+
+
+def test_authenticated_known_text_command_is_recognized_without_execution(client, dispatcher):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "TEXT_COMMAND",
+            "requestId": "text-1",
+            "payload": {"query": "abre o Spotify"},
+        })
+
+        busy = websocket.receive_json()
+        result = websocket.receive_json()
+        ready = websocket.receive_json()
+
+        assert busy["state"] == "BUSY"
+        assert result == {
+            "protocolVersion": 1,
+            "type": "COMMAND_RESULT",
+            "requestId": "text-1",
+            "success": True,
+            "message": "Comando reconhecido: abrir Spotify.",
+            "data": {
+                "intent": "OPEN_PLATFORM",
+                "platform": "SPOTIFY",
+                "executed": False,
+            },
+        }
+        assert ready["state"] == "READY"
+
+
+def test_authenticated_help_command_returns_supported_examples(client, dispatcher):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "TEXT_COMMAND",
+            "requestId": "text-1",
+            "payload": {"query": "o que você faz"},
+        })
+
+        websocket.receive_json()
+        result = websocket.receive_json()
+        websocket.receive_json()
+
+        assert result["type"] == "COMMAND_RESULT"
+        assert result["data"]["intent"] == "SHOW_HELP"
+        assert result["data"]["executed"] is False
+        assert "abre netflix" in result["data"]["commands"]
+
+
+def test_authenticated_unknown_text_command_returns_clear_error(client, dispatcher):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "TEXT_COMMAND",
+            "requestId": "text-1",
+            "payload": {"query": "escolhe um filme"},
+        })
+
+        busy = websocket.receive_json()
+        error = websocket.receive_json()
+        ready = websocket.receive_json()
+
+        assert busy["state"] == "BUSY"
+        assert error["type"] == "ERROR"
+        assert error["requestId"] == "text-1"
+        assert error["code"] == "UNKNOWN_COMMAND"
+        assert error["message"] == "Não entendi esse comando."
+        assert ready["state"] == "READY"

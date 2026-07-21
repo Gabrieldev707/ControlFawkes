@@ -188,6 +188,90 @@ npm run build
 
 Parser determinístico, comando textual autenticado e mensagens reais sincronizadas com a orb.
 
+### Fatia 3 concluída — Comandos textuais determinísticos
+
+#### Objetivo
+
+Entregar o fluxo autenticado de ponta a ponta para comandos de texto sem executar plataformas ou ações do computador.
+
+#### Implementado
+
+- normalização por lowercase, espaços, acentos e preservação de `disney+`;
+- aliases fechados para Netflix, Max, Prime Video, Disney+, YouTube e Spotify;
+- intenções `OPEN_PLATFORM`, `SHOW_HELP` e `UNKNOWN` sem LLM;
+- resposta `OPEN_PLATFORM` obrigatoriamente marcada com `executed: false`;
+- fluxo WebSocket `BUSY → COMMAND_RESULT/ERROR → READY`;
+- `TextInput` semântico com Enter, trim, limite de 500 caracteres e bloqueios;
+- limpeza do campo apenas após frame aceito pelo WebSocket;
+- bloqueio de envios duplicados durante execução;
+- status com mensagem real do backend, `aria-live="polite"` e `role="alert"` em erro;
+- botão de voz desabilitado e identificado como “Em breve”.
+
+#### Arquivos criados
+
+- `backend/tests/test_parser.py`
+- `frontend/src/components/fawkes-remote/TextInput.test.tsx`
+- `frontend/src/components/fawkes-remote/RemoteStatusText.tsx`
+- `frontend/src/components/fawkes-remote/RemoteStatusText.test.tsx`
+- `frontend/src/components/fawkes-remote/VoiceButton.test.tsx`
+
+#### Arquivos alterados
+
+- `backend/app/commands/parser.py`
+- `backend/app/protocol/dispatcher.py`
+- `backend/app/schemas/ws.py`
+- `backend/tests/test_ws.py`
+- `frontend/src/components/fawkes-remote/TextInput.tsx`
+- `frontend/src/components/fawkes-remote/VoiceButton.tsx`
+- `frontend/src/components/fawkes-remote/index.ts`
+- `frontend/src/features/fawkes-remote/FawkesRemotePage.tsx`
+- `frontend/src/features/fawkes-remote/FawkesRemotePage.test.tsx`
+- `frontend/src/features/fawkes-remote/protocol.ts`
+- `frontend/src/features/fawkes-remote/protocol.test.ts`
+- `frontend/src/features/fawkes-remote/types.ts`
+- `frontend/src/styles/fawkes-remote.css`
+
+#### Testes executados
+
+```text
+npm run test -- --run
+npm run lint
+npm run build
+.venv\Scripts\python.exe -m pytest -q
+```
+
+#### Resultado
+
+- Frontend: 32 testes passando em 8 arquivos.
+- Backend: 54 testes passando.
+- Lint: sem erros.
+- Build: concluído, com o aviso conhecido de tamanho do bundle.
+- Auditoria: nenhuma referência a execução de navegador, shell, Windows, volume ou touchpad nos arquivos da fatia.
+
+#### Problemas encontrados
+
+- Os componentes iniciais não possuíam contratos de submissão, acessibilidade ou estado desabilitado.
+- O estado `READY` chegava imediatamente depois do resultado e poderia apagar cedo demais a mensagem relevante.
+
+#### Correções realizadas
+
+- Componentes receberam props fechadas e testes de comportamento.
+- `READY` é ignorado enquanto uma requisição ainda preserva seu resultado visível; a interface volta a “Computador pronto.” somente após o timeout visual.
+
+#### Limitações
+
+- O parser não pesquisa conteúdo nem escolhe mídia.
+- Selecionar uma plataforma continua sem abrir site ou aplicativo.
+- A reconexão ainda possui o limite antigo de tentativas e será tratada na próxima fatia.
+
+#### Commit
+
+`feat: add authenticated text commands`
+
+#### Próxima fatia
+
+URL WebSocket baseada no hostname local e reconexão contínua orientada por lifecycle.
+
 ### Limitações
 
 - Nenhuma ação real de plataforma ou do Windows será executada nesta fase.

@@ -15,6 +15,7 @@ import {
   PairingScreen,
   PlatformGrid,
   RemoteOrb,
+  RemoteStatusText,
   TextInput,
   VoiceButton,
 } from '../../components/fawkes-remote'
@@ -39,6 +40,8 @@ export const FawkesRemotePage: React.FC = () => {
   const [serverState, setServerState] = useState<ServerState | null>(null)
   const [authState, setAuthState] = useState<AuthState>('checking')
   const [pairingMessage, setPairingMessage] = useState('')
+  const [statusMessage, setStatusMessage] = useState('Conectando ao computador...')
+  const [statusError, setStatusError] = useState(false)
 
   const currentRequestId = useRef<string | null>(null)
   const successTimeoutRef = useRef<number | null>(null)
@@ -47,6 +50,10 @@ export const FawkesRemotePage: React.FC = () => {
   const handleMessage = useCallback((message: ServerMessage) => {
     if (message.type === 'STATE_UPDATE') {
       setServerState(message.state)
+      if (message.state !== 'READY' || currentRequestId.current === null) {
+        setStatusMessage(message.message)
+        setStatusError(false)
+      }
       if (message.state === 'AUTH_REQUIRED') {
         const hasCredentials = Boolean(
           localStorage.getItem(DEVICE_ID_KEY) && localStorage.getItem(TOKEN_KEY),
@@ -59,6 +66,8 @@ export const FawkesRemotePage: React.FC = () => {
     if (message.type === 'AUTH_RESULT') {
       setAuthState('authenticated')
       setPairingMessage('')
+      setStatusMessage(message.message)
+      setStatusError(false)
       return
     }
 
@@ -67,6 +76,8 @@ export const FawkesRemotePage: React.FC = () => {
       localStorage.setItem(TOKEN_KEY, message.token)
       setAuthState('authenticated')
       setPairingMessage('')
+      setStatusMessage(message.message)
+      setStatusError(false)
       return
     }
 
@@ -80,6 +91,8 @@ export const FawkesRemotePage: React.FC = () => {
         setServerState('AUTH_REQUIRED')
         setAuthState('pairing_required')
         setPairingMessage(message.message)
+        setStatusMessage(message.message)
+        setStatusError(true)
         return
       }
 
@@ -90,6 +103,8 @@ export const FawkesRemotePage: React.FC = () => {
       ) {
         setAuthState('rejected')
         setPairingMessage(message.message)
+        setStatusMessage(message.message)
+        setStatusError(true)
         return
       }
     }
@@ -98,22 +113,29 @@ export const FawkesRemotePage: React.FC = () => {
 
     if (message.type === 'COMMAND_RESULT') {
       setOrbState('success')
+      setStatusMessage(message.message)
+      setStatusError(false)
       if (successTimeoutRef.current) clearTimeout(successTimeoutRef.current)
       successTimeoutRef.current = window.setTimeout(() => {
         setOrbState('idle')
         setSelectedPlatform(null)
         currentRequestId.current = null
+        setStatusMessage('Computador pronto.')
       }, 2000)
       return
     }
 
     if (message.type === 'ERROR') {
       setOrbState('error')
+      setStatusMessage(message.message)
+      setStatusError(true)
       if (successTimeoutRef.current) clearTimeout(successTimeoutRef.current)
       successTimeoutRef.current = window.setTimeout(() => {
         setOrbState('idle')
         setSelectedPlatform(null)
         currentRequestId.current = null
+        setStatusMessage('Computador pronto.')
+        setStatusError(false)
       }, 3000)
     }
   }, [])
@@ -124,6 +146,12 @@ export const FawkesRemotePage: React.FC = () => {
     if (connectionState !== 'connected') {
       hasSentAuthThisConnection.current = false
       setServerState(null)
+      setStatusMessage(
+        connectionState === 'connecting'
+          ? 'Conectando ao computador...'
+          : 'Conexão perdida.',
+      )
+      setStatusError(connectionState === 'error')
       return
     }
     if (hasSentAuthThisConnection.current) return
@@ -132,11 +160,13 @@ export const FawkesRemotePage: React.FC = () => {
     const token = localStorage.getItem(TOKEN_KEY)
     if (!deviceId || !token) {
       setAuthState('pairing_required')
+      setStatusMessage('Autenticação necessária.')
       return
     }
 
     hasSentAuthThisConnection.current = true
     setAuthState('checking')
+    setStatusMessage('Autenticando dispositivo...')
     const accepted = sendMessage({
       protocolVersion: PROTOCOL_VERSION,
       type: 'AUTH',
@@ -163,6 +193,8 @@ export const FawkesRemotePage: React.FC = () => {
     currentRequestId.current = requestId
     setSelectedPlatform(platform)
     setOrbState('executing')
+    setStatusMessage('Processando comando...')
+    setStatusError(false)
 
     const accepted = sendMessage({
       protocolVersion: PROTOCOL_VERSION,
@@ -174,7 +206,37 @@ export const FawkesRemotePage: React.FC = () => {
       currentRequestId.current = null
       setSelectedPlatform(null)
       setOrbState('error')
+      setStatusMessage('Conexão indisponível. Tente novamente.')
+      setStatusError(true)
     }
+  }
+
+  const handleTextSubmit = (query: string): boolean => {
+    if (controlsDisabled) {
+      setStatusMessage('Conexão indisponível. Tente novamente.')
+      setStatusError(true)
+      return false
+    }
+
+    const requestId = generateRequestId()
+    currentRequestId.current = requestId
+    setOrbState('executing')
+    setStatusMessage('Processando comando...')
+    setStatusError(false)
+
+    const accepted = sendMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: 'TEXT_COMMAND',
+      requestId,
+      payload: { query },
+    })
+    if (!accepted) {
+      currentRequestId.current = null
+      setOrbState('error')
+      setStatusMessage('Conexão indisponível. Tente novamente.')
+      setStatusError(true)
+    }
+    return accepted
   }
 
   const attemptPairing = (pin: string) => {
@@ -218,6 +280,8 @@ export const FawkesRemotePage: React.FC = () => {
             <RemoteOrb state={orbState} />
           </div>
 
+          <RemoteStatusText message={statusMessage} error={statusError} />
+
           <div className="input-area">
             <PlatformGrid
               selectedPlatform={selectedPlatform}
@@ -226,7 +290,11 @@ export const FawkesRemotePage: React.FC = () => {
             />
 
             <div className="main-controls">
-              <TextInput />
+              <TextInput
+                disabled={controlsDisabled}
+                executing={orbState === 'executing'}
+                onSubmit={handleTextSubmit}
+              />
               <VoiceButton />
             </div>
           </div>

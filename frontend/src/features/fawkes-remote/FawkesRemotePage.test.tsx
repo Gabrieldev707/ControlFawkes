@@ -130,4 +130,109 @@ describe('FawkesRemotePage authentication', () => {
     expect(localStorage.getItem('controlfawkes.token')).toBeNull()
     expect(screen.getByRole('heading', { name: 'Parear este dispositivo' })).toBeTruthy()
   })
+
+  it('sends trimmed text and displays the backend success message', () => {
+    render(<FawkesRemotePage />)
+    act(() => {
+      websocketMock.onMessage?.({
+        protocolVersion: 1,
+        type: 'PAIR_RESULT',
+        requestId: 'pair-1',
+        success: true,
+        message: 'Pareamento concluído.',
+        deviceId: 'device-1',
+        token: 'new-secure-token-value',
+      })
+      websocketMock.onMessage?.({
+        protocolVersion: 1,
+        type: 'STATE_UPDATE',
+        state: 'READY',
+        message: 'Computador pronto.',
+      })
+    })
+
+    const input = screen.getByLabelText('Comando de texto') as HTMLInputElement
+    fireEvent.change(input, { target: { value: '  abre spotify  ' } })
+    fireEvent.submit(input.closest('form')!)
+
+    const sentMessage = websocketMock.sendMessage.mock.calls
+      .map(([message]) => message as Record<string, unknown>)
+      .find((message) => message.type === 'TEXT_COMMAND')
+    expect(sentMessage).toMatchObject({
+      protocolVersion: 1,
+      type: 'TEXT_COMMAND',
+      payload: { query: 'abre spotify' },
+    })
+    expect(input.value).toBe('')
+
+    const requestId = sentMessage?.requestId as string
+    act(() => {
+      websocketMock.onMessage?.({
+        protocolVersion: 1,
+        type: 'STATE_UPDATE',
+        state: 'BUSY',
+        message: 'Processando comando...',
+      })
+    })
+    expect(screen.getByText('Processando comando...')).toBeTruthy()
+
+    act(() => {
+      websocketMock.onMessage?.({
+        protocolVersion: 1,
+        type: 'COMMAND_RESULT',
+        requestId,
+        success: true,
+        message: 'Comando reconhecido: abrir Spotify.',
+        data: { intent: 'OPEN_PLATFORM', platform: 'SPOTIFY', executed: false },
+      })
+      websocketMock.onMessage?.({
+        protocolVersion: 1,
+        type: 'STATE_UPDATE',
+        state: 'READY',
+        message: 'Computador pronto.',
+      })
+    })
+
+    expect(screen.getByText('Comando reconhecido: abrir Spotify.')).toBeTruthy()
+  })
+
+  it('displays the backend unknown-command error as an alert', () => {
+    render(<FawkesRemotePage />)
+    act(() => {
+      websocketMock.onMessage?.({
+        protocolVersion: 1,
+        type: 'PAIR_RESULT',
+        requestId: 'pair-1',
+        success: true,
+        message: 'Pareamento concluído.',
+        deviceId: 'device-1',
+        token: 'new-secure-token-value',
+      })
+      websocketMock.onMessage?.({
+        protocolVersion: 1,
+        type: 'STATE_UPDATE',
+        state: 'READY',
+        message: 'Computador pronto.',
+      })
+    })
+
+    const input = screen.getByLabelText('Comando de texto')
+    fireEvent.change(input, { target: { value: 'escolhe um filme' } })
+    fireEvent.submit(input.closest('form')!)
+    const sentMessage = websocketMock.sendMessage.mock.calls
+      .map(([message]) => message as Record<string, unknown>)
+      .find((message) => message.type === 'TEXT_COMMAND')
+
+    act(() => {
+      websocketMock.onMessage?.({
+        protocolVersion: 1,
+        type: 'ERROR',
+        requestId: sentMessage?.requestId as string,
+        code: 'UNKNOWN_COMMAND',
+        message: 'Não entendi esse comando.',
+      })
+    })
+
+    expect(screen.getByRole('alert').textContent).toBe('Não entendi esse comando.')
+  })
 })

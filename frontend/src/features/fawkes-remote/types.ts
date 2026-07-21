@@ -124,13 +124,19 @@ export interface PlatformCommandData {
   executed: false
 }
 
+export interface HelpCommandData {
+  intent: 'SHOW_HELP'
+  commands: string[]
+  executed: false
+}
+
 export interface CommandResultMessage {
   protocolVersion: ProtocolVersion
   type: 'COMMAND_RESULT'
   requestId: string
   success: true
   message: string
-  data: PlatformCommandData
+  data: PlatformCommandData | HelpCommandData
 }
 
 export interface ErrorMessage {

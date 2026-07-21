@@ -14,9 +14,18 @@ from app.schemas.ws import (
     CommandResultMessage,
     ErrorCode,
     ErrorMessage,
+    HelpCommandData,
     PlatformCommandData,
     PlatformSelectedMessage,
     StateUpdateMessage,
+    TextCommandMessage,
+)
+from app.commands.parser import (
+    HELP_COMMANDS,
+    PLATFORM_LABELS,
+    OpenPlatformIntent,
+    ShowHelpIntent,
+    parse_command,
 )
 from app.security.device_store import DeviceStore
 from app.security.pairing import PairingService
@@ -122,10 +131,14 @@ class Dispatcher:
             platform = message.payload.platform
             response = CommandResultMessage(
                 requestId=message.requestId,
-                message=f"Comando reconhecido: abrir {platform}.",
+                message=f"Comando reconhecido: abrir {PLATFORM_LABELS[platform]}.",
                 data=PlatformCommandData(platform=platform),
             )
             await websocket.send_json(response.model_dump())
+            return
+
+        if isinstance(message, TextCommandMessage):
+            await self._handle_text_command(websocket, message)
             return
 
         await self._send_error(
@@ -134,6 +147,38 @@ class Dispatcher:
             "NOT_IMPLEMENTED",
             "Comando conhecido, mas ainda não implementado.",
         )
+
+    async def _handle_text_command(
+        self,
+        websocket: WebSocket,
+        message: TextCommandMessage,
+    ) -> None:
+        await self._send_state(websocket, "BUSY", "Processando comando...")
+        intent = parse_command(message.payload.query)
+
+        if isinstance(intent, OpenPlatformIntent):
+            response = CommandResultMessage(
+                requestId=message.requestId,
+                message=f"Comando reconhecido: abrir {PLATFORM_LABELS[intent.platform]}.",
+                data=PlatformCommandData(platform=intent.platform),
+            )
+            await websocket.send_json(response.model_dump())
+        elif isinstance(intent, ShowHelpIntent):
+            response = CommandResultMessage(
+                requestId=message.requestId,
+                message="Estes são os comandos disponíveis.",
+                data=HelpCommandData(commands=HELP_COMMANDS),
+            )
+            await websocket.send_json(response.model_dump())
+        else:
+            await self._send_error(
+                websocket,
+                message.requestId,
+                "UNKNOWN_COMMAND",
+                "Não entendi esse comando.",
+            )
+
+        await self._send_state(websocket, "READY", "Computador pronto.")
 
     async def _pair(self, websocket: WebSocket, message: PairDeviceMessage) -> None:
         result = self.pairing_service.attempt(

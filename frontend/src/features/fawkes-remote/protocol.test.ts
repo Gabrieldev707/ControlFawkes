@@ -58,6 +58,21 @@ describe('protocol v1 runtime validation', () => {
     })).toBe(true)
   })
 
+  it('accepts typed help command data', () => {
+    expect(isServerMessage({
+      protocolVersion: 1,
+      type: 'COMMAND_RESULT',
+      requestId: 'text-1',
+      success: true,
+      message: 'Estes são os comandos disponíveis.',
+      data: {
+        intent: 'SHOW_HELP',
+        commands: ['abre netflix'],
+        executed: false,
+      },
+    })).toBe(true)
+  })
+
   it('accepts only the closed error-code set', () => {
     expect(isErrorCode('PIN_EXPIRED')).toBe(true)
     expect(isErrorCode('ANY_STRING')).toBe(false)
