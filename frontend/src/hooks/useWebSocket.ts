@@ -1,109 +1,164 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import type { ConnectionState, ClientMessage, ServerMessage } from '../features/fawkes-remote/types';
-import { parseServerMessage } from '../features/fawkes-remote/protocol';
+import { useCallback, useEffect, useRef, useState } from 'react'
+
+import type {
+  ClientMessage,
+  ConnectionState,
+  ServerMessage,
+} from '../features/fawkes-remote/types'
+import { parseServerMessage } from '../features/fawkes-remote/protocol'
+
 
 interface UseWebSocketOptions {
-  onMessage?: (message: ServerMessage) => void;
-  maxRetries?: number;
+  onMessage?: (message: ServerMessage) => void
+}
+
+const INITIAL_RECONNECT_DELAY = 1000
+const RECONNECT_MULTIPLIER = 1.5
+const MAX_RECONNECT_DELAY = 15000
+
+export function buildWebSocketUrl(
+  configuredUrl: string | undefined,
+  hostname: string,
+  pageProtocol: string,
+  port: string,
+): string {
+  const protocol = pageProtocol === 'https:' ? 'wss' : 'ws'
+  return configuredUrl || `${protocol}://${hostname}:${port}/ws`
+}
+
+function reconnectDelay(attempt: number): number {
+  return Math.min(
+    INITIAL_RECONNECT_DELAY * Math.pow(RECONNECT_MULTIPLIER, attempt),
+    MAX_RECONNECT_DELAY,
+  )
 }
 
 export function useWebSocket(options: UseWebSocketOptions = {}) {
-  const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected');
-  const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimeoutRef = useRef<number | null>(null);
-  const retryCount = useRef(0);
-  
-  const { onMessage, maxRetries = 10 } = options;
-  
-  const connect = useCallback(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN || wsRef.current?.readyState === WebSocket.CONNECTING) {
-      return;
-    }
-    
-    setConnectionState('connecting');
-    
-    const configuredUrl = import.meta.env.VITE_WS_URL;
-    const hostname = window.location.hostname;
-    const port = import.meta.env.VITE_WS_PORT ?? '8100';
-    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
-    const wsUrl = configuredUrl ?? `${protocol}://${hostname}:${port}/ws`;
-    
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
-    
-    ws.onopen = () => {
-      if (import.meta.env.DEV) console.log('[WS] Connected to', wsUrl);
-      setConnectionState('connected');
-      retryCount.current = 0;
-    };
-    
-    ws.onmessage = (event) => {
-      const message = typeof event.data === 'string' ? parseServerMessage(event.data) : null;
-      if (!message) {
-        console.warn('[WS] Invalid server message ignored');
-        return;
-      }
-      if (import.meta.env.DEV) console.log('[WS] Received:', message);
-      onMessage?.(message);
-    };
-    
-    ws.onclose = () => {
-      if (import.meta.env.DEV) console.log('[WS] Disconnected');
-      
-      // If we are unmounting, we don't want to reconnect
-      if (!wsRef.current) return;
-      
-      setConnectionState('disconnected');
-      
-      // Exponential backoff reconnect
-      if (retryCount.current < maxRetries) {
-        const delay = Math.min(1000 * Math.pow(1.5, retryCount.current), 10000);
-        retryCount.current += 1;
-        
-        if (import.meta.env.DEV) console.log(`[WS] Reconnecting in ${delay}ms (attempt ${retryCount.current})...`);
-        reconnectTimeoutRef.current = window.setTimeout(() => {
-          connect();
-        }, delay);
-      } else {
-        setConnectionState('error');
-      }
-    };
-    
-    ws.onerror = (err) => {
-      if (import.meta.env.DEV) console.error('[WS] Error:', err);
-      // onclose will handle the reconnection
-    };
-    
-  }, [maxRetries, onMessage]);
-  
+  const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected')
+  const socketRef = useRef<WebSocket | null>(null)
+  const reconnectTimerRef = useRef<number | null>(null)
+  const retryCountRef = useRef(0)
+  const activeRef = useRef(false)
+  const onMessageRef = useRef(options.onMessage)
+  const connectRef = useRef<() => void>(() => undefined)
+
   useEffect(() => {
-    connect();
-    
-    return () => {
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-      }
-      if (wsRef.current) {
-        wsRef.current.close();
-        wsRef.current = null;
-      }
-    };
-  }, [connect]);
-  
-  const sendMessage = useCallback((message: ClientMessage) => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) {
-      if (import.meta.env.DEV) console.log('[WS] Sending:', message);
-      wsRef.current.send(JSON.stringify(message));
-      return true;
-    } else {
-      console.warn('[WS] Cannot send message, not connected');
-      return false;
+    onMessageRef.current = options.onMessage
+  }, [options.onMessage])
+
+  const clearReconnectTimer = useCallback(() => {
+    if (reconnectTimerRef.current !== null) {
+      window.clearTimeout(reconnectTimerRef.current)
+      reconnectTimerRef.current = null
     }
-  }, []);
-  
-  return {
-    connectionState,
-    sendMessage,
-    reconnect: connect
-  };
+  }, [])
+
+  const scheduleReconnect = useCallback(() => {
+    if (!activeRef.current || reconnectTimerRef.current !== null) return
+    const delay = reconnectDelay(retryCountRef.current)
+    retryCountRef.current += 1
+    reconnectTimerRef.current = window.setTimeout(() => {
+      reconnectTimerRef.current = null
+      connectRef.current()
+    }, delay)
+  }, [])
+
+  const connect = useCallback(() => {
+    if (!activeRef.current) return
+
+    const currentSocket = socketRef.current
+    if (
+      currentSocket?.readyState === WebSocket.OPEN
+      || currentSocket?.readyState === WebSocket.CONNECTING
+    ) {
+      return
+    }
+
+    clearReconnectTimer()
+    setConnectionState('connecting')
+
+    const url = buildWebSocketUrl(
+      import.meta.env.VITE_WS_URL,
+      window.location.hostname,
+      window.location.protocol,
+      import.meta.env.VITE_WS_PORT ?? '8100',
+    )
+    const socket = new WebSocket(url)
+    socketRef.current = socket
+
+    socket.onopen = () => {
+      if (!activeRef.current || socketRef.current !== socket) return
+      retryCountRef.current = 0
+      setConnectionState('connected')
+    }
+
+    socket.onmessage = (event) => {
+      if (!activeRef.current || socketRef.current !== socket) return
+      const message = typeof event.data === 'string' ? parseServerMessage(event.data) : null
+      if (!message) {
+        console.warn('[WS] Invalid server message ignored')
+        return
+      }
+      onMessageRef.current?.(message)
+    }
+
+    socket.onerror = () => {
+      if (!activeRef.current || socketRef.current !== socket) return
+      setConnectionState('error')
+    }
+
+    socket.onclose = () => {
+      if (socketRef.current !== socket) return
+      socketRef.current = null
+      if (!activeRef.current) return
+      setConnectionState('disconnected')
+      scheduleReconnect()
+    }
+  }, [clearReconnectTimer, scheduleReconnect])
+
+  connectRef.current = connect
+
+  const reconnect = useCallback(() => {
+    if (!activeRef.current) return
+    clearReconnectTimer()
+    connectRef.current()
+  }, [clearReconnectTimer])
+
+  useEffect(() => {
+    activeRef.current = true
+    connectRef.current()
+
+    const handleOnline = () => reconnect()
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') reconnect()
+    }
+    window.addEventListener('online', handleOnline)
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+
+    return () => {
+      activeRef.current = false
+      clearReconnectTimer()
+      window.removeEventListener('online', handleOnline)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+
+      const socket = socketRef.current
+      socketRef.current = null
+      if (socket) {
+        socket.onopen = null
+        socket.onmessage = null
+        socket.onerror = null
+        socket.onclose = null
+        socket.close()
+      }
+    }
+  }, [clearReconnectTimer, reconnect])
+
+  const sendMessage = useCallback((message: ClientMessage): boolean => {
+    const socket = socketRef.current
+    if (socket?.readyState !== WebSocket.OPEN) return false
+    socket.send(JSON.stringify(message))
+    return true
+  }, [])
+
+  return { connectionState, sendMessage, reconnect }
 }

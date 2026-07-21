@@ -272,6 +272,77 @@ npm run build
 
 URL WebSocket baseada no hostname local e reconexão contínua orientada por lifecycle.
 
+### Fatia 4 concluída — Rede local e reconexão contínua
+
+#### Objetivo
+
+Remover a dependência de `localhost` no iPhone e manter uma única conexão WebSocket tentando se recuperar durante toda a vida da aplicação.
+
+#### Implementado
+
+- URL padrão derivada de `window.location.hostname` e `VITE_WS_PORT`;
+- seleção automática de `ws` ou `wss` conforme o protocolo da página;
+- `VITE_WS_URL` mantida apenas como override opcional;
+- backoff exponencial `1s × 1,5` com teto de 15 segundos e sem limite de tentativas;
+- reset de tentativas após abertura bem-sucedida;
+- prevenção de sockets e timers duplicados;
+- reconexão manual;
+- reconexão imediata em `online`;
+- reconexão ao voltar para `document.visibilityState === 'visible'`;
+- cancelamento de timers, listeners e callbacks do socket no unmount;
+- proteção contra callbacks de sockets antigos por identidade.
+
+#### Arquivos criados
+
+- `frontend/src/hooks/useWebSocket.test.ts`
+
+#### Arquivos alterados
+
+- `.env.example`
+- `frontend/src/hooks/useWebSocket.ts`
+
+#### Testes executados
+
+```text
+npm run test -- --run
+npm run lint
+npm run build
+.venv\Scripts\python.exe -m pytest -q
+```
+
+#### Resultado
+
+- Frontend: 42 testes passando em 9 arquivos.
+- Backend: 54 testes passando.
+- Lint: sem erros.
+- Build: concluído, com o aviso conhecido de tamanho do bundle.
+- Teste de reconexão manteve novas conexões após 13 quedas consecutivas e confirmou teto de 15 segundos.
+
+#### Problemas encontrados
+
+- O hook anterior interrompia após dez tentativas e limitava o atraso a dez segundos.
+- Não existiam listeners de rede ou visibilidade.
+- Callbacks e timers podiam sobreviver a mudanças de socket sem uma identidade explícita.
+
+#### Correções realizadas
+
+- Um único owner de socket passou a controlar lifecycle, timer e tentativas.
+- Eventos imediatos limpam o timer pendente antes de conectar.
+- Cleanup neutraliza callbacks antes de fechar o socket.
+
+#### Limitações
+
+- Acesso real pelo IP depende do firewall e da configuração da rede Wi-Fi.
+- A validação no iPhone continua pendente de execução pelo usuário.
+
+#### Commit
+
+`fix: harden local websocket reconnect`
+
+#### Próxima fatia
+
+CI, README independente, auditoria final, execução local integrada e roteiro de validação manual.
+
 ### Limitações
 
 - Nenhuma ação real de plataforma ou do Windows será executada nesta fase.
