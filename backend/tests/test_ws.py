@@ -1,5 +1,6 @@
 import pytest
 from fastapi.testclient import TestClient
+from unittest.mock import Mock
 
 from app.api import websocket as websocket_module
 from app.main import app
@@ -9,7 +10,14 @@ from app.security.pairing import PairingService
 
 
 @pytest.fixture
-def dispatcher(tmp_path, monkeypatch):
+def browser_open_mock(monkeypatch):
+    opener = Mock(return_value=True)
+    monkeypatch.setattr("webbrowser.open", opener)
+    return opener
+
+
+@pytest.fixture
+def dispatcher(tmp_path, monkeypatch, browser_open_mock):
     store = DeviceStore(
         filepath=tmp_path / "paired_devices.json",
         lockpath=tmp_path / "paired_devices.lock",
@@ -230,6 +238,92 @@ def test_authenticated_platform_is_recognized_without_execution(client, dispatch
         }
 
 
+def test_authenticated_spotify_selection_opens_only_the_official_url(
+    client,
+    dispatcher,
+    browser_open_mock,
+):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "PLATFORM_SELECTED",
+            "requestId": "platform-spotify",
+            "payload": {"platform": "SPOTIFY"},
+        })
+
+        result = websocket.receive_json()
+
+        assert result == {
+            "protocolVersion": 1,
+            "type": "COMMAND_RESULT",
+            "requestId": "platform-spotify",
+            "success": True,
+            "message": "Spotify aberto.",
+            "data": {
+                "intent": "OPEN_PLATFORM",
+                "platform": "SPOTIFY",
+                "executed": True,
+            },
+        }
+        browser_open_mock.assert_called_once_with(
+            "https://open.spotify.com",
+            new=2,
+            autoraise=True,
+        )
+
+
+def test_spotify_open_failure_returns_a_real_error(
+    client,
+    dispatcher,
+    browser_open_mock,
+):
+    browser_open_mock.return_value = False
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "PLATFORM_SELECTED",
+            "requestId": "platform-spotify",
+            "payload": {"platform": "SPOTIFY"},
+        })
+
+        error = websocket.receive_json()
+
+        assert error == {
+            "protocolVersion": 1,
+            "type": "ERROR",
+            "requestId": "platform-spotify",
+            "code": "PLATFORM_OPEN_FAILED",
+            "message": "Não foi possível abrir o Spotify.",
+        }
+
+
+def test_platform_selection_rejects_a_frontend_supplied_url(
+    client,
+    dispatcher,
+    browser_open_mock,
+):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "PLATFORM_SELECTED",
+            "requestId": "platform-spotify",
+            "payload": {
+                "platform": "SPOTIFY",
+                "url": "https://example.com/not-allowed",
+            },
+        })
+
+        assert websocket.receive_json()["code"] == "INVALID_PAYLOAD"
+        browser_open_mock.assert_not_called()
+
+
 def test_authenticated_invalid_platform_is_rejected(client, dispatcher):
     with client.websocket_connect("/ws") as websocket:
         receive_auth_required(websocket)
@@ -251,7 +345,11 @@ def test_health_endpoint_remains_available(client):
     assert response.json() == {"status": "ok", "service": "fawkes-remote"}
 
 
-def test_authenticated_known_text_command_is_recognized_without_execution(client, dispatcher):
+def test_authenticated_spotify_text_command_is_executed(
+    client,
+    dispatcher,
+    browser_open_mock,
+):
     with client.websocket_connect("/ws") as websocket:
         receive_auth_required(websocket)
         pair(websocket, dispatcher)
@@ -272,14 +370,19 @@ def test_authenticated_known_text_command_is_recognized_without_execution(client
             "type": "COMMAND_RESULT",
             "requestId": "text-1",
             "success": True,
-            "message": "Comando reconhecido: abrir Spotify.",
+            "message": "Spotify aberto.",
             "data": {
                 "intent": "OPEN_PLATFORM",
                 "platform": "SPOTIFY",
-                "executed": False,
+                "executed": True,
             },
         }
         assert ready["state"] == "READY"
+        browser_open_mock.assert_called_once_with(
+            "https://open.spotify.com",
+            new=2,
+            autoraise=True,
+        )
 
 
 def test_authenticated_help_command_returns_supported_examples(client, dispatcher):

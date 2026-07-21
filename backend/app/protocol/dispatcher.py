@@ -15,6 +15,7 @@ from app.schemas.ws import (
     ErrorCode,
     ErrorMessage,
     HelpCommandData,
+    Platform,
     PlatformCommandData,
     PlatformSelectedMessage,
     StateUpdateMessage,
@@ -29,6 +30,7 @@ from app.commands.parser import (
 )
 from app.security.device_store import DeviceStore
 from app.security.pairing import PairingService
+from app.platforms.launcher import PlatformLauncher
 
 
 KNOWN_CLIENT_TYPES = {"AUTH", "PAIR_DEVICE", "PLATFORM_SELECTED", "TEXT_COMMAND"}
@@ -39,9 +41,11 @@ class Dispatcher:
         self,
         device_store: DeviceStore | None = None,
         pairing_service: PairingService | None = None,
+        platform_launcher: PlatformLauncher | None = None,
     ) -> None:
         self.device_store = device_store or DeviceStore()
         self.pairing_service = pairing_service or PairingService(self.device_store)
+        self.platform_launcher = platform_launcher or PlatformLauncher()
         self._client_adapter = TypeAdapter(ClientMessage)
         self._authenticated: dict[WebSocket, str] = {}
 
@@ -128,13 +132,11 @@ class Dispatcher:
             return
 
         if isinstance(message, PlatformSelectedMessage):
-            platform = message.payload.platform
-            response = CommandResultMessage(
-                requestId=message.requestId,
-                message=f"Comando reconhecido: abrir {PLATFORM_LABELS[platform]}.",
-                data=PlatformCommandData(platform=platform),
+            await self._handle_open_platform(
+                websocket,
+                message.requestId,
+                message.payload.platform,
             )
-            await websocket.send_json(response.model_dump())
             return
 
         if isinstance(message, TextCommandMessage):
@@ -157,12 +159,11 @@ class Dispatcher:
         intent = parse_command(message.payload.query)
 
         if isinstance(intent, OpenPlatformIntent):
-            response = CommandResultMessage(
-                requestId=message.requestId,
-                message=f"Comando reconhecido: abrir {PLATFORM_LABELS[intent.platform]}.",
-                data=PlatformCommandData(platform=intent.platform),
+            await self._handle_open_platform(
+                websocket,
+                message.requestId,
+                intent.platform,
             )
-            await websocket.send_json(response.model_dump())
         elif isinstance(intent, ShowHelpIntent):
             response = CommandResultMessage(
                 requestId=message.requestId,
@@ -179,6 +180,37 @@ class Dispatcher:
             )
 
         await self._send_state(websocket, "READY", "Computador pronto.")
+
+    async def _handle_open_platform(
+        self,
+        websocket: WebSocket,
+        request_id: str,
+        platform: Platform,
+    ) -> None:
+        if platform != "SPOTIFY":
+            response = CommandResultMessage(
+                requestId=request_id,
+                message=f"Comando reconhecido: abrir {PLATFORM_LABELS[platform]}.",
+                data=PlatformCommandData(platform=platform),
+            )
+            await websocket.send_json(response.model_dump())
+            return
+
+        if not self.platform_launcher.open(platform):
+            await self._send_error(
+                websocket,
+                request_id,
+                "PLATFORM_OPEN_FAILED",
+                "Não foi possível abrir o Spotify.",
+            )
+            return
+
+        response = CommandResultMessage(
+            requestId=request_id,
+            message="Spotify aberto.",
+            data=PlatformCommandData(platform=platform, executed=True),
+        )
+        await websocket.send_json(response.model_dump())
 
     async def _pair(self, websocket: WebSocket, message: PairDeviceMessage) -> None:
         result = self.pairing_service.attempt(

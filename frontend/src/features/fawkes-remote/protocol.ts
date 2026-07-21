@@ -40,7 +40,7 @@ function isPlatformData(value: unknown): boolean {
     && hasOnlyKeys(value, ['intent', 'platform', 'executed'])
     && value.intent === 'OPEN_PLATFORM'
     && isPlatform(value.platform)
-    && value.executed === false
+    && typeof value.executed === 'boolean'
 }
 
 function isHelpData(value: unknown): boolean {

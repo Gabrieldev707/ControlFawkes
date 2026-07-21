@@ -57,6 +57,7 @@ export const ERROR_CODES = [
   'PIN_EXPIRED',
   'TOO_MANY_ATTEMPTS',
   'PROTOCOL_VERSION_MISMATCH',
+  'PLATFORM_OPEN_FAILED',
   'INTERNAL_ERROR',
 ] as const
 
@@ -121,7 +122,7 @@ export interface PairResultMessage {
 export interface PlatformCommandData {
   intent: 'OPEN_PLATFORM'
   platform: Platform
-  executed: false
+  executed: boolean
 }
 
 export interface HelpCommandData {

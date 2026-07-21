@@ -73,8 +73,24 @@ describe('protocol v1 runtime validation', () => {
     })).toBe(true)
   })
 
+  it('accepts a platform result that confirms real execution', () => {
+    expect(isServerMessage({
+      protocolVersion: 1,
+      type: 'COMMAND_RESULT',
+      requestId: 'platform-1',
+      success: true,
+      message: 'Spotify aberto.',
+      data: {
+        intent: 'OPEN_PLATFORM',
+        platform: 'SPOTIFY',
+        executed: true,
+      },
+    })).toBe(true)
+  })
+
   it('accepts only the closed error-code set', () => {
     expect(isErrorCode('PIN_EXPIRED')).toBe(true)
+    expect(isErrorCode('PLATFORM_OPEN_FAILED')).toBe(true)
     expect(isErrorCode('ANY_STRING')).toBe(false)
   })
 

@@ -28,6 +28,7 @@ ErrorCode = Literal[
     "PIN_EXPIRED",
     "TOO_MANY_ATTEMPTS",
     "PROTOCOL_VERSION_MISMATCH",
+    "PLATFORM_OPEN_FAILED",
     "INTERNAL_ERROR",
 ]
 
@@ -82,7 +83,7 @@ class PlatformCommandData(BaseModel):
 
     intent: Literal["OPEN_PLATFORM"] = "OPEN_PLATFORM"
     platform: Platform
-    executed: Literal[False] = False
+    executed: bool = False
 
 
 class HelpCommandData(BaseModel):
