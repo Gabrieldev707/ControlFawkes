@@ -1,57 +1,106 @@
-from typing import Any, Literal, Optional, Annotated
-from pydantic import BaseModel, Field
+from typing import Annotated, Literal
 
-# -----------------------------------------------------------------------------
-# Base Models
-# -----------------------------------------------------------------------------
-class AuthPayload(BaseModel):
-    token: str
+from pydantic import BaseModel, ConfigDict, Field
 
-class PlatformSelectedPayload(BaseModel):
-    platform: Literal['NETFLIX', 'MAX', 'PRIME_VIDEO', 'DISNEY_PLUS', 'YOUTUBE', 'SPOTIFY']
+from app.schemas.auth import AuthMessage, PairDeviceMessage
 
-class TextCommandPayload(BaseModel):
-    query: str
 
-# -----------------------------------------------------------------------------
-# Client Messages
-# -----------------------------------------------------------------------------
-class AuthMessage(BaseModel):
-    type: Literal['AUTH']
-    requestId: str
-    payload: AuthPayload
-
-class PlatformSelectedMessage(BaseModel):
-    type: Literal['PLATFORM_SELECTED']
-    requestId: str
-    payload: PlatformSelectedPayload
-
-class TextCommandMessage(BaseModel):
-    type: Literal['TEXT_COMMAND']
-    requestId: str
-    payload: TextCommandPayload
-
-ClientMessage = Annotated[
-    AuthMessage | PlatformSelectedMessage | TextCommandMessage,
-    Field(discriminator='type')
+ProtocolVersion = Literal[1]
+Platform = Literal[
+    "NETFLIX",
+    "MAX",
+    "PRIME_VIDEO",
+    "DISNEY_PLUS",
+    "YOUTUBE",
+    "SPOTIFY",
+]
+ServerState = Literal["AUTH_REQUIRED", "PAIRING", "READY", "BUSY"]
+ErrorCode = Literal[
+    "INVALID_JSON",
+    "INVALID_PAYLOAD",
+    "UNSUPPORTED_MESSAGE",
+    "NOT_IMPLEMENTED",
+    "UNKNOWN_COMMAND",
+    "UNAUTHORIZED",
+    "INVALID_TOKEN",
+    "PAIRING_REQUIRED",
+    "PIN_INVALID",
+    "PIN_EXPIRED",
+    "TOO_MANY_ATTEMPTS",
+    "PROTOCOL_VERSION_MISMATCH",
+    "INTERNAL_ERROR",
 ]
 
-# -----------------------------------------------------------------------------
-# Server Messages
-# -----------------------------------------------------------------------------
+
+class PlatformSelectedPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    platform: Platform
+
+
+class TextCommandPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    query: str = Field(min_length=1, max_length=500)
+
+
+class PlatformSelectedMessage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    protocolVersion: ProtocolVersion
+    type: Literal["PLATFORM_SELECTED"]
+    requestId: str = Field(min_length=1, max_length=128)
+    payload: PlatformSelectedPayload
+
+
+class TextCommandMessage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    protocolVersion: ProtocolVersion
+    type: Literal["TEXT_COMMAND"]
+    requestId: str = Field(min_length=1, max_length=128)
+    payload: TextCommandPayload
+
+
+ClientMessage = Annotated[
+    AuthMessage | PairDeviceMessage | PlatformSelectedMessage | TextCommandMessage,
+    Field(discriminator="type"),
+]
+
+
 class StateUpdateMessage(BaseModel):
-    type: Literal['STATE_UPDATE'] = 'STATE_UPDATE'
-    state: str
+    model_config = ConfigDict(extra="forbid")
+
+    protocolVersion: ProtocolVersion = 1
+    type: Literal["STATE_UPDATE"] = "STATE_UPDATE"
+    state: ServerState
+    message: str
+
+
+class PlatformCommandData(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    intent: Literal["OPEN_PLATFORM"] = "OPEN_PLATFORM"
+    platform: Platform
+    executed: Literal[False] = False
+
 
 class CommandResultMessage(BaseModel):
-    type: Literal['COMMAND_RESULT'] = 'COMMAND_RESULT'
+    model_config = ConfigDict(extra="forbid")
+
+    protocolVersion: ProtocolVersion = 1
+    type: Literal["COMMAND_RESULT"] = "COMMAND_RESULT"
     requestId: str
-    success: bool
+    success: Literal[True] = True
     message: str
-    data: Optional[Any] = None
+    data: PlatformCommandData
+
 
 class ErrorMessage(BaseModel):
-    type: Literal['ERROR'] = 'ERROR'
+    model_config = ConfigDict(extra="forbid")
+
+    protocolVersion: ProtocolVersion = 1
+    type: Literal["ERROR"] = "ERROR"
     requestId: str
-    code: str
+    code: ErrorCode
     message: str
