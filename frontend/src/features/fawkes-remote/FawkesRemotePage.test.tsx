@@ -440,4 +440,35 @@ describe('FawkesRemotePage authentication', () => {
       payload: { level: 73 },
     })
   })
+
+  it('sends only an allowlisted touchpad action after explicit activation', () => {
+    render(<FawkesRemotePage />)
+    act(() => {
+      websocketMock.onMessage?.({
+        protocolVersion: 1,
+        type: 'PAIR_RESULT',
+        requestId: 'pair-1',
+        success: true,
+        message: 'Pareamento concluído.',
+        deviceId: 'device-1',
+        token: 'new-secure-token-value',
+      })
+      websocketMock.onMessage?.({
+        protocolVersion: 1,
+        type: 'STATE_UPDATE',
+        state: 'READY',
+        message: 'Computador pronto.',
+      })
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Touchpad' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Ativar touchpad' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Clique duplo' }))
+
+    expect(websocketMock.sendMessage).toHaveBeenCalledWith({
+      protocolVersion: 1,
+      type: 'POINTER_DOUBLE_CLICK',
+      requestId: expect.any(String),
+    })
+  })
 })

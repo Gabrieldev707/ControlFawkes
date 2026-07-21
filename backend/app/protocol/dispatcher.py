@@ -17,6 +17,14 @@ from app.schemas.ws import (
     HelpCommandData,
     MediaCommandData,
     MediaControlMessage,
+    PointerClickMessage,
+    PointerCommandData,
+    PointerDoubleClickMessage,
+    PointerDownMessage,
+    PointerMoveMessage,
+    PointerRightClickMessage,
+    PointerScrollMessage,
+    PointerUpMessage,
     Platform,
     PlatformCommandData,
     PlatformSelectedMessage,
@@ -42,6 +50,8 @@ from app.media.actions import MEDIA_ACTIONS, MEDIA_ACTION_MESSAGES
 from app.media.windows_adapter import WindowsMediaAdapter
 from app.schemas.volume import VOLUME_ACTIONS
 from app.windows.volume import WindowsVolumeAdapter, WindowsVolumeError
+from app.input.pointer import PointerRateLimiter, WindowsPointerAdapter
+from app.schemas.pointer import POINTER_ACTIONS
 
 
 KNOWN_CLIENT_TYPES = {
@@ -51,6 +61,7 @@ KNOWN_CLIENT_TYPES = {
     "TEXT_COMMAND",
     *MEDIA_ACTIONS,
     *VOLUME_ACTIONS,
+    *POINTER_ACTIONS,
 }
 
 
@@ -62,14 +73,19 @@ class Dispatcher:
         platform_launcher: PlatformLauncher | None = None,
         media_adapter: WindowsMediaAdapter | None = None,
         volume_adapter: WindowsVolumeAdapter | None = None,
+        pointer_adapter: WindowsPointerAdapter | None = None,
+        pointer_rate_limiter: PointerRateLimiter | None = None,
     ) -> None:
         self.device_store = device_store or DeviceStore()
         self.pairing_service = pairing_service or PairingService(self.device_store)
         self.platform_launcher = platform_launcher or PlatformLauncher()
         self.media_adapter = media_adapter or WindowsMediaAdapter()
         self.volume_adapter = volume_adapter or WindowsVolumeAdapter()
+        self.pointer_adapter = pointer_adapter or WindowsPointerAdapter()
+        self.pointer_rate_limiter = pointer_rate_limiter or PointerRateLimiter()
         self._client_adapter = TypeAdapter(ClientMessage)
         self._authenticated: dict[WebSocket, str] = {}
+        self._held_pointer_buttons: set[WebSocket] = set()
 
     async def startup(self) -> None:
         self.pairing_service.initialize()
@@ -80,6 +96,10 @@ class Dispatcher:
         await self._send_state(websocket, "AUTH_REQUIRED", "Autenticação necessária.")
 
     async def disconnect(self, websocket: WebSocket) -> None:
+        if websocket in self._held_pointer_buttons:
+            self.pointer_adapter.pointer_up()
+            self._held_pointer_buttons.discard(websocket)
+        self.pointer_rate_limiter.clear(websocket)
         self._authenticated.pop(websocket, None)
 
     async def _send_state(self, websocket: WebSocket, state: str, message: str) -> None:
@@ -174,6 +194,21 @@ class Dispatcher:
             (VolumeGetMessage, VolumeSetMessage, VolumeDeltaMessage, VolumeMuteToggleMessage),
         ):
             await self._handle_volume_control(websocket, message)
+            return
+
+        if isinstance(
+            message,
+            (
+                PointerMoveMessage,
+                PointerClickMessage,
+                PointerDoubleClickMessage,
+                PointerRightClickMessage,
+                PointerScrollMessage,
+                PointerDownMessage,
+                PointerUpMessage,
+            ),
+        ):
+            await self._handle_pointer_control(websocket, message)
             return
 
         await self._send_error(
@@ -297,6 +332,61 @@ class Dispatcher:
                 level=state.level,
                 muted=state.muted,
             ),
+        )
+        await websocket.send_json(response.model_dump())
+
+    async def _handle_pointer_control(
+        self,
+        websocket: WebSocket,
+        message: PointerMoveMessage
+        | PointerClickMessage
+        | PointerDoubleClickMessage
+        | PointerRightClickMessage
+        | PointerScrollMessage
+        | PointerDownMessage
+        | PointerUpMessage,
+    ) -> None:
+        if isinstance(message, PointerMoveMessage):
+            if not self.pointer_rate_limiter.allow(websocket):
+                await self._send_error(
+                    websocket,
+                    message.requestId,
+                    "POINTER_RATE_LIMITED",
+                    "Movimento do touchpad limitado.",
+                )
+                return
+            executed = self.pointer_adapter.move(message.payload.dx, message.payload.dy)
+        elif isinstance(message, PointerClickMessage):
+            executed = self.pointer_adapter.click()
+        elif isinstance(message, PointerDoubleClickMessage):
+            executed = self.pointer_adapter.double_click()
+        elif isinstance(message, PointerRightClickMessage):
+            executed = self.pointer_adapter.right_click()
+        elif isinstance(message, PointerScrollMessage):
+            executed = self.pointer_adapter.scroll(message.payload.delta)
+        elif isinstance(message, PointerDownMessage):
+            executed = self.pointer_adapter.pointer_down()
+        else:
+            executed = self.pointer_adapter.pointer_up()
+
+        if not executed:
+            await self._send_error(
+                websocket,
+                message.requestId,
+                "POINTER_CONTROL_FAILED",
+                "Touchpad indisponível.",
+            )
+            return
+
+        if isinstance(message, PointerDownMessage):
+            self._held_pointer_buttons.add(websocket)
+        elif isinstance(message, PointerUpMessage):
+            self._held_pointer_buttons.discard(websocket)
+
+        response = CommandResultMessage(
+            requestId=message.requestId,
+            message="Comando do touchpad executado.",
+            data=PointerCommandData(action=message.type),
         )
         await websocket.send_json(response.model_dump())
 

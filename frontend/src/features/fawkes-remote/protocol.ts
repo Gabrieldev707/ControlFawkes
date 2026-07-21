@@ -2,6 +2,7 @@ import {
   ERROR_CODES,
   MEDIA_ACTIONS,
   VOLUME_ACTIONS,
+  POINTER_ACTIONS,
   isPlatform,
   type ErrorCode,
   type ServerMessage,
@@ -78,6 +79,15 @@ function isVolumeData(value: unknown): boolean {
     && value.executed === true
 }
 
+function isPointerData(value: unknown): boolean {
+  return isRecord(value)
+    && hasOnlyKeys(value, ['intent', 'action', 'executed'])
+    && value.intent === 'POINTER_CONTROL'
+    && typeof value.action === 'string'
+    && POINTER_ACTIONS.includes(value.action as (typeof POINTER_ACTIONS)[number])
+    && value.executed === true
+}
+
 export function isServerMessage(value: unknown): value is ServerMessage {
   if (!isRecord(value) || value.protocolVersion !== 1 || typeof value.type !== 'string') {
     return false
@@ -117,6 +127,7 @@ export function isServerMessage(value: unknown): value is ServerMessage {
           || isHelpData(value.data)
           || isMediaData(value.data)
           || isVolumeData(value.data)
+          || isPointerData(value.data)
         )
     case 'ERROR':
       return hasOnlyKeys(value, ['protocolVersion', 'type', 'requestId', 'code', 'message'])

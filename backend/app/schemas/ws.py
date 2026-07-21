@@ -11,6 +11,16 @@ from app.schemas.volume import (
     VolumeMuteToggleMessage,
     VolumeSetMessage,
 )
+from app.schemas.pointer import (
+    PointerAction,
+    PointerClickMessage,
+    PointerDoubleClickMessage,
+    PointerDownMessage,
+    PointerMoveMessage,
+    PointerRightClickMessage,
+    PointerScrollMessage,
+    PointerUpMessage,
+)
 
 
 ProtocolVersion = Literal[1]
@@ -39,6 +49,8 @@ ErrorCode = Literal[
     "PLATFORM_OPEN_FAILED",
     "MEDIA_CONTROL_FAILED",
     "SYSTEM_VOLUME_FAILED",
+    "POINTER_CONTROL_FAILED",
+    "POINTER_RATE_LIMITED",
     "INTERNAL_ERROR",
 ]
 
@@ -90,7 +102,14 @@ ClientMessage = Annotated[
     | VolumeGetMessage
     | VolumeSetMessage
     | VolumeDeltaMessage
-    | VolumeMuteToggleMessage,
+    | VolumeMuteToggleMessage
+    | PointerMoveMessage
+    | PointerClickMessage
+    | PointerDoubleClickMessage
+    | PointerRightClickMessage
+    | PointerScrollMessage
+    | PointerDownMessage
+    | PointerUpMessage,
     Field(discriminator="type"),
 ]
 
@@ -138,6 +157,14 @@ class VolumeCommandData(BaseModel):
     executed: Literal[True] = True
 
 
+class PointerCommandData(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    intent: Literal["POINTER_CONTROL"] = "POINTER_CONTROL"
+    action: PointerAction
+    executed: Literal[True] = True
+
+
 class CommandResultMessage(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -146,7 +173,13 @@ class CommandResultMessage(BaseModel):
     requestId: str
     success: Literal[True] = True
     message: str
-    data: PlatformCommandData | HelpCommandData | MediaCommandData | VolumeCommandData
+    data: (
+        PlatformCommandData
+        | HelpCommandData
+        | MediaCommandData
+        | VolumeCommandData
+        | PointerCommandData
+    )
 
 
 class ErrorMessage(BaseModel):

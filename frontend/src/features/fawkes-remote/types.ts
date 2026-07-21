@@ -63,6 +63,8 @@ export const ERROR_CODES = [
   'PLATFORM_OPEN_FAILED',
   'MEDIA_CONTROL_FAILED',
   'SYSTEM_VOLUME_FAILED',
+  'POINTER_CONTROL_FAILED',
+  'POINTER_RATE_LIMITED',
   'INTERNAL_ERROR',
 ] as const
 
@@ -136,6 +138,34 @@ export interface VolumeMuteToggleMessage extends ClientMessageBase {
   type: 'SYSTEM_MUTE_TOGGLE'
 }
 
+export const POINTER_ACTIONS = [
+  'POINTER_MOVE',
+  'POINTER_CLICK',
+  'POINTER_DOUBLE_CLICK',
+  'POINTER_RIGHT_CLICK',
+  'POINTER_SCROLL',
+  'POINTER_DOWN',
+  'POINTER_UP',
+] as const
+
+export type PointerAction = (typeof POINTER_ACTIONS)[number]
+
+export type PointerPayload = { dx: number; dy: number } | { delta: -120 | 120 }
+
+export interface PointerMoveMessage extends ClientMessageBase {
+  type: 'POINTER_MOVE'
+  payload: { dx: number; dy: number }
+}
+
+export interface PointerScrollMessage extends ClientMessageBase {
+  type: 'POINTER_SCROLL'
+  payload: { delta: -120 | 120 }
+}
+
+export interface PointerButtonMessage extends ClientMessageBase {
+  type: Exclude<PointerAction, 'POINTER_MOVE' | 'POINTER_SCROLL'>
+}
+
 export type ClientMessage =
   | AuthMessage
   | PairDeviceMessage
@@ -146,6 +176,9 @@ export type ClientMessage =
   | VolumeSetMessage
   | VolumeDeltaMessage
   | VolumeMuteToggleMessage
+  | PointerMoveMessage
+  | PointerScrollMessage
+  | PointerButtonMessage
 
 export interface StateUpdateMessage {
   protocolVersion: ProtocolVersion
@@ -198,13 +231,23 @@ export interface VolumeCommandData {
   executed: true
 }
 
+export interface PointerCommandData {
+  intent: 'POINTER_CONTROL'
+  action: PointerAction
+  executed: true
+}
+
 export interface CommandResultMessage {
   protocolVersion: ProtocolVersion
   type: 'COMMAND_RESULT'
   requestId: string
   success: true
   message: string
-  data: PlatformCommandData | HelpCommandData | MediaCommandData | VolumeCommandData
+  data: PlatformCommandData
+    | HelpCommandData
+    | MediaCommandData
+    | VolumeCommandData
+    | PointerCommandData
 }
 
 export interface ErrorMessage {

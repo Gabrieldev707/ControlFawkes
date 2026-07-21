@@ -943,6 +943,165 @@ body {
   opacity: 0.42;
 }
 
+.touchpad-screen {
+  padding: 0 2px 20px;
+}
+
+.touchpad-screen__heading {
+  margin-top: 8px;
+}
+
+.touchpad-screen__heading h2 {
+  margin-top: 4px;
+  color: var(--text-primary);
+  font-size: 1.7rem;
+  font-weight: 600;
+  letter-spacing: -0.035em;
+}
+
+.touchpad-screen__heading > p:last-child {
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.touchpad-screen > .remote-status-text {
+  justify-content: flex-start;
+  min-height: 42px;
+  margin: 5px 0;
+  padding-right: 0;
+  padding-left: 0;
+  text-align: left;
+}
+
+.touchpad-activation {
+  display: flex;
+  min-height: 330px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 28px;
+  border: 1px dashed var(--border-accent);
+  border-radius: 24px;
+  background: radial-gradient(circle at 50% 40%, rgba(124, 58, 237, 0.11), rgba(255, 255, 255, 0.02));
+  color: var(--accent-bright);
+  text-align: center;
+}
+
+.touchpad-activation p {
+  max-width: 240px;
+  margin-top: 16px;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  line-height: 1.5;
+}
+
+.touchpad-activation button {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  gap: 8px;
+  margin-top: 22px;
+  padding: 0 18px;
+  border: 1px solid var(--border-accent);
+  border-radius: 15px;
+  background: rgba(124, 58, 237, 0.12);
+  color: var(--text-primary);
+  font: 600 0.78rem/1 var(--font-ui);
+}
+
+.touchpad-controls {
+  display: grid;
+  gap: 10px;
+}
+
+.touchpad-surface {
+  display: flex;
+  min-height: 238px;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid var(--border-accent);
+  border-radius: 24px;
+  background:
+    linear-gradient(rgba(124, 58, 237, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(124, 58, 237, 0.035) 1px, transparent 1px),
+    radial-gradient(circle at 50% 44%, rgba(124, 58, 237, 0.14), rgba(255, 255, 255, 0.02) 62%);
+  background-size: 24px 24px, 24px 24px, auto;
+  color: var(--accent-bright);
+  outline: none;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.touchpad-surface:focus-visible {
+  box-shadow: 0 0 0 2px var(--accent-bright);
+}
+
+.touchpad-surface strong {
+  color: var(--text-primary);
+  font-size: 0.82rem;
+}
+
+.touchpad-surface span {
+  color: var(--text-secondary);
+  font-size: 0.67rem;
+}
+
+.touchpad-clicks {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.touchpad-clicks button {
+  min-height: 48px;
+  padding: 5px;
+  border: 1px solid var(--border-default);
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-secondary);
+  font: 600 0.65rem/1.15 var(--font-ui);
+}
+
+.touchpad-safety {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.touchpad-safety button {
+  display: flex;
+  min-height: 46px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 6px;
+  border-radius: 13px;
+  font: 600 0.64rem/1.15 var(--font-ui);
+}
+
+.touchpad-safety__disable {
+  border: 1px solid var(--border-default);
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--text-secondary);
+}
+
+.touchpad-safety__emergency {
+  border: 1px solid rgba(248, 113, 113, 0.3);
+  background: rgba(248, 113, 113, 0.08);
+  color: #fda4af;
+}
+
+.touchpad-activation button:disabled,
+.touchpad-clicks button:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
 /* Compact bottom navigation */
 .remote-navigation {
   display: grid;

@@ -1,14 +1,13 @@
 import {
   ArrowLeft,
   Keyboard,
-  MousePointer2,
   Settings,
 } from 'lucide-react'
 
 import type { NavigableScreen } from '../../state/currentScreen'
 
 
-type FeatureScreen = Exclude<NavigableScreen, 'HOME' | 'PLATFORMS' | 'REMOTE_CONTROL' | 'VOLUME'>
+type FeatureScreen = Exclude<NavigableScreen, 'HOME' | 'PLATFORMS' | 'REMOTE_CONTROL' | 'VOLUME' | 'TOUCHPAD'>
 
 interface RemoteFeatureScreenProps {
   screen: FeatureScreen
@@ -16,11 +15,6 @@ interface RemoteFeatureScreenProps {
 }
 
 const SCREEN_CONTENT = {
-  TOUCHPAD: {
-    title: 'Touchpad',
-    description: 'A superfície de ponteiro será ativada depois da validação dos controles.',
-    icon: MousePointer2,
-  },
   KEYBOARD: {
     title: 'Teclado',
     description: 'A entrada remota de texto será adicionada com validação e limites próprios.',

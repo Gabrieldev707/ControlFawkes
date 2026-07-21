@@ -9,6 +9,7 @@ from app.security.device_store import DeviceStore
 from app.security.pairing import PairingService
 from app.media.windows_adapter import WindowsMediaAdapter
 from app.windows.volume import VolumeState, WindowsVolumeAdapter, WindowsVolumeError
+from app.input.pointer import PointerRateLimiter, WindowsPointerAdapter
 
 
 @pytest.fixture
@@ -36,12 +37,26 @@ def volume_adapter_mock():
 
 
 @pytest.fixture
+def pointer_adapter_mock():
+    adapter = Mock(spec=WindowsPointerAdapter)
+    adapter.move.return_value = True
+    adapter.click.return_value = True
+    adapter.double_click.return_value = True
+    adapter.right_click.return_value = True
+    adapter.scroll.return_value = True
+    adapter.pointer_down.return_value = True
+    adapter.pointer_up.return_value = True
+    return adapter
+
+
+@pytest.fixture
 def dispatcher(
     tmp_path,
     monkeypatch,
     browser_open_mock,
     windows_key_event_mock,
     volume_adapter_mock,
+    pointer_adapter_mock,
 ):
     store = DeviceStore(
         filepath=tmp_path / "paired_devices.json",
@@ -52,6 +67,8 @@ def dispatcher(
         pairing_service=PairingService(store),
         media_adapter=WindowsMediaAdapter(windows_key_event_mock),
         volume_adapter=volume_adapter_mock,
+        pointer_adapter=pointer_adapter_mock,
+        pointer_rate_limiter=PointerRateLimiter(max_updates=60),
     )
     monkeypatch.setattr(websocket_module, "dispatcher", instance)
     return instance
@@ -608,6 +625,152 @@ def test_volume_command_reports_native_failure(client, dispatcher, volume_adapte
         error = websocket.receive_json()
         assert error["code"] == "SYSTEM_VOLUME_FAILED"
         assert error["message"] == "Controle de volume indisponível."
+
+
+def test_pointer_control_requires_authentication(client, pointer_adapter_mock):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "POINTER_CLICK",
+            "requestId": "pointer-1",
+        })
+
+        assert websocket.receive_json()["code"] == "UNAUTHORIZED"
+        pointer_adapter_mock.click.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("message", "method", "expected_call"),
+    [
+        ({"type": "POINTER_MOVE", "payload": {"dx": 12.5, "dy": -4}}, "move", (12.5, -4.0)),
+        ({"type": "POINTER_CLICK"}, "click", ()),
+        ({"type": "POINTER_DOUBLE_CLICK"}, "double_click", ()),
+        ({"type": "POINTER_RIGHT_CLICK"}, "right_click", ()),
+        ({"type": "POINTER_SCROLL", "payload": {"delta": -120}}, "scroll", (-120,)),
+        ({"type": "POINTER_DOWN"}, "pointer_down", ()),
+        ({"type": "POINTER_UP"}, "pointer_up", ()),
+    ],
+)
+def test_authenticated_pointer_commands_use_only_fixed_adapter_methods(
+    client,
+    dispatcher,
+    pointer_adapter_mock,
+    message,
+    method,
+    expected_call,
+):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "requestId": "pointer-1",
+            **message,
+        })
+
+        result = websocket.receive_json()
+        assert result == {
+            "protocolVersion": 1,
+            "type": "COMMAND_RESULT",
+            "requestId": "pointer-1",
+            "success": True,
+            "message": "Comando do touchpad executado.",
+            "data": {
+                "intent": "POINTER_CONTROL",
+                "action": message["type"],
+                "executed": True,
+            },
+        }
+        getattr(pointer_adapter_mock, method).assert_called_once_with(*expected_call)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        {"type": "POINTER_MOVE", "payload": {"dx": 161, "dy": 0}},
+        {"type": "POINTER_MOVE", "payload": {"dx": 0, "dy": 0}},
+        {"type": "POINTER_MOVE", "payload": {"dx": "12", "dy": 1}},
+        {"type": "POINTER_SCROLL", "payload": {"delta": -240}},
+        {"type": "POINTER_CLICK", "payload": {"button": "middle"}},
+    ],
+)
+def test_pointer_commands_reject_extreme_or_arbitrary_payloads(
+    client,
+    dispatcher,
+    pointer_adapter_mock,
+    message,
+):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "requestId": "pointer-1",
+            **message,
+        })
+
+        assert websocket.receive_json()["code"] == "INVALID_PAYLOAD"
+        pointer_adapter_mock.move.assert_not_called()
+
+
+def test_pointer_move_is_rate_limited_per_connection(
+    client,
+    dispatcher,
+    pointer_adapter_mock,
+):
+    dispatcher.pointer_rate_limiter = PointerRateLimiter(max_updates=1)
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        message = {
+            "protocolVersion": 1,
+            "type": "POINTER_MOVE",
+            "requestId": "pointer-1",
+            "payload": {"dx": 1, "dy": 1},
+        }
+        websocket.send_json(message)
+        assert websocket.receive_json()["type"] == "COMMAND_RESULT"
+        websocket.send_json({**message, "requestId": "pointer-2"})
+        error = websocket.receive_json()
+
+        assert error["code"] == "POINTER_RATE_LIMITED"
+        assert pointer_adapter_mock.move.call_count == 1
+
+
+def test_pointer_adapter_failure_is_reported(client, dispatcher, pointer_adapter_mock):
+    pointer_adapter_mock.click.return_value = False
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "POINTER_CLICK",
+            "requestId": "pointer-1",
+        })
+
+        assert websocket.receive_json()["code"] == "POINTER_CONTROL_FAILED"
+
+
+def test_pointer_disconnect_releases_a_held_button(
+    client,
+    dispatcher,
+    pointer_adapter_mock,
+):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "POINTER_DOWN",
+            "requestId": "pointer-1",
+        })
+        assert websocket.receive_json()["type"] == "COMMAND_RESULT"
+        pointer_adapter_mock.pointer_up.reset_mock()
+
+    pointer_adapter_mock.pointer_up.assert_called_once_with()
 
 
 def test_authenticated_invalid_platform_is_rejected(client, dispatcher):

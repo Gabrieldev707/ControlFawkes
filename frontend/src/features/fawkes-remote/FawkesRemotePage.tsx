@@ -5,6 +5,8 @@ import type {
   MediaAction,
   OrbState,
   Platform,
+  PointerAction,
+  PointerPayload,
   ServerMessage,
   ServerState,
   VolumeAction,
@@ -19,6 +21,7 @@ import { RemoteFeatureScreen } from '../../pages/remote/RemoteFeatureScreen'
 import { PlatformsScreen } from '../../pages/remote/PlatformsScreen'
 import { RemoteControlScreen } from '../../pages/remote/RemoteControlScreen'
 import { VolumeScreen } from '../../pages/remote/VolumeScreen'
+import { TouchpadScreen } from '../../pages/remote/TouchpadScreen'
 import {
   AuthenticationStatus,
   ConnectionStatus,
@@ -55,6 +58,7 @@ export const FawkesRemotePage: React.FC = () => {
   const [statusError, setStatusError] = useState(false)
   const [currentMediaAction, setCurrentMediaAction] = useState<MediaAction | null>(null)
   const [currentVolumeAction, setCurrentVolumeAction] = useState<VolumeAction | null>(null)
+  const [currentPointerAction, setCurrentPointerAction] = useState<PointerAction | null>(null)
   const [volumeLevel, setVolumeLevel] = useState<number | null>(null)
   const [volumeMuted, setVolumeMuted] = useState(false)
   const { currentScreen, navigate, goBack } = useRemoteNavigation()
@@ -133,6 +137,14 @@ export const FawkesRemotePage: React.FC = () => {
         setVolumeLevel(message.data.level)
         setVolumeMuted(message.data.muted)
       }
+      if (message.data.intent === 'POINTER_CONTROL') {
+        setCurrentPointerAction(null)
+        currentRequestId.current = null
+        setOrbState('idle')
+        setStatusMessage(message.message)
+        setStatusError(false)
+        return
+      }
       setOrbState('success')
       setStatusMessage(message.message)
       setStatusError(false)
@@ -142,6 +154,7 @@ export const FawkesRemotePage: React.FC = () => {
         setSelectedPlatform(null)
         setCurrentMediaAction(null)
         setCurrentVolumeAction(null)
+        setCurrentPointerAction(null)
         currentRequestId.current = null
         setStatusMessage('Computador pronto.')
       }, 2000)
@@ -158,6 +171,7 @@ export const FawkesRemotePage: React.FC = () => {
         setSelectedPlatform(null)
         setCurrentMediaAction(null)
         setCurrentVolumeAction(null)
+        setCurrentPointerAction(null)
         currentRequestId.current = null
         setStatusMessage('Computador pronto.')
         setStatusError(false)
@@ -210,6 +224,10 @@ export const FawkesRemotePage: React.FC = () => {
     || authState !== 'authenticated'
     || serverState !== 'READY'
     || orbState === 'executing'
+
+  const pointerDisabled = connectionState !== 'connected'
+    || authState !== 'authenticated'
+    || serverState !== 'READY'
 
   const showOrbPreview = import.meta.env.DEV
     && new URLSearchParams(window.location.search).get('orb-preview') === '1'
@@ -337,6 +355,47 @@ export const FawkesRemotePage: React.FC = () => {
     }
   }, [controlsDisabled, sendMessage])
 
+  const handlePointerAction = useCallback((
+    action: PointerAction,
+    payload?: PointerPayload,
+  ) => {
+    if (pointerDisabled) return
+    const requestId = generateRequestId()
+    currentRequestId.current = requestId
+    setCurrentPointerAction(action)
+    setStatusMessage(action === 'POINTER_MOVE' ? 'Movendo ponteiro...' : 'Enviando comando...')
+    setStatusError(false)
+
+    let accepted = false
+    if (action === 'POINTER_MOVE' && payload && 'dx' in payload) {
+      accepted = sendMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: action,
+        requestId,
+        payload,
+      })
+    } else if (action === 'POINTER_SCROLL' && payload && 'delta' in payload) {
+      accepted = sendMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: action,
+        requestId,
+        payload,
+      })
+    } else if (action !== 'POINTER_MOVE' && action !== 'POINTER_SCROLL' && payload === undefined) {
+      accepted = sendMessage({
+        protocolVersion: PROTOCOL_VERSION,
+        type: action,
+        requestId,
+      })
+    }
+    if (!accepted) {
+      currentRequestId.current = null
+      setCurrentPointerAction(null)
+      setStatusMessage('Touchpad desconectado.')
+      setStatusError(true)
+    }
+  }, [pointerDisabled, sendMessage])
+
   useEffect(() => {
     if (currentScreen !== 'VOLUME') {
       hasLoadedVolumeScreen.current = false
@@ -454,6 +513,15 @@ export const FawkesRemotePage: React.FC = () => {
               onSetLevel={(level) => handleVolumeAction('SYSTEM_VOLUME_SET', level)}
               onDelta={(delta) => handleVolumeAction('SYSTEM_VOLUME_DELTA', delta)}
               onToggleMute={() => handleVolumeAction('SYSTEM_MUTE_TOGGLE')}
+              onBack={goBack}
+            />
+          ) : currentScreen === 'TOUCHPAD' ? (
+            <TouchpadScreen
+              disabled={pointerDisabled}
+              currentAction={currentPointerAction}
+              statusMessage={statusMessage}
+              statusError={statusError}
+              onAction={handlePointerAction}
               onBack={goBack}
             />
           ) : (

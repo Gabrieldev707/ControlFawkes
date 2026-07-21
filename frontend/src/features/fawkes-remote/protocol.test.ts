@@ -144,6 +144,29 @@ describe('protocol v1 runtime validation', () => {
     expect(isErrorCode('SYSTEM_VOLUME_FAILED')).toBe(true)
   })
 
+  it('accepts only allowlisted pointer-control confirmations', () => {
+    const message = {
+      protocolVersion: 1,
+      type: 'COMMAND_RESULT',
+      requestId: 'pointer-1',
+      success: true,
+      message: 'Comando do touchpad executado.',
+      data: {
+        intent: 'POINTER_CONTROL',
+        action: 'POINTER_CLICK',
+        executed: true,
+      },
+    }
+
+    expect(isServerMessage(message)).toBe(true)
+    expect(isServerMessage({
+      ...message,
+      data: { ...message.data, action: 'POINTER_ABSOLUTE_MOVE' },
+    })).toBe(false)
+    expect(isErrorCode('POINTER_CONTROL_FAILED')).toBe(true)
+    expect(isErrorCode('POINTER_RATE_LIMITED')).toBe(true)
+  })
+
   it('accepts only the closed error-code set', () => {
     expect(isErrorCode('PIN_EXPIRED')).toBe(true)
     expect(isErrorCode('PLATFORM_OPEN_FAILED')).toBe(true)
