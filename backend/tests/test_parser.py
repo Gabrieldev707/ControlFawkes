@@ -14,21 +14,42 @@ from app.commands.parser import (
     [
         ("abre netflix", "NETFLIX"),
         ("abrir netflix", "NETFLIX"),
+        ("abrir a netflix", "NETFLIX"),
         ("coloca netflix", "NETFLIX"),
         ("vai para netflix", "NETFLIX"),
+        ("vai pra netflix", "NETFLIX"),
+        ("inicia netflix", "NETFLIX"),
         ("abre max", "MAX"),
         ("abre hbo max", "MAX"),
         ("abrir a max", "MAX"),
+        ("abrir hbo", "MAX"),
+        ("coloca max", "MAX"),
         ("abre prime", "PRIME_VIDEO"),
         ("abre prime video", "PRIME_VIDEO"),
         ("abre amazon prime", "PRIME_VIDEO"),
+        ("abrir prime video", "PRIME_VIDEO"),
         ("abre disney", "DISNEY_PLUS"),
         ("abre disney plus", "DISNEY_PLUS"),
         ("abre disney+", "DISNEY_PLUS"),
+        ("abrir disney plus", "DISNEY_PLUS"),
         ("abre youtube", "YOUTUBE"),
+        ("abrir youtube", "YOUTUBE"),
         ("vai pro youtube", "YOUTUBE"),
+        ("coloca youtube", "YOUTUBE"),
         ("abre spotify", "SPOTIFY"),
+        ("abrir spotify", "SPOTIFY"),
+        ("abrir o spotify", "SPOTIFY"),
         ("coloca spotify", "SPOTIFY"),
+        ("bota spotify", "SPOTIFY"),
+        ("botar spotify", "SPOTIFY"),
+        ("inicia spotify", "SPOTIFY"),
+        ("iniciar spotify", "SPOTIFY"),
+        ("quero spotify", "SPOTIFY"),
+        ("vai pro spotify", "SPOTIFY"),
+        ("vai para o spotify", "SPOTIFY"),
+        ("coloca uma música no spotify", "SPOTIFY"),
+        ("toca spotify", "SPOTIFY"),
+        ("  ABRIR, O   SPOTIFY!!!  ", "SPOTIFY"),
     ],
 )
 def test_known_platform_commands(command, platform):
@@ -47,6 +68,10 @@ def test_normalization_removes_accents_and_extra_spaces():
     assert normalize_command("  O   QUE   VOCÊ faz  ") == "o que voce faz"
 
 
+def test_normalization_removes_punctuation_and_expands_plus_symbol():
+    assert normalize_command(" Abrir: Disney+!!! ") == "abrir disney plus"
+
+
 @pytest.mark.parametrize(
     "command",
     [
@@ -54,6 +79,7 @@ def test_normalization_removes_accents_and_extra_spaces():
         "abre https://example.com",
         "desliga o computador",
         "powershell shutdown",
+        "abre spotify e desliga o computador",
         "",
     ],
 )
