@@ -1,6 +1,6 @@
 import pytest
 from fastapi.testclient import TestClient
-from unittest.mock import Mock, call
+from unittest.mock import AsyncMock, Mock, call
 
 from app.api import websocket as websocket_module
 from app.main import app
@@ -8,6 +8,7 @@ from app.protocol.dispatcher import Dispatcher
 from app.security.device_store import DeviceStore
 from app.security.pairing import PairingService
 from app.media.windows_adapter import WindowsMediaAdapter
+from app.windows.volume import VolumeState, WindowsVolumeAdapter, WindowsVolumeError
 
 
 @pytest.fixture
@@ -25,7 +26,23 @@ def windows_key_event_mock(monkeypatch):
 
 
 @pytest.fixture
-def dispatcher(tmp_path, monkeypatch, browser_open_mock, windows_key_event_mock):
+def volume_adapter_mock():
+    adapter = AsyncMock(spec=WindowsVolumeAdapter)
+    adapter.get_state.return_value = VolumeState(level=42, muted=False)
+    adapter.set_level.return_value = VolumeState(level=73, muted=False)
+    adapter.change_level.return_value = VolumeState(level=47, muted=False)
+    adapter.toggle_mute.return_value = VolumeState(level=42, muted=True)
+    return adapter
+
+
+@pytest.fixture
+def dispatcher(
+    tmp_path,
+    monkeypatch,
+    browser_open_mock,
+    windows_key_event_mock,
+    volume_adapter_mock,
+):
     store = DeviceStore(
         filepath=tmp_path / "paired_devices.json",
         lockpath=tmp_path / "paired_devices.lock",
@@ -34,6 +51,7 @@ def dispatcher(tmp_path, monkeypatch, browser_open_mock, windows_key_event_mock)
         device_store=store,
         pairing_service=PairingService(store),
         media_adapter=WindowsMediaAdapter(windows_key_event_mock),
+        volume_adapter=volume_adapter_mock,
     )
     monkeypatch.setattr(websocket_module, "dispatcher", instance)
     return instance
@@ -471,6 +489,125 @@ def test_media_control_reports_adapter_failure(
 
         assert error["code"] == "MEDIA_CONTROL_FAILED"
         assert error["message"] == "Controle de mídia indisponível."
+
+
+def test_volume_get_requires_authentication(client, volume_adapter_mock):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "SYSTEM_VOLUME_GET",
+            "requestId": "volume-1",
+        })
+
+        assert websocket.receive_json()["code"] == "UNAUTHORIZED"
+        volume_adapter_mock.get_state.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("message", "method", "expected_call", "expected_level", "expected_muted"),
+    [
+        ({"type": "SYSTEM_VOLUME_GET"}, "get_state", None, 42, False),
+        (
+            {"type": "SYSTEM_VOLUME_SET", "payload": {"level": 73}},
+            "set_level",
+            (73,),
+            73,
+            False,
+        ),
+        (
+            {"type": "SYSTEM_VOLUME_DELTA", "payload": {"delta": 5}},
+            "change_level",
+            (5,),
+            47,
+            False,
+        ),
+        ({"type": "SYSTEM_MUTE_TOGGLE"}, "toggle_mute", None, 42, True),
+    ],
+)
+def test_authenticated_volume_commands_return_real_adapter_state(
+    client,
+    dispatcher,
+    volume_adapter_mock,
+    message,
+    method,
+    expected_call,
+    expected_level,
+    expected_muted,
+):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "requestId": "volume-1",
+            **message,
+        })
+
+        result = websocket.receive_json()
+
+        assert result["data"] == {
+            "intent": "SYSTEM_VOLUME",
+            "action": message["type"],
+            "level": expected_level,
+            "muted": expected_muted,
+            "executed": True,
+        }
+        mocked_method = getattr(volume_adapter_mock, method)
+        if expected_call is None:
+            mocked_method.assert_awaited_once_with()
+        else:
+            mocked_method.assert_awaited_once_with(*expected_call)
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        {"type": "SYSTEM_VOLUME_SET", "payload": {"level": -1}},
+        {"type": "SYSTEM_VOLUME_SET", "payload": {"level": 101}},
+        {"type": "SYSTEM_VOLUME_SET", "payload": {"level": True}},
+        {"type": "SYSTEM_VOLUME_DELTA", "payload": {"delta": 10}},
+        {"type": "SYSTEM_VOLUME_DELTA", "payload": {"delta": 0}},
+        {"type": "SYSTEM_MUTE_TOGGLE", "payload": {"muted": True}},
+    ],
+)
+def test_volume_commands_reject_out_of_allowlist_payloads(
+    client,
+    dispatcher,
+    volume_adapter_mock,
+    message,
+):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "requestId": "volume-1",
+            **message,
+        })
+
+        assert websocket.receive_json()["code"] == "INVALID_PAYLOAD"
+        volume_adapter_mock.get_state.assert_not_awaited()
+        volume_adapter_mock.set_level.assert_not_awaited()
+        volume_adapter_mock.change_level.assert_not_awaited()
+        volume_adapter_mock.toggle_mute.assert_not_awaited()
+
+
+def test_volume_command_reports_native_failure(client, dispatcher, volume_adapter_mock):
+    volume_adapter_mock.get_state.side_effect = WindowsVolumeError("unavailable")
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "SYSTEM_VOLUME_GET",
+            "requestId": "volume-1",
+        })
+
+        error = websocket.receive_json()
+        assert error["code"] == "SYSTEM_VOLUME_FAILED"
+        assert error["message"] == "Controle de volume indisponível."
 
 
 def test_authenticated_invalid_platform_is_rejected(client, dispatcher):

@@ -1,9 +1,16 @@
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictInt
 
 from app.schemas.auth import AuthMessage, PairDeviceMessage
 from app.media.actions import MediaAction
+from app.schemas.volume import (
+    VolumeAction,
+    VolumeDeltaMessage,
+    VolumeGetMessage,
+    VolumeMuteToggleMessage,
+    VolumeSetMessage,
+)
 
 
 ProtocolVersion = Literal[1]
@@ -31,6 +38,7 @@ ErrorCode = Literal[
     "PROTOCOL_VERSION_MISMATCH",
     "PLATFORM_OPEN_FAILED",
     "MEDIA_CONTROL_FAILED",
+    "SYSTEM_VOLUME_FAILED",
     "INTERNAL_ERROR",
 ]
 
@@ -78,7 +86,11 @@ ClientMessage = Annotated[
     | PairDeviceMessage
     | PlatformSelectedMessage
     | TextCommandMessage
-    | MediaControlMessage,
+    | MediaControlMessage
+    | VolumeGetMessage
+    | VolumeSetMessage
+    | VolumeDeltaMessage
+    | VolumeMuteToggleMessage,
     Field(discriminator="type"),
 ]
 
@@ -116,6 +128,16 @@ class MediaCommandData(BaseModel):
     executed: Literal[True] = True
 
 
+class VolumeCommandData(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    intent: Literal["SYSTEM_VOLUME"] = "SYSTEM_VOLUME"
+    action: VolumeAction
+    level: StrictInt = Field(ge=0, le=100)
+    muted: bool
+    executed: Literal[True] = True
+
+
 class CommandResultMessage(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -124,7 +146,7 @@ class CommandResultMessage(BaseModel):
     requestId: str
     success: Literal[True] = True
     message: str
-    data: PlatformCommandData | HelpCommandData | MediaCommandData
+    data: PlatformCommandData | HelpCommandData | MediaCommandData | VolumeCommandData
 
 
 class ErrorMessage(BaseModel):

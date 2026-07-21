@@ -62,6 +62,7 @@ export const ERROR_CODES = [
   'PROTOCOL_VERSION_MISMATCH',
   'PLATFORM_OPEN_FAILED',
   'MEDIA_CONTROL_FAILED',
+  'SYSTEM_VOLUME_FAILED',
   'INTERNAL_ERROR',
 ] as const
 
@@ -108,12 +109,43 @@ export interface MediaControlMessage extends ClientMessageBase {
   type: MediaAction
 }
 
+export const VOLUME_ACTIONS = [
+  'SYSTEM_VOLUME_GET',
+  'SYSTEM_VOLUME_SET',
+  'SYSTEM_VOLUME_DELTA',
+  'SYSTEM_MUTE_TOGGLE',
+] as const
+
+export type VolumeAction = (typeof VOLUME_ACTIONS)[number]
+
+export interface VolumeGetMessage extends ClientMessageBase {
+  type: 'SYSTEM_VOLUME_GET'
+}
+
+export interface VolumeSetMessage extends ClientMessageBase {
+  type: 'SYSTEM_VOLUME_SET'
+  payload: { level: number }
+}
+
+export interface VolumeDeltaMessage extends ClientMessageBase {
+  type: 'SYSTEM_VOLUME_DELTA'
+  payload: { delta: -5 | 5 }
+}
+
+export interface VolumeMuteToggleMessage extends ClientMessageBase {
+  type: 'SYSTEM_MUTE_TOGGLE'
+}
+
 export type ClientMessage =
   | AuthMessage
   | PairDeviceMessage
   | PlatformSelectedMessage
   | TextCommandMessage
   | MediaControlMessage
+  | VolumeGetMessage
+  | VolumeSetMessage
+  | VolumeDeltaMessage
+  | VolumeMuteToggleMessage
 
 export interface StateUpdateMessage {
   protocolVersion: ProtocolVersion
@@ -158,13 +190,21 @@ export interface MediaCommandData {
   executed: true
 }
 
+export interface VolumeCommandData {
+  intent: 'SYSTEM_VOLUME'
+  action: VolumeAction
+  level: number
+  muted: boolean
+  executed: true
+}
+
 export interface CommandResultMessage {
   protocolVersion: ProtocolVersion
   type: 'COMMAND_RESULT'
   requestId: string
   success: true
   message: string
-  data: PlatformCommandData | HelpCommandData | MediaCommandData
+  data: PlatformCommandData | HelpCommandData | MediaCommandData | VolumeCommandData
 }
 
 export interface ErrorMessage {

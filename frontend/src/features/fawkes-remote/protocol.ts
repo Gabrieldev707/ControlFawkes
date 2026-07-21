@@ -1,6 +1,7 @@
 import {
   ERROR_CODES,
   MEDIA_ACTIONS,
+  VOLUME_ACTIONS,
   isPlatform,
   type ErrorCode,
   type ServerMessage,
@@ -63,6 +64,20 @@ function isMediaData(value: unknown): boolean {
     && value.executed === true
 }
 
+function isVolumeData(value: unknown): boolean {
+  return isRecord(value)
+    && hasOnlyKeys(value, ['intent', 'action', 'level', 'muted', 'executed'])
+    && value.intent === 'SYSTEM_VOLUME'
+    && typeof value.action === 'string'
+    && VOLUME_ACTIONS.includes(value.action as (typeof VOLUME_ACTIONS)[number])
+    && typeof value.level === 'number'
+    && Number.isInteger(value.level)
+    && value.level >= 0
+    && value.level <= 100
+    && typeof value.muted === 'boolean'
+    && value.executed === true
+}
+
 export function isServerMessage(value: unknown): value is ServerMessage {
   if (!isRecord(value) || value.protocolVersion !== 1 || typeof value.type !== 'string') {
     return false
@@ -97,7 +112,12 @@ export function isServerMessage(value: unknown): value is ServerMessage {
         && isRequestId(value.requestId)
         && value.success === true
         && isMessage(value.message)
-        && (isPlatformData(value.data) || isHelpData(value.data) || isMediaData(value.data))
+        && (
+          isPlatformData(value.data)
+          || isHelpData(value.data)
+          || isMediaData(value.data)
+          || isVolumeData(value.data)
+        )
     case 'ERROR':
       return hasOnlyKeys(value, ['protocolVersion', 'type', 'requestId', 'code', 'message'])
         && isRequestId(value.requestId)

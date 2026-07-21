@@ -3,13 +3,12 @@ import {
   Keyboard,
   MousePointer2,
   Settings,
-  Volume2,
 } from 'lucide-react'
 
 import type { NavigableScreen } from '../../state/currentScreen'
 
 
-type FeatureScreen = Exclude<NavigableScreen, 'HOME' | 'PLATFORMS' | 'REMOTE_CONTROL'>
+type FeatureScreen = Exclude<NavigableScreen, 'HOME' | 'PLATFORMS' | 'REMOTE_CONTROL' | 'VOLUME'>
 
 interface RemoteFeatureScreenProps {
   screen: FeatureScreen
@@ -26,11 +25,6 @@ const SCREEN_CONTENT = {
     title: 'Teclado',
     description: 'A entrada remota de texto será adicionada com validação e limites próprios.',
     icon: Keyboard,
-  },
-  VOLUME: {
-    title: 'Volume',
-    description: 'O volume do Windows será conectado por um adaptador isolado e testável.',
-    icon: Volume2,
   },
   SETTINGS: {
     title: 'Configurações',

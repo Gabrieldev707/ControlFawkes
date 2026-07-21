@@ -7,6 +7,7 @@ import type {
   Platform,
   ServerMessage,
   ServerState,
+  VolumeAction,
 } from './types'
 import { PROTOCOL_VERSION } from './types'
 import { useWebSocket } from '../../hooks/useWebSocket'
@@ -17,6 +18,7 @@ import { RemoteNavigation } from '../../components/navigation/RemoteNavigation'
 import { RemoteFeatureScreen } from '../../pages/remote/RemoteFeatureScreen'
 import { PlatformsScreen } from '../../pages/remote/PlatformsScreen'
 import { RemoteControlScreen } from '../../pages/remote/RemoteControlScreen'
+import { VolumeScreen } from '../../pages/remote/VolumeScreen'
 import {
   AuthenticationStatus,
   ConnectionStatus,
@@ -52,11 +54,15 @@ export const FawkesRemotePage: React.FC = () => {
   const [statusMessage, setStatusMessage] = useState('Conectando ao computador...')
   const [statusError, setStatusError] = useState(false)
   const [currentMediaAction, setCurrentMediaAction] = useState<MediaAction | null>(null)
+  const [currentVolumeAction, setCurrentVolumeAction] = useState<VolumeAction | null>(null)
+  const [volumeLevel, setVolumeLevel] = useState<number | null>(null)
+  const [volumeMuted, setVolumeMuted] = useState(false)
   const { currentScreen, navigate, goBack } = useRemoteNavigation()
 
   const currentRequestId = useRef<string | null>(null)
   const successTimeoutRef = useRef<number | null>(null)
   const hasSentAuthThisConnection = useRef(false)
+  const hasLoadedVolumeScreen = useRef(false)
 
   const handleMessage = useCallback((message: ServerMessage) => {
     if (message.type === 'STATE_UPDATE') {
@@ -123,6 +129,10 @@ export const FawkesRemotePage: React.FC = () => {
     if ('requestId' in message && message.requestId !== currentRequestId.current) return
 
     if (message.type === 'COMMAND_RESULT') {
+      if (message.data.intent === 'SYSTEM_VOLUME') {
+        setVolumeLevel(message.data.level)
+        setVolumeMuted(message.data.muted)
+      }
       setOrbState('success')
       setStatusMessage(message.message)
       setStatusError(false)
@@ -131,6 +141,7 @@ export const FawkesRemotePage: React.FC = () => {
         setOrbState('idle')
         setSelectedPlatform(null)
         setCurrentMediaAction(null)
+        setCurrentVolumeAction(null)
         currentRequestId.current = null
         setStatusMessage('Computador pronto.')
       }, 2000)
@@ -146,6 +157,7 @@ export const FawkesRemotePage: React.FC = () => {
         setOrbState('idle')
         setSelectedPlatform(null)
         setCurrentMediaAction(null)
+        setCurrentVolumeAction(null)
         currentRequestId.current = null
         setStatusMessage('Computador pronto.')
         setStatusError(false)
@@ -158,6 +170,7 @@ export const FawkesRemotePage: React.FC = () => {
   useEffect(() => {
     if (connectionState !== 'connected') {
       hasSentAuthThisConnection.current = false
+      hasLoadedVolumeScreen.current = false
       setServerState(null)
       setStatusMessage(
         connectionState === 'connecting'
@@ -280,6 +293,66 @@ export const FawkesRemotePage: React.FC = () => {
     }
   }
 
+  const handleVolumeAction = useCallback((
+    action: VolumeAction,
+    value?: number | -5 | 5,
+  ) => {
+    if (controlsDisabled) return
+    if (successTimeoutRef.current) clearTimeout(successTimeoutRef.current)
+
+    const requestId = generateRequestId()
+    currentRequestId.current = requestId
+    setCurrentVolumeAction(action)
+    setOrbState('executing')
+    setStatusMessage(action === 'SYSTEM_VOLUME_GET' ? 'Carregando volume...' : 'Ajustando volume...')
+    setStatusError(false)
+
+    const message = action === 'SYSTEM_VOLUME_SET'
+      ? {
+          protocolVersion: PROTOCOL_VERSION,
+          type: action,
+          requestId,
+          payload: { level: value as number },
+        }
+      : action === 'SYSTEM_VOLUME_DELTA'
+        ? {
+            protocolVersion: PROTOCOL_VERSION,
+            type: action,
+            requestId,
+            payload: { delta: value as -5 | 5 },
+          }
+        : {
+            protocolVersion: PROTOCOL_VERSION,
+            type: action,
+            requestId,
+          }
+
+    const accepted = sendMessage(message)
+    if (!accepted) {
+      currentRequestId.current = null
+      setCurrentVolumeAction(null)
+      setOrbState('error')
+      setStatusMessage('Conexão indisponível. Tente novamente.')
+      setStatusError(true)
+    }
+  }, [controlsDisabled, sendMessage])
+
+  useEffect(() => {
+    if (currentScreen !== 'VOLUME') {
+      hasLoadedVolumeScreen.current = false
+      return
+    }
+    if (
+      hasLoadedVolumeScreen.current
+      || connectionState !== 'connected'
+      || authState !== 'authenticated'
+      || serverState !== 'READY'
+    ) return
+
+    hasLoadedVolumeScreen.current = true
+    handleVolumeAction('SYSTEM_VOLUME_GET')
+  }, [currentScreen, connectionState, authState, serverState, handleVolumeAction])
+
   const attemptPairing = (pin: string) => {
     setPairingMessage('')
     const accepted = sendMessage({
@@ -368,6 +441,19 @@ export const FawkesRemotePage: React.FC = () => {
               statusMessage={statusMessage}
               statusError={statusError}
               onSelect={handlePlatformSelect}
+              onBack={goBack}
+            />
+          ) : currentScreen === 'VOLUME' ? (
+            <VolumeScreen
+              disabled={controlsDisabled}
+              loading={currentVolumeAction !== null && orbState === 'executing'}
+              level={volumeLevel}
+              muted={volumeMuted}
+              statusMessage={statusMessage}
+              statusError={statusError}
+              onSetLevel={(level) => handleVolumeAction('SYSTEM_VOLUME_SET', level)}
+              onDelta={(delta) => handleVolumeAction('SYSTEM_VOLUME_DELTA', delta)}
+              onToggleMute={() => handleVolumeAction('SYSTEM_MUTE_TOGGLE')}
               onBack={goBack}
             />
           ) : (

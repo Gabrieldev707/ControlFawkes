@@ -382,4 +382,62 @@ describe('FawkesRemotePage authentication', () => {
       requestId: expect.any(String),
     })
   })
+
+  it('loads and changes the real Windows volume through bounded messages', () => {
+    render(<FawkesRemotePage />)
+    act(() => {
+      websocketMock.onMessage?.({
+        protocolVersion: 1,
+        type: 'PAIR_RESULT',
+        requestId: 'pair-1',
+        success: true,
+        message: 'Pareamento concluído.',
+        deviceId: 'device-1',
+        token: 'new-secure-token-value',
+      })
+      websocketMock.onMessage?.({
+        protocolVersion: 1,
+        type: 'STATE_UPDATE',
+        state: 'READY',
+        message: 'Computador pronto.',
+      })
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Volume' }))
+    const getMessage = websocketMock.sendMessage.mock.calls
+      .map(([message]) => message as Record<string, unknown>)
+      .find((message) => message.type === 'SYSTEM_VOLUME_GET')
+    expect(getMessage).toMatchObject({
+      protocolVersion: 1,
+      type: 'SYSTEM_VOLUME_GET',
+      requestId: expect.any(String),
+    })
+
+    act(() => {
+      websocketMock.onMessage?.({
+        protocolVersion: 1,
+        type: 'COMMAND_RESULT',
+        requestId: getMessage?.requestId as string,
+        success: true,
+        message: 'Volume: 42%.',
+        data: {
+          intent: 'SYSTEM_VOLUME',
+          action: 'SYSTEM_VOLUME_GET',
+          level: 42,
+          muted: false,
+          executed: true,
+        },
+      })
+    })
+
+    const slider = screen.getByRole('slider', { name: 'Volume do computador' })
+    expect((slider as HTMLInputElement).value).toBe('42')
+    fireEvent.change(slider, { target: { value: '73' } })
+    expect(websocketMock.sendMessage).toHaveBeenCalledWith({
+      protocolVersion: 1,
+      type: 'SYSTEM_VOLUME_SET',
+      requestId: expect.any(String),
+      payload: { level: 73 },
+    })
+  })
 })

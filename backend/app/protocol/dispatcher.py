@@ -22,6 +22,11 @@ from app.schemas.ws import (
     PlatformSelectedMessage,
     StateUpdateMessage,
     TextCommandMessage,
+    VolumeCommandData,
+    VolumeDeltaMessage,
+    VolumeGetMessage,
+    VolumeMuteToggleMessage,
+    VolumeSetMessage,
 )
 from app.commands.parser import (
     HELP_COMMANDS,
@@ -35,6 +40,8 @@ from app.security.pairing import PairingService
 from app.platforms.launcher import PlatformLauncher
 from app.media.actions import MEDIA_ACTIONS, MEDIA_ACTION_MESSAGES
 from app.media.windows_adapter import WindowsMediaAdapter
+from app.schemas.volume import VOLUME_ACTIONS
+from app.windows.volume import WindowsVolumeAdapter, WindowsVolumeError
 
 
 KNOWN_CLIENT_TYPES = {
@@ -43,6 +50,7 @@ KNOWN_CLIENT_TYPES = {
     "PLATFORM_SELECTED",
     "TEXT_COMMAND",
     *MEDIA_ACTIONS,
+    *VOLUME_ACTIONS,
 }
 
 
@@ -53,11 +61,13 @@ class Dispatcher:
         pairing_service: PairingService | None = None,
         platform_launcher: PlatformLauncher | None = None,
         media_adapter: WindowsMediaAdapter | None = None,
+        volume_adapter: WindowsVolumeAdapter | None = None,
     ) -> None:
         self.device_store = device_store or DeviceStore()
         self.pairing_service = pairing_service or PairingService(self.device_store)
         self.platform_launcher = platform_launcher or PlatformLauncher()
         self.media_adapter = media_adapter or WindowsMediaAdapter()
+        self.volume_adapter = volume_adapter or WindowsVolumeAdapter()
         self._client_adapter = TypeAdapter(ClientMessage)
         self._authenticated: dict[WebSocket, str] = {}
 
@@ -159,6 +169,13 @@ class Dispatcher:
             await self._handle_media_control(websocket, message)
             return
 
+        if isinstance(
+            message,
+            (VolumeGetMessage, VolumeSetMessage, VolumeDeltaMessage, VolumeMuteToggleMessage),
+        ):
+            await self._handle_volume_control(websocket, message)
+            return
+
         await self._send_error(
             websocket,
             message.requestId,
@@ -238,6 +255,48 @@ class Dispatcher:
             requestId=message.requestId,
             message=MEDIA_ACTION_MESSAGES[message.type],
             data=MediaCommandData(action=message.type),
+        )
+        await websocket.send_json(response.model_dump())
+
+    async def _handle_volume_control(
+        self,
+        websocket: WebSocket,
+        message: VolumeGetMessage
+        | VolumeSetMessage
+        | VolumeDeltaMessage
+        | VolumeMuteToggleMessage,
+    ) -> None:
+        try:
+            if isinstance(message, VolumeGetMessage):
+                state = await self.volume_adapter.get_state()
+            elif isinstance(message, VolumeSetMessage):
+                state = await self.volume_adapter.set_level(message.payload.level)
+            elif isinstance(message, VolumeDeltaMessage):
+                state = await self.volume_adapter.change_level(message.payload.delta)
+            else:
+                state = await self.volume_adapter.toggle_mute()
+        except WindowsVolumeError:
+            await self._send_error(
+                websocket,
+                message.requestId,
+                "SYSTEM_VOLUME_FAILED",
+                "Controle de volume indisponível.",
+            )
+            return
+
+        response_message = (
+            f"Mudo {'ativado' if state.muted else 'desativado'}. Volume: {state.level}%."
+            if isinstance(message, VolumeMuteToggleMessage)
+            else f"Volume: {state.level}%."
+        )
+        response = CommandResultMessage(
+            requestId=message.requestId,
+            message=response_message,
+            data=VolumeCommandData(
+                action=message.type,
+                level=state.level,
+                muted=state.muted,
+            ),
         )
         await websocket.send_json(response.model_dump())
 
