@@ -18,18 +18,18 @@ describe('Fawkes orb themes', () => {
     expect(Object.fromEntries(
       Object.entries(ORB_THEMES).map(([state, theme]) => [state, theme.brightness]),
     )).toEqual({
-      idle: 1,
-      listening: 1,
-      transcribing: 1,
-      needs_selection: 1,
-      executing: 1,
-      success: 1,
-      error: 0.94,
+      idle: 1.08,
+      listening: 1.1,
+      transcribing: 1.08,
+      needs_selection: 1.06,
+      executing: 1.1,
+      success: 1.1,
+      error: 1.02,
     })
 
     for (const theme of Object.values(ORB_THEMES)) {
-      expect(theme.brightness).toBeGreaterThanOrEqual(0.94)
-      expect(theme.brightness).toBeLessThanOrEqual(1)
+      expect(theme.brightness).toBeGreaterThanOrEqual(1.02)
+      expect(theme.brightness).toBeLessThanOrEqual(1.1)
     }
   })
 
