@@ -84,8 +84,33 @@ describe('protocol v1 runtime validation', () => {
         intent: 'OPEN_PLATFORM',
         platform: 'SPOTIFY',
         executed: true,
+        strategy: 'SPOTIFY_APP',
       },
     })).toBe(true)
+  })
+
+  it('rejects platform success without a known launch strategy', () => {
+    const base = {
+      protocolVersion: 1,
+      type: 'COMMAND_RESULT',
+      requestId: 'platform-1',
+      success: true,
+      message: 'Spotify aberto.',
+    }
+
+    expect(isServerMessage({
+      ...base,
+      data: { intent: 'OPEN_PLATFORM', platform: 'SPOTIFY', executed: true },
+    })).toBe(false)
+    expect(isServerMessage({
+      ...base,
+      data: {
+        intent: 'OPEN_PLATFORM',
+        platform: 'SPOTIFY',
+        executed: true,
+        strategy: 'DEFAULT_BROWSER',
+      },
+    })).toBe(false)
   })
 
   it('accepts an allowlisted media-control result', () => {

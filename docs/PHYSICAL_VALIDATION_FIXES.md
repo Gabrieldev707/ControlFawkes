@@ -32,3 +32,11 @@ Esta rodada registra ajustes derivados do teste físico no iPhone. Cada seção 
 - Segurança: Netflix, Max, Prime Video, Disney+ e YouTube são resolvidos exclusivamente pelo registry do backend. URL arbitrária é recusada antes da localização ou criação de processo.
 - Erros: Chrome ausente retorna `PLATFORM_OPEN_FAILED` com mensagem específica; falha de processo não declara sucesso.
 - Verificação automatizada: 20 testes direcionados aprovados com locator e processo simulados. Nenhum Chrome real foi iniciado; validação física permanece pendente.
+
+## 5. Spotify com preferência pelo aplicativo
+
+- Causa raiz: Spotify ainda usava o navegador padrão diretamente, sem tentar o aplicativo instalado e sem informar como a abertura ocorreu.
+- Correção: o launcher tenta primeiro o URI oficial `spotify:`; se o protocolo não estiver disponível, abre `https://open.spotify.com` no Chrome.
+- Protocolo: todo `OPEN_PLATFORM` bem-sucedido informa `CHROME`, `SPOTIFY_APP` ou `SPOTIFY_WEB_CHROME`. Estratégia ausente ou desconhecida é rejeitada no frontend.
+- Falha segura: se aplicativo e Chrome falharem, o backend retorna erro e não declara execução.
+- Verificação automatizada: launchers, fallback, integração WebSocket, validação runtime, lint e build aprovados com mocks. Nenhum Spotify ou Chrome real foi iniciado; validação física permanece pendente.

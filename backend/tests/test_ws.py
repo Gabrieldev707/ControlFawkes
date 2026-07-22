@@ -13,19 +13,23 @@ from app.input.pointer import PointerRateLimiter, WindowsPointerAdapter
 from app.input.keyboard import WindowsKeyboardAdapter
 from app.platforms.browser import BrowserLaunchResult, BrowserLauncher
 from app.platforms.launcher import PlatformLauncher
-
-
-@pytest.fixture
-def browser_open_mock(monkeypatch):
-    opener = Mock(return_value=True)
-    monkeypatch.setattr("webbrowser.open", opener)
-    return opener
+from app.platforms.spotify import SpotifyLauncher
 
 
 @pytest.fixture
 def browser_launcher_mock():
     launcher = Mock(spec=BrowserLauncher)
     launcher.open.return_value = BrowserLaunchResult(executed=True, strategy="CHROME")
+    return launcher
+
+
+@pytest.fixture
+def spotify_launcher_mock():
+    launcher = Mock(spec=SpotifyLauncher)
+    launcher.open.return_value = BrowserLaunchResult(
+        executed=True,
+        strategy="SPOTIFY_APP",
+    )
     return launcher
 
 
@@ -71,8 +75,8 @@ def keyboard_adapter_mock():
 def dispatcher(
     tmp_path,
     monkeypatch,
-    browser_open_mock,
     browser_launcher_mock,
+    spotify_launcher_mock,
     windows_key_event_mock,
     volume_adapter_mock,
     pointer_adapter_mock,
@@ -87,7 +91,7 @@ def dispatcher(
         pairing_service=PairingService(store),
         platform_launcher=PlatformLauncher(
             browser_launcher=browser_launcher_mock,
-            spotify_opener=browser_open_mock,
+            spotify_launcher=spotify_launcher_mock,
         ),
         media_adapter=WindowsMediaAdapter(windows_key_event_mock),
         volume_adapter=volume_adapter_mock,
@@ -312,7 +316,6 @@ def test_websocket_rejects_invalid_and_revoked_tokens(client, dispatcher):
 def test_authenticated_streaming_selection_opens_only_the_official_url(
     client,
     dispatcher,
-    browser_open_mock,
     browser_launcher_mock,
     platform,
     label,
@@ -340,16 +343,16 @@ def test_authenticated_streaming_selection_opens_only_the_official_url(
                 "intent": "OPEN_PLATFORM",
                 "platform": platform,
                 "executed": True,
+                "strategy": "CHROME",
             },
         }
         browser_launcher_mock.open.assert_called_once_with(url)
-        browser_open_mock.assert_not_called()
 
 
 def test_authenticated_spotify_selection_opens_only_the_official_url(
     client,
     dispatcher,
-    browser_open_mock,
+    spotify_launcher_mock,
 ):
     with client.websocket_connect("/ws") as websocket:
         receive_auth_required(websocket)
@@ -373,13 +376,10 @@ def test_authenticated_spotify_selection_opens_only_the_official_url(
                 "intent": "OPEN_PLATFORM",
                 "platform": "SPOTIFY",
                 "executed": True,
+                "strategy": "SPOTIFY_APP",
             },
         }
-        browser_open_mock.assert_called_once_with(
-            "https://open.spotify.com",
-            new=2,
-            autoraise=True,
-        )
+        spotify_launcher_mock.open.assert_called_once_with()
 
 
 @pytest.mark.parametrize(
@@ -396,13 +396,16 @@ def test_authenticated_spotify_selection_opens_only_the_official_url(
 def test_platform_open_failure_returns_a_real_error(
     client,
     dispatcher,
-    browser_open_mock,
     browser_launcher_mock,
+    spotify_launcher_mock,
     platform,
     label,
 ):
     if platform == "SPOTIFY":
-        browser_open_mock.return_value = False
+        spotify_launcher_mock.open.return_value = BrowserLaunchResult(
+            executed=False,
+            error="SPOTIFY_LAUNCH_FAILED",
+        )
     else:
         browser_launcher_mock.open.return_value = BrowserLaunchResult(
             executed=False,
@@ -459,7 +462,8 @@ def test_chrome_not_found_returns_a_specific_real_error(
 def test_platform_selection_rejects_a_frontend_supplied_url(
     client,
     dispatcher,
-    browser_open_mock,
+    browser_launcher_mock,
+    spotify_launcher_mock,
 ):
     with client.websocket_connect("/ws") as websocket:
         receive_auth_required(websocket)
@@ -475,7 +479,8 @@ def test_platform_selection_rejects_a_frontend_supplied_url(
         })
 
         assert websocket.receive_json()["code"] == "INVALID_PAYLOAD"
-        browser_open_mock.assert_not_called()
+        browser_launcher_mock.open.assert_not_called()
+        spotify_launcher_mock.open.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -993,7 +998,7 @@ def test_health_endpoint_remains_available(client):
 def test_authenticated_spotify_text_command_is_executed(
     client,
     dispatcher,
-    browser_open_mock,
+    spotify_launcher_mock,
 ):
     with client.websocket_connect("/ws") as websocket:
         receive_auth_required(websocket)
@@ -1020,14 +1025,11 @@ def test_authenticated_spotify_text_command_is_executed(
                 "intent": "OPEN_PLATFORM",
                 "platform": "SPOTIFY",
                 "executed": True,
+                "strategy": "SPOTIFY_APP",
             },
         }
         assert ready["state"] == "READY"
-        browser_open_mock.assert_called_once_with(
-            "https://open.spotify.com",
-            new=2,
-            autoraise=True,
-        )
+        spotify_launcher_mock.open.assert_called_once_with()
 
 
 def test_authenticated_help_command_returns_supported_examples(client, dispatcher):

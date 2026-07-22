@@ -32,6 +32,8 @@ Os adapters recebem dependências injetáveis. A suíte automatizada fornece moc
 portanto não abre navegador, não altera volume, não move ponteiro e não digita.
 As plataformas web usam o executável do Google Chrome sem perfil temporário ou
 modo anônimo, preservando a sessão local já autenticada do usuário.
+O Spotify tenta primeiro o protocolo oficial do aplicativo e usa o mesmo
+`BrowserLauncher` como fallback web, retornando a estratégia realmente aceita.
 
 ## Frontend
 

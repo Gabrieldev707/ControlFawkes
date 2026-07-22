@@ -37,6 +37,10 @@ Intents de resultado: `OPEN_PLATFORM`, `SHOW_HELP`, `MEDIA_CONTROL`,
 `SYSTEM_VOLUME`, `POINTER_CONTROL` e `KEYBOARD_CONTROL`. Resultados de teclado
 não ecoam texto ou tecla.
 
+`OPEN_PLATFORM` executado inclui `strategy`: `CHROME`, `SPOTIFY_APP` ou
+`SPOTIFY_WEB_CHROME`. Ausência do aplicativo e falha do fallback retornam erro,
+nunca um resultado de sucesso presumido.
+
 ## Erros funcionais
 
 Além dos erros de JSON, autenticação, versão e payload, cada integração possui

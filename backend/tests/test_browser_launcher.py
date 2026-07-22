@@ -4,6 +4,7 @@ from unittest.mock import Mock
 from app.platforms.browser import BrowserLaunchResult, BrowserLauncher, ChromeLocator
 from app.platforms.launcher import PlatformLauncher
 from app.platforms.registry import PLATFORM_URLS
+from app.platforms.spotify import SpotifyLauncher
 
 
 def test_chrome_locator_uses_standard_windows_installation_without_personal_paths():
@@ -79,8 +80,8 @@ def test_browser_launcher_does_not_claim_success_when_process_creation_fails():
 def test_platform_launcher_routes_web_platforms_through_browser_launcher():
     browser = Mock(spec=BrowserLauncher)
     browser.open.return_value = BrowserLaunchResult(executed=True, strategy="CHROME")
-    spotify_opener = Mock(return_value=True)
-    launcher = PlatformLauncher(browser_launcher=browser, spotify_opener=spotify_opener)
+    spotify = Mock(spec=SpotifyLauncher)
+    launcher = PlatformLauncher(browser_launcher=browser, spotify_launcher=spotify)
 
     platforms = ("YOUTUBE", "NETFLIX", "MAX", "PRIME_VIDEO", "DISNEY_PLUS")
     for platform in platforms:
@@ -91,4 +92,21 @@ def test_platform_launcher_routes_web_platforms_through_browser_launcher():
     assert browser.open.call_args_list == [
         ((PLATFORM_URLS[platform],), {}) for platform in platforms
     ]
-    spotify_opener.assert_not_called()
+    spotify.open.assert_not_called()
+
+
+def test_platform_launcher_routes_spotify_through_app_first_launcher():
+    browser = Mock(spec=BrowserLauncher)
+    spotify = Mock(spec=SpotifyLauncher)
+    spotify.open.return_value = BrowserLaunchResult(
+        executed=True,
+        strategy="SPOTIFY_APP",
+    )
+    launcher = PlatformLauncher(browser_launcher=browser, spotify_launcher=spotify)
+
+    result = launcher.open("SPOTIFY")
+
+    assert result.executed is True
+    assert result.strategy == "SPOTIFY_APP"
+    spotify.open.assert_called_once_with()
+    browser.open.assert_not_called()

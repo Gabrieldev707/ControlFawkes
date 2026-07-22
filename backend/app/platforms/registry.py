@@ -21,3 +21,7 @@ BROWSER_PLATFORMS: frozenset[Platform] = frozenset({
 BROWSER_PLATFORM_URLS: frozenset[str] = frozenset(
     PLATFORM_URLS[platform] for platform in BROWSER_PLATFORMS
 )
+
+BROWSER_ALLOWED_URLS: frozenset[str] = (
+    BROWSER_PLATFORM_URLS | {PLATFORM_URLS["SPOTIFY"]}
+)

@@ -186,8 +186,13 @@ describe('FawkesRemotePage authentication', () => {
         type: 'COMMAND_RESULT',
         requestId,
         success: true,
-        message: 'Comando reconhecido: abrir Spotify.',
-        data: { intent: 'OPEN_PLATFORM', platform: 'SPOTIFY', executed: false },
+        message: 'Spotify aberto.',
+        data: {
+          intent: 'OPEN_PLATFORM',
+          platform: 'SPOTIFY',
+          executed: true,
+          strategy: 'SPOTIFY_APP',
+        },
       })
       websocketMock.onMessage?.({
         protocolVersion: 1,
@@ -197,7 +202,7 @@ describe('FawkesRemotePage authentication', () => {
       })
     })
 
-    expect(screen.getByText('Comando reconhecido: abrir Spotify.')).toBeTruthy()
+    expect(screen.getByText('Spotify aberto.')).toBeTruthy()
   })
 
   it('displays the backend unknown-command error as an alert', () => {

@@ -43,6 +43,14 @@ export const PLATFORMS = [
 
 export type Platform = (typeof PLATFORMS)[number]
 
+export const LAUNCH_STRATEGIES = [
+  'CHROME',
+  'SPOTIFY_APP',
+  'SPOTIFY_WEB_CHROME',
+] as const
+
+export type LaunchStrategy = (typeof LAUNCH_STRATEGIES)[number]
+
 export function isPlatform(value: unknown): value is Platform {
   return typeof value === 'string' && PLATFORMS.includes(value as Platform)
 }
@@ -236,7 +244,8 @@ export interface PairResultMessage {
 export interface PlatformCommandData {
   intent: 'OPEN_PLATFORM'
   platform: Platform
-  executed: boolean
+  executed: true
+  strategy: LaunchStrategy
 }
 
 export interface HelpCommandData {

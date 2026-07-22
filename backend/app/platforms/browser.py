@@ -5,11 +5,13 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+from typing import Literal
 
-from app.platforms.registry import BROWSER_PLATFORM_URLS
+from app.platforms.registry import BROWSER_ALLOWED_URLS
 
 
 ChromeError = str
+LaunchStrategy = Literal["CHROME", "SPOTIFY_APP", "SPOTIFY_WEB_CHROME"]
 PathExists = Callable[[Path], bool]
 RegistryReader = Callable[[], Path | None]
 WhichExecutable = Callable[[str], str | None]
@@ -19,7 +21,7 @@ ProcessStarter = Callable[[list[str]], object]
 @dataclass(frozen=True)
 class BrowserLaunchResult:
     executed: bool
-    strategy: str | None = None
+    strategy: LaunchStrategy | None = None
     error: ChromeError | None = None
 
 
@@ -100,7 +102,7 @@ class BrowserLauncher:
         self._process_starter = process_starter or _start_process
 
     def open(self, url: str) -> BrowserLaunchResult:
-        if url not in BROWSER_PLATFORM_URLS:
+        if url not in BROWSER_ALLOWED_URLS:
             return BrowserLaunchResult(executed=False, error="URL_NOT_ALLOWED")
 
         chrome = self._locator.find()

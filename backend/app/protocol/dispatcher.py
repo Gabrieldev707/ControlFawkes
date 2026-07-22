@@ -275,7 +275,7 @@ class Dispatcher:
     ) -> None:
         label = PLATFORM_LABELS[platform]
         launch = self.platform_launcher.open(platform)
-        if not launch.executed:
+        if not launch.executed or launch.strategy is None:
             error_message = (
                 "Google Chrome não foi encontrado no computador."
                 if launch.error == "CHROME_NOT_FOUND"
@@ -292,7 +292,11 @@ class Dispatcher:
         response = CommandResultMessage(
             requestId=request_id,
             message=f"{label} aberto.",
-            data=PlatformCommandData(platform=platform, executed=True),
+            data=PlatformCommandData(
+                platform=platform,
+                executed=True,
+                strategy=launch.strategy,
+            ),
         )
         await websocket.send_json(response.model_dump())
 

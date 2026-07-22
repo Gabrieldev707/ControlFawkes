@@ -1,5 +1,6 @@
 import {
   ERROR_CODES,
+  LAUNCH_STRATEGIES,
   MEDIA_ACTIONS,
   VOLUME_ACTIONS,
   POINTER_ACTIONS,
@@ -40,10 +41,12 @@ export function isErrorCode(value: unknown): value is ErrorCode {
 
 function isPlatformData(value: unknown): boolean {
   return isRecord(value)
-    && hasOnlyKeys(value, ['intent', 'platform', 'executed'])
+    && hasOnlyKeys(value, ['intent', 'platform', 'executed', 'strategy'])
     && value.intent === 'OPEN_PLATFORM'
     && isPlatform(value.platform)
-    && typeof value.executed === 'boolean'
+    && value.executed === true
+    && typeof value.strategy === 'string'
+    && LAUNCH_STRATEGIES.includes(value.strategy as (typeof LAUNCH_STRATEGIES)[number])
 }
 
 function isHelpData(value: unknown): boolean {

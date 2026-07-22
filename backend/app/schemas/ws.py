@@ -33,6 +33,7 @@ Platform = Literal[
     "YOUTUBE",
     "SPOTIFY",
 ]
+LaunchStrategy = Literal["CHROME", "SPOTIFY_APP", "SPOTIFY_WEB_CHROME"]
 ServerState = Literal["AUTH_REQUIRED", "PAIRING", "READY", "BUSY"]
 ErrorCode = Literal[
     "INVALID_JSON",
@@ -132,7 +133,8 @@ class PlatformCommandData(BaseModel):
 
     intent: Literal["OPEN_PLATFORM"] = "OPEN_PLATFORM"
     platform: Platform
-    executed: bool = False
+    executed: Literal[True] = True
+    strategy: LaunchStrategy
 
 
 class HelpCommandData(BaseModel):
