@@ -139,6 +139,8 @@ describe('protocol v1 runtime validation', () => {
       data: {
         intent: 'MEDIA_CONTROL',
         action: 'MEDIA_PLAY_PAUSE',
+        platform: 'YOUTUBE',
+        session: 'WEB',
         executed: true,
       },
     })).toBe(true)
@@ -151,10 +153,14 @@ describe('protocol v1 runtime validation', () => {
       data: {
         intent: 'MEDIA_CONTROL',
         action: 'PRESS_ARBITRARY_KEY',
+        platform: 'YOUTUBE',
+        session: 'WEB',
         executed: true,
       },
     })).toBe(false)
     expect(isErrorCode('MEDIA_CONTROL_FAILED')).toBe(true)
+    expect(isErrorCode('MEDIA_SESSION_NOT_FOUND')).toBe(true)
+    expect(isErrorCode('MEDIA_ACTION_UNSUPPORTED')).toBe(true)
   })
 
   it('accepts only bounded real Windows volume state', () => {

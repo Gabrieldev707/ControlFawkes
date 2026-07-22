@@ -8,6 +8,7 @@ from app.protocol.dispatcher import Dispatcher
 from app.security.device_store import DeviceStore
 from app.security.pairing import PairingService
 from app.media.windows_adapter import WindowsMediaAdapter
+from app.media.session import MediaSession, WindowsMediaSessionDetector
 from app.windows.volume import VolumeState, WindowsVolumeAdapter, WindowsVolumeError
 from app.input.pointer import PointerRateLimiter, WindowsPointerAdapter
 from app.input.keyboard import WindowsKeyboardAdapter
@@ -52,6 +53,13 @@ def windows_key_event_mock(monkeypatch):
 
 
 @pytest.fixture
+def media_session_detector_mock():
+    detector = Mock(spec=WindowsMediaSessionDetector)
+    detector.detect.return_value = MediaSession(platform="YOUTUBE", kind="WEB")
+    return detector
+
+
+@pytest.fixture
 def volume_adapter_mock():
     adapter = AsyncMock(spec=WindowsVolumeAdapter)
     adapter.get_state.return_value = VolumeState(level=42, muted=False)
@@ -90,6 +98,7 @@ def dispatcher(
     spotify_launcher_mock,
     media_search_launcher_mock,
     windows_key_event_mock,
+    media_session_detector_mock,
     volume_adapter_mock,
     pointer_adapter_mock,
     keyboard_adapter_mock,
@@ -107,6 +116,7 @@ def dispatcher(
         ),
         media_search_launcher=media_search_launcher_mock,
         media_adapter=WindowsMediaAdapter(windows_key_event_mock),
+        media_session_detector=media_session_detector_mock,
         volume_adapter=volume_adapter_mock,
         pointer_adapter=pointer_adapter_mock,
         pointer_rate_limiter=PointerRateLimiter(max_updates=60),
@@ -497,15 +507,15 @@ def test_platform_selection_rejects_a_frontend_supplied_url(
 
 
 @pytest.mark.parametrize(
-    ("action", "virtual_key", "message"),
+    ("action", "virtual_key"),
     [
-        ("MEDIA_PLAY_PAUSE", 0xB3, "Play/pause executado."),
-        ("MEDIA_PREVIOUS", 0xB1, "Faixa anterior executada."),
-        ("MEDIA_NEXT", 0xB0, "Próxima faixa executada."),
-        ("MEDIA_SEEK_BACK", 0x25, "Retrocesso de 10 segundos executado."),
-        ("MEDIA_SEEK_FORWARD", 0x27, "Avanço de 10 segundos executado."),
-        ("MEDIA_FULLSCREEN", 0x7A, "Fullscreen executado."),
-        ("MEDIA_EXIT_FULLSCREEN", 0x1B, "Saída do fullscreen executada."),
+        ("MEDIA_PLAY_PAUSE", 0xB3),
+        ("MEDIA_PREVIOUS", 0xB1),
+        ("MEDIA_NEXT", 0xB0),
+        ("MEDIA_SEEK_BACK", 0x4A),
+        ("MEDIA_SEEK_FORWARD", 0x4C),
+        ("MEDIA_FULLSCREEN", 0x46),
+        ("MEDIA_EXIT_FULLSCREEN", 0x1B),
     ],
 )
 def test_authenticated_media_control_uses_only_allowlisted_windows_keys(
@@ -514,7 +524,6 @@ def test_authenticated_media_control_uses_only_allowlisted_windows_keys(
     windows_key_event_mock,
     action,
     virtual_key,
-    message,
 ):
     with client.websocket_connect("/ws") as websocket:
         receive_auth_required(websocket)
@@ -532,10 +541,12 @@ def test_authenticated_media_control_uses_only_allowlisted_windows_keys(
             "type": "COMMAND_RESULT",
             "requestId": "media-1",
             "success": True,
-            "message": message,
+            "message": "Comando enviado ao YouTube.",
             "data": {
                 "intent": "MEDIA_CONTROL",
                 "action": action,
+                "platform": "YOUTUBE",
+                "session": "WEB",
                 "executed": True,
             },
         }
@@ -584,6 +595,57 @@ def test_media_control_reports_adapter_failure(
 
         assert error["code"] == "MEDIA_CONTROL_FAILED"
         assert error["message"] == "Controle de mídia indisponível."
+
+
+def test_media_control_requires_an_identified_active_session(
+    client,
+    dispatcher,
+    media_session_detector_mock,
+    windows_key_event_mock,
+):
+    media_session_detector_mock.detect.return_value = None
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "MEDIA_PLAY_PAUSE",
+            "requestId": "media-session",
+        })
+
+        error = websocket.receive_json()
+
+    assert error["code"] == "MEDIA_SESSION_NOT_FOUND"
+    assert error["message"] == "Nenhuma plataforma de mídia ativa foi identificada."
+    windows_key_event_mock.assert_not_called()
+
+
+def test_media_control_rejects_action_unsupported_by_active_platform(
+    client,
+    dispatcher,
+    media_session_detector_mock,
+    windows_key_event_mock,
+):
+    media_session_detector_mock.detect.return_value = MediaSession(
+        platform="SPOTIFY",
+        kind="APP",
+    )
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "MEDIA_FULLSCREEN",
+            "requestId": "media-unsupported",
+        })
+
+        error = websocket.receive_json()
+
+    assert error["code"] == "MEDIA_ACTION_UNSUPPORTED"
+    assert error["message"] == "Fullscreen não é suportado no Spotify."
+    windows_key_event_mock.assert_not_called()
 
 
 def test_volume_get_requires_authentication(client, volume_adapter_mock):

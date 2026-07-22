@@ -693,6 +693,90 @@ body {
   text-align: left;
 }
 
+.control-section {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--border-default);
+  border-radius: 20px;
+  background: rgba(15, 23, 42, 0.36);
+}
+
+.control-section + .control-section {
+  margin-top: 12px;
+}
+
+.control-section--system {
+  border-color: rgba(148, 163, 184, 0.2);
+}
+
+.control-section--media {
+  border-color: var(--border-accent);
+  background: linear-gradient(155deg, rgba(124, 58, 237, 0.055), rgba(15, 23, 42, 0.36));
+}
+
+.control-section__heading {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.control-section__heading h3 {
+  margin-top: 2px;
+  color: var(--text-primary);
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.control-section__heading > p {
+  margin-bottom: 1px;
+  color: var(--text-secondary);
+  font-size: 0.64rem;
+  text-align: right;
+}
+
+.control-section__eyebrow {
+  color: var(--text-muted);
+  font-size: 0.58rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.system-controls {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.system-control {
+  display: flex;
+  min-height: 54px;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--border-default);
+  border-radius: 14px;
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  font: 600 0.72rem/1.1 var(--font-ui);
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.system-control:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.system-control--active,
+.system-control:active:not(:disabled) {
+  border-color: var(--accent-bright);
+  color: var(--text-primary);
+}
+
 .media-controls {
   display: grid;
   gap: 10px;
@@ -756,7 +840,7 @@ body {
 
 .media-shortcuts {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
   margin-top: 16px;
   padding-top: 14px;

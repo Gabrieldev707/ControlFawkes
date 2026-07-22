@@ -52,7 +52,8 @@ from app.security.device_store import DeviceStore
 from app.security.pairing import PairingService
 from app.platforms.launcher import PlatformLauncher
 from app.platforms.search import MediaSearchLauncher
-from app.media.actions import MEDIA_ACTIONS, MEDIA_ACTION_MESSAGES
+from app.media.actions import MEDIA_ACTIONS, MEDIA_ACTION_LABELS
+from app.media.session import WindowsMediaSessionDetector
 from app.media.windows_adapter import WindowsMediaAdapter
 from app.schemas.volume import VOLUME_ACTIONS
 from app.windows.volume import WindowsVolumeAdapter, WindowsVolumeError
@@ -82,6 +83,7 @@ class Dispatcher:
         platform_launcher: PlatformLauncher | None = None,
         media_search_launcher: MediaSearchLauncher | None = None,
         media_adapter: WindowsMediaAdapter | None = None,
+        media_session_detector: WindowsMediaSessionDetector | None = None,
         volume_adapter: WindowsVolumeAdapter | None = None,
         pointer_adapter: WindowsPointerAdapter | None = None,
         pointer_rate_limiter: PointerRateLimiter | None = None,
@@ -92,6 +94,7 @@ class Dispatcher:
         self.platform_launcher = platform_launcher or PlatformLauncher()
         self.media_search_launcher = media_search_launcher or MediaSearchLauncher()
         self.media_adapter = media_adapter or WindowsMediaAdapter()
+        self.media_session_detector = media_session_detector or WindowsMediaSessionDetector()
         self.volume_adapter = volume_adapter or WindowsVolumeAdapter()
         self.pointer_adapter = pointer_adapter or WindowsPointerAdapter()
         self.pointer_rate_limiter = pointer_rate_limiter or PointerRateLimiter()
@@ -343,7 +346,27 @@ class Dispatcher:
         websocket: WebSocket,
         message: MediaControlMessage,
     ) -> None:
-        if not self.media_adapter.execute(message.type):
+        session = self.media_session_detector.detect()
+        if session is None:
+            await self._send_error(
+                websocket,
+                message.requestId,
+                "MEDIA_SESSION_NOT_FOUND",
+                "Nenhuma plataforma de mídia ativa foi identificada.",
+            )
+            return
+
+        label = PLATFORM_LABELS[session.platform]
+        if not self.media_adapter.supports(message.type, session.platform):
+            await self._send_error(
+                websocket,
+                message.requestId,
+                "MEDIA_ACTION_UNSUPPORTED",
+                f"{MEDIA_ACTION_LABELS[message.type]} não é suportado no {label}.",
+            )
+            return
+
+        if not self.media_adapter.execute(message.type, session.platform):
             await self._send_error(
                 websocket,
                 message.requestId,
@@ -354,8 +377,12 @@ class Dispatcher:
 
         response = CommandResultMessage(
             requestId=message.requestId,
-            message=MEDIA_ACTION_MESSAGES[message.type],
-            data=MediaCommandData(action=message.type),
+            message=f"Comando enviado ao {label}.",
+            data=MediaCommandData(
+                action=message.type,
+                platform=session.platform,
+                session=session.kind,
+            ),
         )
         await websocket.send_json(response.model_dump())
 

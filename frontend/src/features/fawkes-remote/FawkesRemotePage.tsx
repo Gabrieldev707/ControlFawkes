@@ -569,9 +569,12 @@ export const FawkesRemotePage: React.FC = () => {
             <RemoteControlScreen
               disabled={controlsDisabled}
               currentAction={currentMediaAction}
+              currentVolumeAction={currentVolumeAction}
+              muted={volumeMuted}
               statusMessage={statusMessage}
               statusError={statusError}
               onAction={handleMediaAction}
+              onToggleMute={() => handleVolumeAction('SYSTEM_MUTE_TOGGLE')}
               onNavigate={navigate}
               onBack={goBack}
             />

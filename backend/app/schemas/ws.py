@@ -51,6 +51,8 @@ ErrorCode = Literal[
     "PLATFORM_OPEN_FAILED",
     "MEDIA_SEARCH_FAILED",
     "MEDIA_CONTROL_FAILED",
+    "MEDIA_SESSION_NOT_FOUND",
+    "MEDIA_ACTION_UNSUPPORTED",
     "SYSTEM_VOLUME_FAILED",
     "POINTER_CONTROL_FAILED",
     "POINTER_RATE_LIMITED",
@@ -160,6 +162,8 @@ class MediaCommandData(BaseModel):
 
     intent: Literal["MEDIA_CONTROL"] = "MEDIA_CONTROL"
     action: MediaAction
+    platform: Platform
+    session: Literal["WEB", "APP"]
     executed: Literal[True] = True
 
 

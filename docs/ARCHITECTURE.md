@@ -23,7 +23,7 @@ iPhone / React
 - `security/`: PIN temporário, tokens, hashes e store de dispositivos.
 - `commands/`: parser determinístico, sem LLM ou shell.
 - `platforms/`: registry de URLs, localização do Chrome e launchers injetáveis.
-- `media/`: allowlist de controles de mídia e adapter de teclas fixas.
+- `media/`: detecção conservadora da plataforma ativa, matriz de ações suportadas e adapter de teclas fixas.
 - `windows/`: adapter assíncrono de volume Core Audio.
 - `input/`: adapters de pointer e teclado, além do rate limiter.
 - `schemas/`: contratos fechados do protocolo.
@@ -34,6 +34,9 @@ As plataformas web usam o executável do Google Chrome sem perfil temporário ou
 modo anônimo, preservando a sessão local já autenticada do usuário.
 O Spotify tenta primeiro o protocolo oficial do aplicativo e usa o mesmo
 `BrowserLauncher` como fallback web, retornando a estratégia realmente aceita.
+Controles de player só chegam ao adapter depois que o título da janela em
+primeiro plano identifica uma plataforma conhecida e confirma que a ação está
+mapeada para ela.
 
 ## Frontend
 
@@ -49,6 +52,7 @@ separados. O frontend só mostra sucesso depois de `COMMAND_RESULT` válido.
 ## Limites arquiteturais
 
 - uma instância local controla o computador que executa o backend;
-- o alvo de mídia/teclado é a janela ativa;
+- o alvo de mídia/teclado é a janela ativa; a sessão de mídia é identificada
+  conservadoramente pelo título dessa janela, sem descoberta em segundo plano;
 - não há descoberta remota, nuvem, conta externa ou exposição à internet;
 - não há Redux, shell, execução de URL recebida, atalhos combinados ou histórico de texto.

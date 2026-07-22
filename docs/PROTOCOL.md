@@ -42,10 +42,13 @@ não ecoam texto ou tecla.
 nunca um resultado de sucesso presumido.
 `SEARCH_MEDIA` é limitado a YouTube e Spotify, inclui plataforma, execução e
 estratégia, mas não devolve nem persiste o texto pesquisado.
+`MEDIA_CONTROL` executado inclui `action`, a `platform` identificada e
+`session: WEB | APP`. Sem plataforma ativa conhecida ou sem mapeamento para a
+ação solicitada, o servidor retorna erro e não emite tecla.
 
 ## Erros funcionais
 
 Além dos erros de JSON, autenticação, versão e payload, cada integração possui
 falha própria: `PLATFORM_OPEN_FAILED`, `MEDIA_SEARCH_FAILED`, `MEDIA_CONTROL_FAILED`,
-`SYSTEM_VOLUME_FAILED`, `POINTER_CONTROL_FAILED`, `POINTER_RATE_LIMITED` e
-`KEYBOARD_CONTROL_FAILED`.
+`MEDIA_SESSION_NOT_FOUND`, `MEDIA_ACTION_UNSUPPORTED`, `SYSTEM_VOLUME_FAILED`,
+`POINTER_CONTROL_FAILED`, `POINTER_RATE_LIMITED` e `KEYBOARD_CONTROL_FAILED`.

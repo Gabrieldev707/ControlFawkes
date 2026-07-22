@@ -22,7 +22,8 @@ podem isolar iPhone e computador.
   perfil codificado, credencial, URL arbitrária ou alteração do navegador padrão;
 - pesquisa aceita somente rotas de resultados do YouTube e Spotify construídas
   e codificadas no backend; ela não escolhe nem reproduz resultado ambíguo;
-- mídia usa somente sete ações mapeadas para teclas fixas;
+- mídia usa somente sete ações fechadas; o backend exige uma plataforma
+  conhecida em primeiro plano e aplica uma matriz de teclas por plataforma;
 - volume aceita 0–100 e deltas de somente ±5;
 - pointer aceita movimento relativo limitado, scroll fixo e no máximo 60 movimentos/s;
 - teclado aceita texto de até 256 caracteres sem controles e nove teclas especiais;

@@ -20,7 +20,8 @@ O MVP atual oferece:
 - testes automatizados e CI.
 - navegação entre Home, controle, touchpad, teclado, volume, plataformas e ajustes;
 - abertura real e allowlisted de Netflix, Max, Prime Video, Disney+, YouTube e Spotify;
-- play/pause, faixa anterior/próxima, seek e fullscreen por teclas fixas do Windows;
+- controles de sistema (volume/mudo) visualmente separados dos controles do player;
+- play/pause, faixa anterior/próxima, seek e fullscreen por matriz fixa da plataforma ativa;
 - leitura, ajuste, delta e mudo do volume principal pelo Core Audio;
 - touchpad relativo com agrupamento por frame, limite backend de 60 movimentos/s e failsafe;
 - texto Unicode limitado e nove teclas especiais seguras no teclado remoto.
@@ -171,7 +172,9 @@ O roteiro físico completo de 16 passos está em [docs/TESTING.md](docs/TESTING.
 
 ## Limites atuais
 
-O MVP controla a janela/aplicativo atualmente ativo. Não escolhe conteúdo,
+O MVP controla a janela/aplicativo atualmente ativo. A identificação de mídia
+depende de uma plataforma conhecida no título da janela em primeiro plano e não
+descobre players em segundo plano. Não escolhe conteúdo,
 não confirma reprodução dentro de serviços, não controla TV e não automatiza
 login. Voz e transcrição permanecem desabilitadas. Seek e fullscreen dependem
 dos atalhos aceitos pelo aplicativo ativo. O teste físico final no iPhone

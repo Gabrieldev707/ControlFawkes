@@ -48,3 +48,12 @@ Esta rodada registra ajustes derivados do teste físico no iPhone. Cada seção 
 - Limites: Netflix e demais plataformas ainda não aceitam pesquisa; consulta vazia ou frase perigosa retorna comando desconhecido. Nenhum resultado é escolhido ou reproduzido automaticamente.
 - Privacidade: a consulta é usada somente para construir o destino e não volta no protocolo, não é persistida e não entra em histórico.
 - Verificação automatizada: parser, allowlist de rotas, encoding, launchers, WebSocket, protocolo frontend, lint e build aprovados. Navegadores e aplicativos reais não foram acionados; validação física permanece pendente.
+
+## 7. Separação entre sistema e mídia
+
+- Interface: a tela de controle agora possui seções independentes. `Sistema` contém volume e mudo do Windows; `Mídia` contém somente comandos do player ativo. Touchpad e teclado permanecem como outras entradas.
+- Identificação: antes de cada comando de mídia, o backend lê o título da janela em primeiro plano e reconhece somente YouTube, Spotify, Netflix, Max, Prime Video ou Disney+.
+- Suporte real: cada plataforma possui uma tabela explícita de ações e teclas. Ações não mapeadas retornam `MEDIA_ACTION_UNSUPPORTED`; janela desconhecida retorna `MEDIA_SESSION_NOT_FOUND`; em ambos os casos nenhuma tecla é emitida.
+- Protocolo: um resultado bem-sucedido informa a plataforma detectada e se a sessão foi classificada como `WEB` ou `APP`. O frontend rejeita respostas sem esses campos.
+- Limite: a detecção é conservadora e depende do título da janela ativa no Windows; ela não enumera players em segundo plano. A validação física dos atalhos por plataforma no iPhone permanece pendente.
+- Verificação automatizada: detector, matriz de suporte, emissão de teclas, erros WebSocket, contrato runtime e separação visual são exercitados somente com mocks.

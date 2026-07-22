@@ -71,6 +71,8 @@ export const ERROR_CODES = [
   'PLATFORM_OPEN_FAILED',
   'MEDIA_SEARCH_FAILED',
   'MEDIA_CONTROL_FAILED',
+  'MEDIA_SESSION_NOT_FOUND',
+  'MEDIA_ACTION_UNSUPPORTED',
   'SYSTEM_VOLUME_FAILED',
   'POINTER_CONTROL_FAILED',
   'POINTER_RATE_LIMITED',
@@ -265,6 +267,8 @@ export interface HelpCommandData {
 export interface MediaCommandData {
   intent: 'MEDIA_CONTROL'
   action: MediaAction
+  platform: Platform
+  session: 'WEB' | 'APP'
   executed: true
 }
 

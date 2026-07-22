@@ -10,19 +10,23 @@ import {
   SkipBack,
   SkipForward,
   Volume2,
+  VolumeX,
 } from 'lucide-react'
 
 import { RemoteStatusText } from '../../components/fawkes-remote/RemoteStatusText'
-import type { MediaAction } from '../../features/fawkes-remote/types'
+import type { MediaAction, VolumeAction } from '../../features/fawkes-remote/types'
 import type { NavigableScreen } from '../../state/currentScreen'
 
 
 interface RemoteControlScreenProps {
   disabled: boolean
   currentAction: MediaAction | null
+  currentVolumeAction: VolumeAction | null
+  muted: boolean
   statusMessage: string
   statusError: boolean
   onAction: (action: MediaAction) => void
+  onToggleMute: () => void
   onNavigate: (screen: NavigableScreen) => void
   onBack: () => void
 }
@@ -46,9 +50,12 @@ const VIEW_ACTIONS = [
 export function RemoteControlScreen({
   disabled,
   currentAction,
+  currentVolumeAction,
+  muted,
   statusMessage,
   statusError,
   onAction,
+  onToggleMute,
   onNavigate,
   onBack,
 }: RemoteControlScreenProps) {
@@ -61,67 +68,105 @@ export function RemoteControlScreen({
 
       <div className="media-screen__heading">
         <p className="remote-screen__eyebrow">Controle remoto</p>
-        <h2 id="media-screen-title">Mídia</h2>
-        <p>Comandos fixos para a janela ativa do computador.</p>
+        <h2 id="media-screen-title">Controles</h2>
+        <p>Volume do Windows e comandos da plataforma de mídia ativa.</p>
       </div>
 
       <RemoteStatusText message={statusMessage} error={statusError} />
 
-      <section className="media-controls" aria-label="Controles de reprodução">
-        <div className="media-controls__transport">
-          {TRANSPORT_ACTIONS.map(({ action, label, icon: Icon, primary }) => (
-            <button
-              key={action}
-              type="button"
-              className={`media-control${primary ? ' media-control--primary' : ''}${currentAction === action ? ' media-control--active' : ''}`}
-              aria-label={label}
-              disabled={disabled}
-              onClick={() => onAction(action)}
-            >
-              <Icon size={primary ? 30 : 22} aria-hidden="true" />
-              <span>{label}</span>
-            </button>
-          ))}
+      <section className="control-section control-section--system" aria-labelledby="system-controls-title">
+        <div className="control-section__heading">
+          <div>
+            <p className="control-section__eyebrow">Windows</p>
+            <h3 id="system-controls-title">Sistema</h3>
+          </div>
+          <p>Volume principal</p>
         </div>
 
-        <div className="media-controls__row">
-          {TIMELINE_ACTIONS.map(({ action, label, shortLabel, icon: Icon }) => (
-            <button
-              key={action}
-              type="button"
-              className={`media-control media-control--wide${currentAction === action ? ' media-control--active' : ''}`}
-              aria-label={label}
-              disabled={disabled}
-              onClick={() => onAction(action)}
-            >
-              <Icon size={19} aria-hidden="true" />
-              <span>{shortLabel}</span>
-            </button>
-          ))}
-        </div>
-
-        <div className="media-controls__row">
-          {VIEW_ACTIONS.map(({ action, label, icon: Icon }) => (
-            <button
-              key={action}
-              type="button"
-              className={`media-control media-control--wide${currentAction === action ? ' media-control--active' : ''}`}
-              aria-label={label}
-              disabled={disabled}
-              onClick={() => onAction(action)}
-            >
-              <Icon size={19} aria-hidden="true" />
-              <span>{label}</span>
-            </button>
-          ))}
+        <div className="system-controls">
+          <button
+            type="button"
+            className="system-control"
+            aria-label="Abrir controles de volume"
+            onClick={() => onNavigate('VOLUME')}
+          >
+            <Volume2 size={20} aria-hidden="true" />
+            <span>Volume</span>
+          </button>
+          <button
+            type="button"
+            className={`system-control${currentVolumeAction === 'SYSTEM_MUTE_TOGGLE' ? ' system-control--active' : ''}`}
+            aria-label={muted ? 'Desativar mudo' : 'Ativar mudo'}
+            disabled={disabled}
+            onClick={onToggleMute}
+          >
+            {muted ? <VolumeX size={20} aria-hidden="true" /> : <Volume2 size={20} aria-hidden="true" />}
+            <span>{muted ? 'Mudo ativo' : 'Mudo'}</span>
+          </button>
         </div>
       </section>
 
-      <nav className="media-shortcuts" aria-label="Outros controles">
-        <button type="button" onClick={() => onNavigate('VOLUME')}>
-          <Volume2 size={18} aria-hidden="true" />
-          Volume e mudo
-        </button>
+      <section className="control-section control-section--media" aria-labelledby="player-controls-title">
+        <div className="control-section__heading">
+          <div>
+            <p className="control-section__eyebrow">Player ativo</p>
+            <h3 id="player-controls-title">Mídia</h3>
+          </div>
+          <p>Plataforma identificada</p>
+        </div>
+
+        <div className="media-controls" aria-label="Controles de reprodução">
+          <div className="media-controls__transport">
+            {TRANSPORT_ACTIONS.map(({ action, label, icon: Icon, primary }) => (
+              <button
+                key={action}
+                type="button"
+                className={`media-control${primary ? ' media-control--primary' : ''}${currentAction === action ? ' media-control--active' : ''}`}
+                aria-label={label}
+                disabled={disabled}
+                onClick={() => onAction(action)}
+              >
+                <Icon size={primary ? 30 : 22} aria-hidden="true" />
+                <span>{label}</span>
+              </button>
+            ))}
+          </div>
+
+          <div className="media-controls__row">
+            {TIMELINE_ACTIONS.map(({ action, label, shortLabel, icon: Icon }) => (
+              <button
+                key={action}
+                type="button"
+                className={`media-control media-control--wide${currentAction === action ? ' media-control--active' : ''}`}
+                aria-label={label}
+                disabled={disabled}
+                onClick={() => onAction(action)}
+              >
+                <Icon size={19} aria-hidden="true" />
+                <span>{shortLabel}</span>
+              </button>
+            ))}
+          </div>
+
+          <div className="media-controls__row">
+            {VIEW_ACTIONS.map(({ action, label, icon: Icon }) => (
+              <button
+                key={action}
+                type="button"
+                className={`media-control media-control--wide${currentAction === action ? ' media-control--active' : ''}`}
+                aria-label={label}
+                disabled={disabled}
+                onClick={() => onAction(action)}
+              >
+                <Icon size={19} aria-hidden="true" />
+                <span>{label}</span>
+              </button>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      <nav className="media-shortcuts" aria-label="Outras entradas">
         <button type="button" onClick={() => onNavigate('TOUCHPAD')}>
           <MousePointer2 size={18} aria-hidden="true" />
           Touchpad

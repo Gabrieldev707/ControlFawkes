@@ -71,10 +71,12 @@ function isHelpData(value: unknown): boolean {
 
 function isMediaData(value: unknown): boolean {
   return isRecord(value)
-    && hasOnlyKeys(value, ['intent', 'action', 'executed'])
+    && hasOnlyKeys(value, ['intent', 'action', 'platform', 'session', 'executed'])
     && value.intent === 'MEDIA_CONTROL'
     && typeof value.action === 'string'
     && MEDIA_ACTIONS.includes(value.action as (typeof MEDIA_ACTIONS)[number])
+    && isPlatform(value.platform)
+    && (value.session === 'WEB' || value.session === 'APP')
     && value.executed === true
 }
 

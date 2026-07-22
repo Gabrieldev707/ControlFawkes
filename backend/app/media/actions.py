@@ -21,12 +21,12 @@ MEDIA_ACTIONS: tuple[MediaAction, ...] = (
     "MEDIA_EXIT_FULLSCREEN",
 )
 
-MEDIA_ACTION_MESSAGES: dict[MediaAction, str] = {
-    "MEDIA_PLAY_PAUSE": "Play/pause executado.",
-    "MEDIA_PREVIOUS": "Faixa anterior executada.",
-    "MEDIA_NEXT": "Próxima faixa executada.",
-    "MEDIA_SEEK_BACK": "Retrocesso de 10 segundos executado.",
-    "MEDIA_SEEK_FORWARD": "Avanço de 10 segundos executado.",
-    "MEDIA_FULLSCREEN": "Fullscreen executado.",
-    "MEDIA_EXIT_FULLSCREEN": "Saída do fullscreen executada.",
+MEDIA_ACTION_LABELS: dict[MediaAction, str] = {
+    "MEDIA_PLAY_PAUSE": "Play/pause",
+    "MEDIA_PREVIOUS": "Faixa anterior",
+    "MEDIA_NEXT": "Próxima faixa",
+    "MEDIA_SEEK_BACK": "Retrocesso de 10 segundos",
+    "MEDIA_SEEK_FORWARD": "Avanço de 10 segundos",
+    "MEDIA_FULLSCREEN": "Fullscreen",
+    "MEDIA_EXIT_FULLSCREEN": "Saída do fullscreen",
 }
