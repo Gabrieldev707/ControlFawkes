@@ -274,12 +274,18 @@ class Dispatcher:
         platform: Platform,
     ) -> None:
         label = PLATFORM_LABELS[platform]
-        if not self.platform_launcher.open(platform):
+        launch = self.platform_launcher.open(platform)
+        if not launch.executed:
+            error_message = (
+                "Google Chrome não foi encontrado no computador."
+                if launch.error == "CHROME_NOT_FOUND"
+                else f"Não foi possível abrir o {label}."
+            )
             await self._send_error(
                 websocket,
                 request_id,
                 "PLATFORM_OPEN_FAILED",
-                f"Não foi possível abrir o {label}.",
+                error_message,
             )
             return
 

@@ -18,6 +18,8 @@ podem isolar iPhone e computador.
 ## Allowlists e validação
 
 - plataformas são identificadores fechados; o frontend nunca envia URL;
+- o Chrome recebe somente URLs oficiais do registry do backend, sem shell,
+  perfil codificado, credencial, URL arbitrária ou alteração do navegador padrão;
 - mídia usa somente sete ações mapeadas para teclas fixas;
 - volume aceita 0–100 e deltas de somente ±5;
 - pointer aceita movimento relativo limitado, scroll fixo e no máximo 60 movimentos/s;

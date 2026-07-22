@@ -24,3 +24,11 @@ Esta rodada registra ajustes derivados do teste físico no iPhone. Cada seção 
 - Correção: o asset local foi substituído pelo wordmark vetorial Max já presente no histórico do projeto, com `viewBox="0 0 24 24"` e preenchimento branco para o fundo escuro.
 - Preservado: caminho e case `/platforms/max.svg`, nome acessível `Max`, dimensões do card e `object-fit: contain` da classe compartilhada. Nenhum logo foi desenhado em CSS.
 - Verificação automatizada: teste confirma asset, caminho de produção, título, viewBox e classe de contenção. Build de produção valida a cópia para `dist`.
+
+## 4. Plataformas web no Google Chrome
+
+- Causa raiz: o launcher usava `webbrowser.open`, delegando ao navegador padrão e sem conseguir distinguir Chrome ausente de falha de abertura.
+- Correção: `ChromeLocator` procura instalações padrão, App Paths do Windows e PATH; `BrowserLauncher` inicia o executável diretamente com `--new-tab`, sem perfil temporário ou modo anônimo.
+- Segurança: Netflix, Max, Prime Video, Disney+ e YouTube são resolvidos exclusivamente pelo registry do backend. URL arbitrária é recusada antes da localização ou criação de processo.
+- Erros: Chrome ausente retorna `PLATFORM_OPEN_FAILED` com mensagem específica; falha de processo não declara sucesso.
+- Verificação automatizada: 20 testes direcionados aprovados com locator e processo simulados. Nenhum Chrome real foi iniciado; validação física permanece pendente.

@@ -11,6 +11,8 @@ from app.media.windows_adapter import WindowsMediaAdapter
 from app.windows.volume import VolumeState, WindowsVolumeAdapter, WindowsVolumeError
 from app.input.pointer import PointerRateLimiter, WindowsPointerAdapter
 from app.input.keyboard import WindowsKeyboardAdapter
+from app.platforms.browser import BrowserLaunchResult, BrowserLauncher
+from app.platforms.launcher import PlatformLauncher
 
 
 @pytest.fixture
@@ -18,6 +20,13 @@ def browser_open_mock(monkeypatch):
     opener = Mock(return_value=True)
     monkeypatch.setattr("webbrowser.open", opener)
     return opener
+
+
+@pytest.fixture
+def browser_launcher_mock():
+    launcher = Mock(spec=BrowserLauncher)
+    launcher.open.return_value = BrowserLaunchResult(executed=True, strategy="CHROME")
+    return launcher
 
 
 @pytest.fixture
@@ -63,6 +72,7 @@ def dispatcher(
     tmp_path,
     monkeypatch,
     browser_open_mock,
+    browser_launcher_mock,
     windows_key_event_mock,
     volume_adapter_mock,
     pointer_adapter_mock,
@@ -75,6 +85,10 @@ def dispatcher(
     instance = Dispatcher(
         device_store=store,
         pairing_service=PairingService(store),
+        platform_launcher=PlatformLauncher(
+            browser_launcher=browser_launcher_mock,
+            spotify_opener=browser_open_mock,
+        ),
         media_adapter=WindowsMediaAdapter(windows_key_event_mock),
         volume_adapter=volume_adapter_mock,
         pointer_adapter=pointer_adapter_mock,
@@ -299,6 +313,7 @@ def test_authenticated_streaming_selection_opens_only_the_official_url(
     client,
     dispatcher,
     browser_open_mock,
+    browser_launcher_mock,
     platform,
     label,
     url,
@@ -327,7 +342,8 @@ def test_authenticated_streaming_selection_opens_only_the_official_url(
                 "executed": True,
             },
         }
-        browser_open_mock.assert_called_once_with(url, new=2, autoraise=True)
+        browser_launcher_mock.open.assert_called_once_with(url)
+        browser_open_mock.assert_not_called()
 
 
 def test_authenticated_spotify_selection_opens_only_the_official_url(
@@ -381,10 +397,17 @@ def test_platform_open_failure_returns_a_real_error(
     client,
     dispatcher,
     browser_open_mock,
+    browser_launcher_mock,
     platform,
     label,
 ):
-    browser_open_mock.return_value = False
+    if platform == "SPOTIFY":
+        browser_open_mock.return_value = False
+    else:
+        browser_launcher_mock.open.return_value = BrowserLaunchResult(
+            executed=False,
+            error="CHROME_LAUNCH_FAILED",
+        )
 
     with client.websocket_connect("/ws") as websocket:
         receive_auth_required(websocket)
@@ -405,6 +428,32 @@ def test_platform_open_failure_returns_a_real_error(
             "code": "PLATFORM_OPEN_FAILED",
             "message": f"Não foi possível abrir o {label}.",
         }
+
+
+def test_chrome_not_found_returns_a_specific_real_error(
+    client,
+    dispatcher,
+    browser_launcher_mock,
+):
+    browser_launcher_mock.open.return_value = BrowserLaunchResult(
+        executed=False,
+        error="CHROME_NOT_FOUND",
+    )
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "PLATFORM_SELECTED",
+            "requestId": "platform-chrome",
+            "payload": {"platform": "YOUTUBE"},
+        })
+
+        error = websocket.receive_json()
+
+        assert error["code"] == "PLATFORM_OPEN_FAILED"
+        assert error["message"] == "Google Chrome não foi encontrado no computador."
 
 
 def test_platform_selection_rejects_a_frontend_supplied_url(

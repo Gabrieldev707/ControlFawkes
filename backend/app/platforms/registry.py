@@ -9,3 +9,15 @@ PLATFORM_URLS: dict[Platform, str] = {
     "PRIME_VIDEO": "https://www.primevideo.com",
     "DISNEY_PLUS": "https://www.disneyplus.com",
 }
+
+BROWSER_PLATFORMS: frozenset[Platform] = frozenset({
+    "YOUTUBE",
+    "NETFLIX",
+    "MAX",
+    "PRIME_VIDEO",
+    "DISNEY_PLUS",
+})
+
+BROWSER_PLATFORM_URLS: frozenset[str] = frozenset(
+    PLATFORM_URLS[platform] for platform in BROWSER_PLATFORMS
+)

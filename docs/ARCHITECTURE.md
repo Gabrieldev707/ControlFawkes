@@ -22,7 +22,7 @@ iPhone / React
 - `protocol/`: valida versão, autenticação e direciona mensagens.
 - `security/`: PIN temporário, tokens, hashes e store de dispositivos.
 - `commands/`: parser determinístico, sem LLM ou shell.
-- `platforms/`: registry de URLs e launcher injetável.
+- `platforms/`: registry de URLs, localização do Chrome e launchers injetáveis.
 - `media/`: allowlist de controles de mídia e adapter de teclas fixas.
 - `windows/`: adapter assíncrono de volume Core Audio.
 - `input/`: adapters de pointer e teclado, além do rate limiter.
@@ -30,6 +30,8 @@ iPhone / React
 
 Os adapters recebem dependências injetáveis. A suíte automatizada fornece mocks,
 portanto não abre navegador, não altera volume, não move ponteiro e não digita.
+As plataformas web usam o executável do Google Chrome sem perfil temporário ou
+modo anônimo, preservando a sessão local já autenticada do usuário.
 
 ## Frontend
 
