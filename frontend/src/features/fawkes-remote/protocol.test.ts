@@ -163,6 +163,20 @@ describe('protocol v1 runtime validation', () => {
     expect(isErrorCode('MEDIA_ACTION_UNSUPPORTED')).toBe(true)
   })
 
+  it('accepts the rate limiting codes sent by the backend', () => {
+    // Um código conhecido só pelo backend seria descartado no parser e o
+    // usuário não veria erro nenhum.
+    expect(isErrorCode('RATE_LIMITED')).toBe(true)
+    expect(isErrorCode('POINTER_RATE_LIMITED')).toBe(true)
+    expect(isServerMessage({
+      protocolVersion: 1,
+      type: 'ERROR',
+      requestId: 'unknown',
+      code: 'RATE_LIMITED',
+      message: 'Mensagens demais. Tente novamente.',
+    })).toBe(true)
+  })
+
   it('accepts only bounded real Windows volume state', () => {
     const message = {
       protocolVersion: 1,

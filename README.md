@@ -12,6 +12,8 @@ O MVP atual oferece:
 - backend FastAPI acessível na rede local;
 - protocolo WebSocket v1 com mensagens e erros fechados;
 - pareamento por PIN temporário e autenticação automática por token;
+- bloqueio progressivo do pareamento após tentativas erradas;
+- WebSocket restrito a origens da rede local;
 - armazenamento apenas do hash do token no servidor;
 - revogação local de dispositivos;
 - comandos de texto determinísticos para plataformas conhecidas;
@@ -100,6 +102,20 @@ npm run dev -- --host 0.0.0.0
 Execute `ipconfig`, encontre o endereço IPv4 da interface Wi-Fi e, no iPhone,
 abra `http://SEU_IP:5173`. Digite o PIN mostrado pelo backend. O PIN dura cinco
 minutos, aceita até cinco tentativas e só pode ser usado uma vez.
+
+Depois de cinco erros o pareamento fica bloqueado por 60 segundos, e a espera
+dobra a cada bloqueio seguido (até 15 minutos), voltando ao início após um
+pareamento bem-sucedido. É isso que impede alguém na mesma rede de adivinhar o
+PIN por tentativa e erro.
+
+O WebSocket só aceita conexões cujo `Origin` seja da rede local (`localhost`,
+IPs privados ou nomes `.local`), o que impede um site aberto no navegador de
+falar com o backend. Para publicar o frontend em outro endereço, defina as
+origens permitidas explicitamente:
+
+```powershell
+$env:FAWKES_ALLOWED_ORIGINS = "https://fawkes.exemplo.com"
+```
 
 Após o pareamento, o navegador guarda `deviceId` e o token no `localStorage`.
 O servidor persiste somente o hash SHA-256 do token em `backend/data/`, pasta

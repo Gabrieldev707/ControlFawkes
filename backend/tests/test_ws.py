@@ -1,12 +1,17 @@
 import ctypes
 
 import pytest
+from fastapi import WebSocketDisconnect
 from fastapi.testclient import TestClient
 from unittest.mock import AsyncMock, Mock, call
 
 from app.api import websocket as websocket_module
 from app.main import app
-from app.protocol.dispatcher import Dispatcher
+from app.protocol.dispatcher import (
+    WS_POLICY_VIOLATION,
+    WS_TRY_AGAIN_LATER,
+    Dispatcher,
+)
 from app.security.device_store import DeviceStore
 from app.security.pairing import PairingService
 from app.media.windows_adapter import WindowsMediaAdapter
@@ -1263,3 +1268,158 @@ def test_websocket_rejects_message_without_request_id(client):
         assert data["type"] == "ERROR"
         assert data["requestId"] == "unknown"
         assert data["code"] == "INVALID_PAYLOAD"
+
+
+def test_websocket_rejects_a_remote_page_origin(client):
+    """CORS não cobre WebSocket: sem esta checagem uma página remota conecta."""
+    with pytest.raises(WebSocketDisconnect) as rejection:
+        with client.websocket_connect(
+            "/ws",
+            headers={"Origin": "https://evil.example"},
+        ) as websocket:
+            websocket.receive_json()
+
+    assert rejection.value.code == WS_POLICY_VIOLATION
+
+
+@pytest.mark.parametrize("origin", [
+    "http://localhost:5173",
+    "http://192.168.0.20:5173",
+    "http://10.0.0.5:5173",
+    "http://fawkes.local:5173",
+])
+def test_websocket_accepts_local_network_origins(client, origin):
+    """O iPhone acessa pelo IP da LAN; isso não pode ser bloqueado."""
+    with client.websocket_connect("/ws", headers={"Origin": origin}) as websocket:
+        receive_auth_required(websocket)
+
+
+def test_websocket_rejects_non_text_frames_without_dropping_the_session(client):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+
+        websocket.send_bytes(b"\x00\x01\x02")
+
+        assert websocket.receive_json()["code"] == "INVALID_PAYLOAD"
+        # A sessão continua utilizável depois do frame inválido.
+        websocket.send_text("{ quebrado ")
+        assert websocket.receive_json()["code"] == "INVALID_JSON"
+
+
+def test_held_pointer_button_is_released_when_the_session_ends(client, dispatcher, pointer_adapter_mock):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "POINTER_DOWN",
+            "requestId": "down-1",
+        })
+        websocket.receive_json()
+        assert len(dispatcher._held_pointer_buttons) == 1
+
+    pointer_adapter_mock.pointer_up.assert_called()
+    assert dispatcher._held_pointer_buttons == set()
+    assert dispatcher._authenticated == {}
+    assert dispatcher._connections == set()
+
+
+def test_unexpected_handler_error_still_releases_the_pointer(
+    client,
+    dispatcher,
+    pointer_adapter_mock,
+    monkeypatch,
+):
+    """O cleanup precisa rodar em finally: um erro inesperado no meio da sessão
+    não pode deixar o botão do mouse pressionado na máquina do usuário."""
+    async def explode(*_args, **_kwargs):
+        raise RuntimeError("falha inesperada no dispatcher")
+
+    # O erro do servidor propaga na saída do contexto do cliente.
+    with pytest.raises(RuntimeError):
+        with client.websocket_connect("/ws") as websocket:
+            receive_auth_required(websocket)
+            pair(websocket, dispatcher)
+            websocket.send_json({
+                "protocolVersion": 1,
+                "type": "POINTER_DOWN",
+                "requestId": "down-1",
+            })
+            websocket.receive_json()
+
+            monkeypatch.setattr(dispatcher, "dispatch", explode)
+            websocket.send_json({
+                "protocolVersion": 1,
+                "type": "POINTER_UP",
+                "requestId": "up-1",
+            })
+            websocket.receive_json()
+
+    pointer_adapter_mock.pointer_up.assert_called()
+    assert dispatcher._held_pointer_buttons == set()
+    assert dispatcher._authenticated == {}
+    assert dispatcher._connections == set()
+
+
+def test_message_flood_is_rate_limited_per_connection(client, dispatcher):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+
+        codes = []
+        for index in range(Dispatcher.MAX_MESSAGES_PER_SECOND + 5):
+            websocket.send_json({
+                "protocolVersion": 1,
+                "type": "PAIR_DEVICE",
+                "requestId": f"flood-{index}",
+                "payload": {"pin": "000000", "deviceName": "atacante"},
+            })
+            codes.append(websocket.receive_json()["code"])
+
+    assert "RATE_LIMITED" in codes
+
+
+def test_pairing_brute_force_is_locked_out_over_the_websocket(client, dispatcher):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        wrong_pin = "000000" if dispatcher.pairing_service.current_pin != "000000" else "111111"
+
+        for index in range(PairingService.MAX_ATTEMPTS):
+            websocket.send_json({
+                "protocolVersion": 1,
+                "type": "PAIR_DEVICE",
+                "requestId": f"attack-{index}",
+                "payload": {"pin": wrong_pin, "deviceName": "atacante"},
+            })
+            websocket.receive_json()
+
+        # Mesmo o PIN correto é recusado enquanto o bloqueio estiver ativo.
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "PAIR_DEVICE",
+            "requestId": "attack-final",
+            "payload": {
+                "pin": dispatcher.pairing_service.current_pin,
+                "deviceName": "atacante",
+            },
+        })
+
+        assert websocket.receive_json()["code"] == "TOO_MANY_ATTEMPTS"
+
+
+def test_connection_limit_protects_the_server(client, dispatcher):
+    opened = []
+    try:
+        for _ in range(Dispatcher.MAX_CONNECTIONS):
+            context = client.websocket_connect("/ws")
+            socket = context.__enter__()
+            socket.receive_json()
+            opened.append((context, socket))
+
+        with pytest.raises(WebSocketDisconnect) as rejection:
+            with client.websocket_connect("/ws") as extra:
+                extra.receive_json()
+
+        assert rejection.value.code == WS_TRY_AGAIN_LATER
+    finally:
+        for context, _ in opened:
+            context.__exit__(None, None, None)

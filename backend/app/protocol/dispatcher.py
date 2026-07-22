@@ -49,6 +49,7 @@ from app.commands.parser import (
     parse_command,
 )
 from app.security.device_store import DeviceStore
+from app.security.origins import is_origin_allowed
 from app.security.pairing import PairingService
 from app.platforms.launcher import PlatformLauncher
 from app.platforms.search import MediaSearchLauncher
@@ -63,6 +64,9 @@ from app.input.keyboard import WindowsKeyboardAdapter
 from app.schemas.keyboard import KEYBOARD_ACTIONS
 
 
+WS_POLICY_VIOLATION = 1008
+WS_TRY_AGAIN_LATER = 1013
+
 KNOWN_CLIENT_TYPES = {
     "AUTH",
     "PAIR_DEVICE",
@@ -76,6 +80,10 @@ KNOWN_CLIENT_TYPES = {
 
 
 class Dispatcher:
+    # Acima do teto do touchpad (60/s), para não atrapalhar o uso legítimo.
+    MAX_MESSAGES_PER_SECOND = 120
+    MAX_CONNECTIONS = 32
+
     def __init__(
         self,
         device_store: DeviceStore | None = None,
@@ -88,6 +96,7 @@ class Dispatcher:
         pointer_adapter: WindowsPointerAdapter | None = None,
         pointer_rate_limiter: PointerRateLimiter | None = None,
         keyboard_adapter: WindowsKeyboardAdapter | None = None,
+        message_rate_limiter: PointerRateLimiter | None = None,
     ) -> None:
         self.device_store = device_store or DeviceStore()
         self.pairing_service = pairing_service or PairingService(self.device_store)
@@ -99,24 +108,44 @@ class Dispatcher:
         self.pointer_adapter = pointer_adapter or WindowsPointerAdapter()
         self.pointer_rate_limiter = pointer_rate_limiter or PointerRateLimiter()
         self.keyboard_adapter = keyboard_adapter or WindowsKeyboardAdapter()
+        self.message_rate_limiter = message_rate_limiter or PointerRateLimiter(
+            max_updates=self.MAX_MESSAGES_PER_SECOND,
+        )
         self._client_adapter = TypeAdapter(ClientMessage)
         self._authenticated: dict[WebSocket, str] = {}
         self._held_pointer_buttons: set[WebSocket] = set()
+        self._connections: set[WebSocket] = set()
 
     async def startup(self) -> None:
         self.pairing_service.initialize()
 
-    async def connect(self, websocket: WebSocket) -> None:
+    async def connect(self, websocket: WebSocket) -> bool:
+        """Aceita a conexão. Retorna False quando ela foi recusada."""
+        if not is_origin_allowed(websocket.headers.get("origin")):
+            await websocket.close(code=WS_POLICY_VIOLATION)
+            return False
+
+        if len(self._connections) >= self.MAX_CONNECTIONS:
+            await websocket.close(code=WS_TRY_AGAIN_LATER)
+            return False
+
         self.pairing_service.initialize()
         await websocket.accept()
+        self._connections.add(websocket)
         await self._send_state(websocket, "AUTH_REQUIRED", "Autenticação necessária.")
+        return True
+
+    async def reject_non_text_frame(self, websocket: WebSocket) -> None:
+        await self._send_error(websocket, "unknown", "INVALID_PAYLOAD", "Frame não suportado.")
 
     async def disconnect(self, websocket: WebSocket) -> None:
         if websocket in self._held_pointer_buttons:
             self.pointer_adapter.pointer_up()
             self._held_pointer_buttons.discard(websocket)
         self.pointer_rate_limiter.clear(websocket)
+        self.message_rate_limiter.clear(websocket)
         self._authenticated.pop(websocket, None)
+        self._connections.discard(websocket)
 
     async def _send_state(self, websocket: WebSocket, state: str, message: str) -> None:
         response = StateUpdateMessage(state=state, message=message)
@@ -133,6 +162,17 @@ class Dispatcher:
         await websocket.send_json(response.model_dump())
 
     async def dispatch(self, websocket: WebSocket, raw: str) -> None:
+        # Antes de qualquer processamento: limita inundação por conexão,
+        # inclusive de mensagens ainda não autenticadas.
+        if not self.message_rate_limiter.allow(websocket):
+            await self._send_error(
+                websocket,
+                "unknown",
+                "RATE_LIMITED",
+                "Mensagens demais. Tente novamente.",
+            )
+            return
+
         try:
             raw_size = len(raw.encode("utf-8"))
         except UnicodeEncodeError:

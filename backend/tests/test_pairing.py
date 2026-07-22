@@ -82,6 +82,92 @@ def test_fifth_failed_attempt_rotates_pin(tmp_path):
     assert pairing.current_pin != initial_pin
 
 
+def test_pairing_is_locked_after_the_attempt_limit(tmp_path):
+    clock = MutableClock()
+    pairing = PairingService(make_store(tmp_path), clock=clock)
+    pairing.initialize()
+
+    invalid_pin = invalid_pin_for(pairing)
+    for _ in range(PairingService.MAX_ATTEMPTS):
+        pairing.attempt(invalid_pin, "atacante")
+
+    # Durante o bloqueio nem o PIN correto é aceito, e o contador não recomeça.
+    blocked = pairing.attempt(pairing.current_pin or "", "atacante")
+
+    assert blocked.success is False
+    assert blocked.code == "TOO_MANY_ATTEMPTS"
+
+
+def test_pairing_accepts_again_after_the_lockout_expires(tmp_path):
+    clock = MutableClock()
+    pairing = PairingService(make_store(tmp_path), clock=clock)
+    pairing.initialize()
+
+    invalid_pin = invalid_pin_for(pairing)
+    for _ in range(PairingService.MAX_ATTEMPTS):
+        pairing.attempt(invalid_pin, "iPhone")
+    clock.now += PairingService.LOCKOUT_SECONDS + 1
+
+    result = pairing.attempt(pairing.current_pin or "", "iPhone")
+
+    assert result.success is True
+
+
+def test_repeated_lockouts_increase_the_waiting_window(tmp_path):
+    clock = MutableClock()
+    pairing = PairingService(make_store(tmp_path), clock=clock)
+    pairing.initialize()
+    invalid_pin = invalid_pin_for(pairing)
+
+    def burn_attempt_limit() -> None:
+        for _ in range(PairingService.MAX_ATTEMPTS):
+            pairing.attempt(invalid_pin, "atacante")
+
+    burn_attempt_limit()
+    first_window = pairing.locked_until - clock.now
+    clock.now += first_window + 1
+    burn_attempt_limit()
+    second_window = pairing.locked_until - clock.now
+
+    assert second_window > first_window
+    assert second_window <= PairingService.MAX_LOCKOUT_SECONDS
+
+
+def test_brute_force_throughput_stays_bounded_over_time(tmp_path):
+    """Sem lockout, um atacante faz milhares de tentativas por segundo."""
+    clock = MutableClock()
+    pairing = PairingService(make_store(tmp_path), clock=clock)
+    pairing.initialize()
+    invalid_pin = invalid_pin_for(pairing)
+
+    accepted_attempts = 0
+    for _ in range(1_000):
+        result = pairing.attempt(invalid_pin, "atacante")
+        if result.code != "TOO_MANY_ATTEMPTS":
+            accepted_attempts += 1
+        clock.now += 1  # 1000 segundos de ataque contínuo
+
+    # Teto teórico: MAX_ATTEMPTS por janela de lockout.
+    assert accepted_attempts <= 1_000 / PairingService.LOCKOUT_SECONDS * PairingService.MAX_ATTEMPTS
+
+
+def test_successful_pairing_clears_the_lockout_escalation(tmp_path):
+    clock = MutableClock()
+    pairing = PairingService(make_store(tmp_path), clock=clock)
+    pairing.initialize()
+
+    invalid_pin = invalid_pin_for(pairing)
+    for _ in range(PairingService.MAX_ATTEMPTS):
+        pairing.attempt(invalid_pin, "iPhone")
+    clock.now += PairingService.LOCKOUT_SECONDS + 1
+    assert pairing.attempt(pairing.current_pin or "", "iPhone").success is True
+
+    for _ in range(PairingService.MAX_ATTEMPTS):
+        pairing.attempt(invalid_pin, "iPhone")
+
+    assert pairing.locked_until - clock.now == PairingService.LOCKOUT_SECONDS
+
+
 def test_device_store_never_persists_raw_token(tmp_path):
     path = tmp_path / "paired_devices.json"
     store = DeviceStore(filepath=path, lockpath=tmp_path / "paired_devices.lock")
