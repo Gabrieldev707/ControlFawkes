@@ -52,6 +52,22 @@ def test_browser_launcher_rejects_arbitrary_url_before_starting_a_process():
     start_process.assert_not_called()
 
 
+def test_browser_launcher_accepts_only_backend_generated_media_search_routes():
+    locator = Mock(spec=ChromeLocator)
+    locator.find.return_value = Path(r"C:\Chrome\chrome.exe")
+    start_process = Mock()
+    launcher = BrowserLauncher(locator=locator, process_starter=start_process)
+
+    youtube = "https://www.youtube.com/results?search_query=Kanye+West"
+    spotify = "https://open.spotify.com/search/%C3%81guas%20de%20Mar%C3%A7o"
+
+    assert launcher.open(youtube).executed is True
+    assert launcher.open(spotify).executed is True
+    assert launcher.open("https://www.youtube.com/watch?v=arbitrary").executed is False
+    assert launcher.open("https://www.youtube.com.evil.test/results?search_query=x").executed is False
+    assert start_process.call_count == 2
+
+
 def test_browser_launcher_reports_when_chrome_is_not_found():
     locator = Mock(spec=ChromeLocator)
     locator.find.return_value = None

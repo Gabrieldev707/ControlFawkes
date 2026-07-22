@@ -1,3 +1,5 @@
+from urllib.parse import parse_qs, urlsplit
+
 from app.schemas.ws import Platform
 
 
@@ -25,3 +27,31 @@ BROWSER_PLATFORM_URLS: frozenset[str] = frozenset(
 BROWSER_ALLOWED_URLS: frozenset[str] = (
     BROWSER_PLATFORM_URLS | {PLATFORM_URLS["SPOTIFY"]}
 )
+
+
+def is_browser_url_allowed(url: str) -> bool:
+    if url in BROWSER_ALLOWED_URLS:
+        return True
+
+    parsed = urlsplit(url)
+    if (
+        parsed.scheme != "https"
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.port is not None
+        or parsed.fragment
+    ):
+        return False
+
+    if parsed.hostname == "www.youtube.com" and parsed.path == "/results":
+        query = parse_qs(parsed.query, keep_blank_values=True)
+        return set(query) == {"search_query"} and len(query["search_query"]) == 1 and bool(
+            query["search_query"][0].strip()
+        )
+
+    return (
+        parsed.hostname == "open.spotify.com"
+        and parsed.path.startswith("/search/")
+        and len(parsed.path) > len("/search/")
+        and not parsed.query
+    )

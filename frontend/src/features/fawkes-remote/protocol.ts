@@ -49,6 +49,16 @@ function isPlatformData(value: unknown): boolean {
     && LAUNCH_STRATEGIES.includes(value.strategy as (typeof LAUNCH_STRATEGIES)[number])
 }
 
+function isSearchMediaData(value: unknown): boolean {
+  return isRecord(value)
+    && hasOnlyKeys(value, ['intent', 'platform', 'executed', 'strategy'])
+    && value.intent === 'SEARCH_MEDIA'
+    && (value.platform === 'YOUTUBE' || value.platform === 'SPOTIFY')
+    && value.executed === true
+    && typeof value.strategy === 'string'
+    && LAUNCH_STRATEGIES.includes(value.strategy as (typeof LAUNCH_STRATEGIES)[number])
+}
+
 function isHelpData(value: unknown): boolean {
   return isRecord(value)
     && hasOnlyKeys(value, ['intent', 'commands', 'executed'])
@@ -135,6 +145,7 @@ export function isServerMessage(value: unknown): value is ServerMessage {
         && isMessage(value.message)
         && (
           isPlatformData(value.data)
+          || isSearchMediaData(value.data)
           || isHelpData(value.data)
           || isMediaData(value.data)
           || isVolumeData(value.data)

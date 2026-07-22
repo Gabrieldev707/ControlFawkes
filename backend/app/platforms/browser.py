@@ -7,7 +7,7 @@ import subprocess
 import sys
 from typing import Literal
 
-from app.platforms.registry import BROWSER_ALLOWED_URLS
+from app.platforms.registry import is_browser_url_allowed
 
 
 ChromeError = str
@@ -102,7 +102,7 @@ class BrowserLauncher:
         self._process_starter = process_starter or _start_process
 
     def open(self, url: str) -> BrowserLaunchResult:
-        if url not in BROWSER_ALLOWED_URLS:
+        if not is_browser_url_allowed(url):
             return BrowserLaunchResult(executed=False, error="URL_NOT_ALLOWED")
 
         chrome = self._locator.find()

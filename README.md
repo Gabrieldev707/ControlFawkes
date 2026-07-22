@@ -122,11 +122,15 @@ abre prime video
 abre disney+
 abre youtube
 abre spotify
+abre youtube Kanye West
+toca Runaway no Spotify
 ```
 
 Variações fechadas como `abrir a max`, `vai para o youtube` e `coloca spotify`
-também são reconhecidas. Texto fora da tabela retorna `UNKNOWN_COMMAND`; não há
-LLM, pesquisa aberta ou execução arbitrária.
+também são reconhecidas. Pesquisas determinísticas aceitam somente YouTube e
+Spotify e apenas abrem a página de resultados, sem escolher ou reproduzir algo
+ambíguo. Texto fora da tabela retorna `UNKNOWN_COMMAND`; não há LLM, pesquisa
+fora desses templates ou execução arbitrária.
 
 ## Protocolo resumido
 

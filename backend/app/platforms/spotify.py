@@ -1,5 +1,6 @@
 from collections.abc import Callable
 import os
+from urllib.parse import quote
 
 from app.platforms.browser import BrowserLaunchResult, BrowserLauncher
 from app.platforms.registry import PLATFORM_URLS
@@ -25,10 +26,27 @@ class SpotifyLauncher:
         self._uri_opener = uri_opener or _open_uri
 
     def open(self) -> BrowserLaunchResult:
+        return self._open_uri_with_fallback(
+            "spotify:",
+            PLATFORM_URLS["SPOTIFY"],
+        )
+
+    def search(self, query: str) -> BrowserLaunchResult:
+        encoded_query = quote(query, safe="")
+        return self._open_uri_with_fallback(
+            f"spotify:search:{encoded_query}",
+            f"{PLATFORM_URLS['SPOTIFY']}/search/{encoded_query}",
+        )
+
+    def _open_uri_with_fallback(
+        self,
+        uri: str,
+        fallback_url: str,
+    ) -> BrowserLaunchResult:
         try:
-            self._uri_opener("spotify:")
+            self._uri_opener(uri)
         except OSError:
-            browser_result = self._browser_launcher.open(PLATFORM_URLS["SPOTIFY"])
+            browser_result = self._browser_launcher.open(fallback_url)
             if not browser_result.executed:
                 return browser_result
             return BrowserLaunchResult(

@@ -31,6 +31,7 @@ from app.schemas.ws import (
     Platform,
     PlatformCommandData,
     PlatformSelectedMessage,
+    SearchMediaCommandData,
     StateUpdateMessage,
     TextCommandMessage,
     VolumeCommandData,
@@ -43,12 +44,14 @@ from app.commands.parser import (
     HELP_COMMANDS,
     PLATFORM_LABELS,
     OpenPlatformIntent,
+    SearchMediaIntent,
     ShowHelpIntent,
     parse_command,
 )
 from app.security.device_store import DeviceStore
 from app.security.pairing import PairingService
 from app.platforms.launcher import PlatformLauncher
+from app.platforms.search import MediaSearchLauncher
 from app.media.actions import MEDIA_ACTIONS, MEDIA_ACTION_MESSAGES
 from app.media.windows_adapter import WindowsMediaAdapter
 from app.schemas.volume import VOLUME_ACTIONS
@@ -77,6 +80,7 @@ class Dispatcher:
         device_store: DeviceStore | None = None,
         pairing_service: PairingService | None = None,
         platform_launcher: PlatformLauncher | None = None,
+        media_search_launcher: MediaSearchLauncher | None = None,
         media_adapter: WindowsMediaAdapter | None = None,
         volume_adapter: WindowsVolumeAdapter | None = None,
         pointer_adapter: WindowsPointerAdapter | None = None,
@@ -86,6 +90,7 @@ class Dispatcher:
         self.device_store = device_store or DeviceStore()
         self.pairing_service = pairing_service or PairingService(self.device_store)
         self.platform_launcher = platform_launcher or PlatformLauncher()
+        self.media_search_launcher = media_search_launcher or MediaSearchLauncher()
         self.media_adapter = media_adapter or WindowsMediaAdapter()
         self.volume_adapter = volume_adapter or WindowsVolumeAdapter()
         self.pointer_adapter = pointer_adapter or WindowsPointerAdapter()
@@ -250,6 +255,12 @@ class Dispatcher:
                 message.requestId,
                 intent.platform,
             )
+        elif isinstance(intent, SearchMediaIntent):
+            await self._handle_search_media(
+                websocket,
+                message.requestId,
+                intent,
+            )
         elif isinstance(intent, ShowHelpIntent):
             response = CommandResultMessage(
                 requestId=message.requestId,
@@ -295,6 +306,33 @@ class Dispatcher:
             data=PlatformCommandData(
                 platform=platform,
                 executed=True,
+                strategy=launch.strategy,
+            ),
+        )
+        await websocket.send_json(response.model_dump())
+
+    async def _handle_search_media(
+        self,
+        websocket: WebSocket,
+        request_id: str,
+        intent: SearchMediaIntent,
+    ) -> None:
+        label = PLATFORM_LABELS[intent.platform]
+        launch = self.media_search_launcher.search(intent.platform, intent.query)
+        if not launch.executed or launch.strategy is None:
+            await self._send_error(
+                websocket,
+                request_id,
+                "MEDIA_SEARCH_FAILED",
+                f"Não foi possível abrir a pesquisa no {label}.",
+            )
+            return
+
+        response = CommandResultMessage(
+            requestId=request_id,
+            message=f"Pesquisa aberta no {label}.",
+            data=SearchMediaCommandData(
+                platform=intent.platform,
                 strategy=launch.strategy,
             ),
         )

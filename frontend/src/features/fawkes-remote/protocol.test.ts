@@ -113,6 +113,22 @@ describe('protocol v1 runtime validation', () => {
     })).toBe(false)
   })
 
+  it('accepts a structured media-search result for supported platforms', () => {
+    expect(isServerMessage({
+      protocolVersion: 1,
+      type: 'COMMAND_RESULT',
+      requestId: 'search-1',
+      success: true,
+      message: 'Pesquisa aberta no YouTube.',
+      data: {
+        intent: 'SEARCH_MEDIA',
+        platform: 'YOUTUBE',
+        executed: true,
+        strategy: 'CHROME',
+      },
+    })).toBe(true)
+  })
+
   it('accepts an allowlisted media-control result', () => {
     expect(isServerMessage({
       protocolVersion: 1,

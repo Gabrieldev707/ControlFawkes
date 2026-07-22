@@ -69,6 +69,7 @@ export const ERROR_CODES = [
   'TOO_MANY_ATTEMPTS',
   'PROTOCOL_VERSION_MISMATCH',
   'PLATFORM_OPEN_FAILED',
+  'MEDIA_SEARCH_FAILED',
   'MEDIA_CONTROL_FAILED',
   'SYSTEM_VOLUME_FAILED',
   'POINTER_CONTROL_FAILED',
@@ -248,6 +249,13 @@ export interface PlatformCommandData {
   strategy: LaunchStrategy
 }
 
+export interface SearchMediaCommandData {
+  intent: 'SEARCH_MEDIA'
+  platform: 'YOUTUBE' | 'SPOTIFY'
+  executed: true
+  strategy: LaunchStrategy
+}
+
 export interface HelpCommandData {
   intent: 'SHOW_HELP'
   commands: string[]
@@ -287,6 +295,7 @@ export interface CommandResultMessage {
   success: true
   message: string
   data: PlatformCommandData
+    | SearchMediaCommandData
     | HelpCommandData
     | MediaCommandData
     | VolumeCommandData

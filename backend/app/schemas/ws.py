@@ -49,6 +49,7 @@ ErrorCode = Literal[
     "TOO_MANY_ATTEMPTS",
     "PROTOCOL_VERSION_MISMATCH",
     "PLATFORM_OPEN_FAILED",
+    "MEDIA_SEARCH_FAILED",
     "MEDIA_CONTROL_FAILED",
     "SYSTEM_VOLUME_FAILED",
     "POINTER_CONTROL_FAILED",
@@ -137,6 +138,15 @@ class PlatformCommandData(BaseModel):
     strategy: LaunchStrategy
 
 
+class SearchMediaCommandData(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    intent: Literal["SEARCH_MEDIA"] = "SEARCH_MEDIA"
+    platform: Literal["YOUTUBE", "SPOTIFY"]
+    executed: Literal[True] = True
+    strategy: LaunchStrategy
+
+
 class HelpCommandData(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -189,6 +199,7 @@ class CommandResultMessage(BaseModel):
     message: str
     data: (
         PlatformCommandData
+        | SearchMediaCommandData
         | HelpCommandData
         | MediaCommandData
         | VolumeCommandData

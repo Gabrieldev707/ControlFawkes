@@ -14,6 +14,7 @@ from app.input.keyboard import WindowsKeyboardAdapter
 from app.platforms.browser import BrowserLaunchResult, BrowserLauncher
 from app.platforms.launcher import PlatformLauncher
 from app.platforms.spotify import SpotifyLauncher
+from app.platforms.search import MediaSearchLauncher
 
 
 @pytest.fixture
@@ -29,6 +30,16 @@ def spotify_launcher_mock():
     launcher.open.return_value = BrowserLaunchResult(
         executed=True,
         strategy="SPOTIFY_APP",
+    )
+    return launcher
+
+
+@pytest.fixture
+def media_search_launcher_mock():
+    launcher = Mock(spec=MediaSearchLauncher)
+    launcher.search.return_value = BrowserLaunchResult(
+        executed=True,
+        strategy="CHROME",
     )
     return launcher
 
@@ -77,6 +88,7 @@ def dispatcher(
     monkeypatch,
     browser_launcher_mock,
     spotify_launcher_mock,
+    media_search_launcher_mock,
     windows_key_event_mock,
     volume_adapter_mock,
     pointer_adapter_mock,
@@ -93,6 +105,7 @@ def dispatcher(
             browser_launcher=browser_launcher_mock,
             spotify_launcher=spotify_launcher_mock,
         ),
+        media_search_launcher=media_search_launcher_mock,
         media_adapter=WindowsMediaAdapter(windows_key_event_mock),
         volume_adapter=volume_adapter_mock,
         pointer_adapter=pointer_adapter_mock,
@@ -1030,6 +1043,85 @@ def test_authenticated_spotify_text_command_is_executed(
         }
         assert ready["state"] == "READY"
         spotify_launcher_mock.open.assert_called_once_with()
+
+
+@pytest.mark.parametrize(
+    ("command", "platform", "query", "strategy"),
+    [
+        ("abre YouTube Kanye West", "YOUTUBE", "Kanye West", "CHROME"),
+        ("toca Runaway no Spotify", "SPOTIFY", "Runaway", "SPOTIFY_APP"),
+    ],
+)
+def test_authenticated_media_search_executes_structured_intent(
+    client,
+    dispatcher,
+    media_search_launcher_mock,
+    command,
+    platform,
+    query,
+    strategy,
+):
+    media_search_launcher_mock.search.return_value = BrowserLaunchResult(
+        executed=True,
+        strategy=strategy,
+    )
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "TEXT_COMMAND",
+            "requestId": "search-1",
+            "payload": {"query": command},
+        })
+
+        assert websocket.receive_json()["state"] == "BUSY"
+        result = websocket.receive_json()
+        assert websocket.receive_json()["state"] == "READY"
+
+    assert result == {
+        "protocolVersion": 1,
+        "type": "COMMAND_RESULT",
+        "requestId": "search-1",
+        "success": True,
+        "message": f"Pesquisa aberta no {'YouTube' if platform == 'YOUTUBE' else 'Spotify'}.",
+        "data": {
+            "intent": "SEARCH_MEDIA",
+            "platform": platform,
+            "executed": True,
+            "strategy": strategy,
+        },
+    }
+    media_search_launcher_mock.search.assert_called_once_with(platform, query)
+
+
+def test_media_search_failure_returns_error_without_false_success(
+    client,
+    dispatcher,
+    media_search_launcher_mock,
+):
+    media_search_launcher_mock.search.return_value = BrowserLaunchResult(
+        executed=False,
+        error="CHROME_NOT_FOUND",
+    )
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "TEXT_COMMAND",
+            "requestId": "search-1",
+            "payload": {"query": "pesquisa Fawkes no YouTube"},
+        })
+
+        assert websocket.receive_json()["state"] == "BUSY"
+        error = websocket.receive_json()
+        assert websocket.receive_json()["state"] == "READY"
+
+    assert error["code"] == "MEDIA_SEARCH_FAILED"
+    assert error["message"] == "Não foi possível abrir a pesquisa no YouTube."
 
 
 def test_authenticated_help_command_returns_supported_examples(client, dispatcher):

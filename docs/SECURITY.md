@@ -20,6 +20,8 @@ podem isolar iPhone e computador.
 - plataformas são identificadores fechados; o frontend nunca envia URL;
 - o Chrome recebe somente URLs oficiais do registry do backend, sem shell,
   perfil codificado, credencial, URL arbitrária ou alteração do navegador padrão;
+- pesquisa aceita somente rotas de resultados do YouTube e Spotify construídas
+  e codificadas no backend; ela não escolhe nem reproduz resultado ambíguo;
 - mídia usa somente sete ações mapeadas para teclas fixas;
 - volume aceita 0–100 e deltas de somente ±5;
 - pointer aceita movimento relativo limitado, scroll fixo e no máximo 60 movimentos/s;

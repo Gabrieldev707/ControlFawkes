@@ -2,6 +2,7 @@ import pytest
 
 from app.commands.parser import (
     OpenPlatformIntent,
+    SearchMediaIntent,
     ShowHelpIntent,
     UnknownIntent,
     normalize_command,
@@ -88,3 +89,41 @@ def test_unknown_commands_preserve_original_text(command):
 
     assert isinstance(result, UnknownIntent)
     assert result.original_text == command
+
+
+@pytest.mark.parametrize(
+    ("command", "platform", "query"),
+    [
+        ("abre YouTube Kanye West", "YOUTUBE", "Kanye West"),
+        (
+            "coloca Billie Jean do Michael Jackson no YouTube",
+            "YOUTUBE",
+            "Billie Jean do Michael Jackson",
+        ),
+        ("toca Runaway no Spotify", "SPOTIFY", "Runaway"),
+        ("procura Kendrick Lamar no Spotify", "SPOTIFY", "Kendrick Lamar"),
+        ("PESQUISA Beyoncé no youtube!", "YOUTUBE", "Beyoncé"),
+        ("buscar no Spotify Águas de Março", "SPOTIFY", "Águas de Março"),
+    ],
+)
+def test_search_media_commands_extract_platform_and_clean_query(command, platform, query):
+    result = parse_command(command)
+
+    assert result == SearchMediaIntent(
+        type="SEARCH_MEDIA",
+        platform=platform,
+        query=query,
+    )
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "pesquisa no YouTube",
+        "procura no Spotify",
+        "pesquisa Interestelar na Netflix",
+        "abre Spotify e desliga o computador",
+    ],
+)
+def test_search_media_rejects_empty_unsupported_or_dangerous_queries(command):
+    assert isinstance(parse_command(command), UnknownIntent)

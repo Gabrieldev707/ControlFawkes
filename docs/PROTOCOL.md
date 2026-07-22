@@ -33,17 +33,19 @@ Teclas permitidas: `ENTER`, `BACKSPACE`, `ESCAPE`, `ARROW_UP`, `ARROW_DOWN`,
 - `COMMAND_RESULT`: `success: true` e `data.executed` coerente com a ação.
 - `ERROR`: código fechado e mensagem legível.
 
-Intents de resultado: `OPEN_PLATFORM`, `SHOW_HELP`, `MEDIA_CONTROL`,
+Intents de resultado: `OPEN_PLATFORM`, `SEARCH_MEDIA`, `SHOW_HELP`, `MEDIA_CONTROL`,
 `SYSTEM_VOLUME`, `POINTER_CONTROL` e `KEYBOARD_CONTROL`. Resultados de teclado
 não ecoam texto ou tecla.
 
 `OPEN_PLATFORM` executado inclui `strategy`: `CHROME`, `SPOTIFY_APP` ou
 `SPOTIFY_WEB_CHROME`. Ausência do aplicativo e falha do fallback retornam erro,
 nunca um resultado de sucesso presumido.
+`SEARCH_MEDIA` é limitado a YouTube e Spotify, inclui plataforma, execução e
+estratégia, mas não devolve nem persiste o texto pesquisado.
 
 ## Erros funcionais
 
 Além dos erros de JSON, autenticação, versão e payload, cada integração possui
-falha própria: `PLATFORM_OPEN_FAILED`, `MEDIA_CONTROL_FAILED`,
+falha própria: `PLATFORM_OPEN_FAILED`, `MEDIA_SEARCH_FAILED`, `MEDIA_CONTROL_FAILED`,
 `SYSTEM_VOLUME_FAILED`, `POINTER_CONTROL_FAILED`, `POINTER_RATE_LIMITED` e
 `KEYBOARD_CONTROL_FAILED`.

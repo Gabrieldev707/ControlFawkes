@@ -40,3 +40,11 @@ Esta rodada registra ajustes derivados do teste físico no iPhone. Cada seção 
 - Protocolo: todo `OPEN_PLATFORM` bem-sucedido informa `CHROME`, `SPOTIFY_APP` ou `SPOTIFY_WEB_CHROME`. Estratégia ausente ou desconhecida é rejeitada no frontend.
 - Falha segura: se aplicativo e Chrome falharem, o backend retorna erro e não declara execução.
 - Verificação automatizada: launchers, fallback, integração WebSocket, validação runtime, lint e build aprovados com mocks. Nenhum Spotify ou Chrome real foi iniciado; validação física permanece pendente.
+
+## 6. Intenção determinística `SEARCH_MEDIA`
+
+- Parser: reconhece verbos fechados, YouTube/Spotify antes ou depois da consulta, variações de caixa e consultas com acentos. A estrutura interna contém ação, plataforma e consulta limpa.
+- YouTube: abre somente `/results?search_query=...` com encoding no Chrome. Spotify: tenta `spotify:search:...` e usa `/search/...` no Chrome como fallback.
+- Limites: Netflix e demais plataformas ainda não aceitam pesquisa; consulta vazia ou frase perigosa retorna comando desconhecido. Nenhum resultado é escolhido ou reproduzido automaticamente.
+- Privacidade: a consulta é usada somente para construir o destino e não volta no protocolo, não é persistida e não entra em histórico.
+- Verificação automatizada: parser, allowlist de rotas, encoding, launchers, WebSocket, protocolo frontend, lint e build aprovados. Navegadores e aplicativos reais não foram acionados; validação física permanece pendente.
