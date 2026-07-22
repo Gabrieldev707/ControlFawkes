@@ -1,3 +1,5 @@
+import ctypes
+
 import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import AsyncMock, Mock, call
@@ -48,7 +50,12 @@ def media_search_launcher_mock():
 @pytest.fixture
 def windows_key_event_mock(monkeypatch):
     emitter = Mock()
-    monkeypatch.setattr("ctypes.windll.user32.keybd_event", emitter)
+    # O emitter é injetado nos adapters; o patch global é apenas a garantia de
+    # que nenhuma tecla real seja emitida. Runners não-Windows (CI) não expõem
+    # ctypes.windll, e lá os adapters já ficam inertes por sys.platform.
+    windll = getattr(ctypes, "windll", None)
+    if windll is not None:
+        monkeypatch.setattr(windll.user32, "keybd_event", emitter)
     return emitter
 
 

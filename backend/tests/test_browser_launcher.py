@@ -8,7 +8,9 @@ from app.platforms.spotify import SpotifyLauncher
 
 
 def test_chrome_locator_uses_standard_windows_installation_without_personal_paths():
-    expected = Path(r"C:\Program Files\Google\Chrome\Application\chrome.exe")
+    # Montado como o ChromeLocator monta, para o assert valer em qualquer
+    # plataforma (no Windows as duas formas são equivalentes).
+    expected = Path(r"C:\Program Files") / "Google/Chrome/Application/chrome.exe"
     locator = ChromeLocator(
         environment={"PROGRAMFILES": r"C:\Program Files"},
         which=Mock(return_value=None),
