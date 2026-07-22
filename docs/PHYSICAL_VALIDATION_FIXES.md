@@ -17,3 +17,10 @@ Esta rodada registra ajustes derivados do teste físico no iPhone. Cada seção 
 - Mantidos: halo intermediário `0,42`, multiplicador de linhas `0,085`, elétrons `1,00`, opacidade inicial dos pontos `1,00`, tamanhos, contagens, geometria, física, paletas e transições.
 - Limite: todos os estados permanecem entre 1,02 e o teto moderado de 1,10, sem CSS global nem opacidade no contêiner.
 - Verificação automatizada: contrato dos temas da orb aprovado. Comparação física no iPhone permanece pendente.
+
+## 3. Logo da Max
+
+- Causa raiz: `/platforms/max.svg` apontava para um glifo cinza quadrado em vez do wordmark da plataforma, com contraste e proporção incompatíveis com o card.
+- Correção: o asset local foi substituído pelo wordmark vetorial Max já presente no histórico do projeto, com `viewBox="0 0 24 24"` e preenchimento branco para o fundo escuro.
+- Preservado: caminho e case `/platforms/max.svg`, nome acessível `Max`, dimensões do card e `object-fit: contain` da classe compartilhada. Nenhum logo foi desenhado em CSS.
+- Verificação automatizada: teste confirma asset, caminho de produção, título, viewBox e classe de contenção. Build de produção valida a cópia para `dist`.
