@@ -60,10 +60,11 @@ body {
 }
 
 .remote-title {
-  font-size: 1.2rem;
-  font-weight: 600;
+  font-family: 'Syncopate', sans-serif;
+  font-size: 1.15rem;
+  font-weight: 700;
   color: var(--text-primary);
-  letter-spacing: 0.05em;
+  letter-spacing: 0.15em;
 }
 
 .status-badge {

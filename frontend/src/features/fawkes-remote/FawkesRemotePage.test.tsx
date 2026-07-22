@@ -1,5 +1,5 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ConnectionState, ServerMessage } from './types'
 import { FawkesRemotePage } from './FawkesRemotePage'
@@ -508,5 +508,167 @@ describe('FawkesRemotePage authentication', () => {
       requestId: expect.any(String),
       payload: { text: 'Olá' },
     })
+  })
+})
+
+
+describe('FawkesRemotePage command feedback', () => {
+  beforeEach(() => {
+    window.history.replaceState({}, '', '/')
+    localStorage.clear()
+    websocketMock.connectionState = 'connected'
+    websocketMock.onMessage = undefined
+    websocketMock.sendMessage.mockReset()
+    websocketMock.sendMessage.mockReturnValue(true)
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.clearAllTimers()
+    vi.useRealTimers()
+  })
+
+  function authenticate(): void {
+    act(() => {
+      websocketMock.onMessage?.({
+        protocolVersion: 1,
+        type: 'PAIR_RESULT',
+        requestId: 'pair-1',
+        success: true,
+        message: 'Pareamento concluído.',
+        deviceId: 'device-1',
+        token: 'new-secure-token-value',
+      })
+      websocketMock.onMessage?.({
+        protocolVersion: 1,
+        type: 'STATE_UPDATE',
+        state: 'READY',
+        message: 'Computador pronto.',
+      })
+    })
+  }
+
+  function selectNetflix(): string {
+    fireEvent.click(screen.getByRole('button', { name: 'Plataformas' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Netflix' }))
+    const sent = websocketMock.sendMessage.mock.calls.at(-1)?.[0] as { requestId: string }
+    // O orb só é renderizado na Home, então voltamos para poder observar o feedback.
+    fireEvent.click(screen.getByRole('button', { name: /Início/ }))
+    return sent.requestId
+  }
+
+  function orbState(): string | null {
+    return screen.getByLabelText('Orb do Fawkes').getAttribute('data-state')
+  }
+
+  it('enters the executing state while a platform selection is in flight', () => {
+    render(<FawkesRemotePage />)
+    authenticate()
+
+    selectNetflix()
+
+    expect(orbState()).toBe('executing')
+  })
+
+  it('ignores responses that do not match the current requestId', () => {
+    render(<FawkesRemotePage />)
+    authenticate()
+    selectNetflix()
+
+    act(() => {
+      websocketMock.onMessage?.({
+        protocolVersion: 1,
+        type: 'COMMAND_RESULT',
+        requestId: 'stale-request',
+        success: true,
+        message: 'Resposta antiga.',
+        data: {
+          intent: 'OPEN_PLATFORM',
+          platform: 'NETFLIX',
+          executed: true,
+          strategy: 'CHROME',
+        },
+      })
+    })
+
+    expect(orbState()).toBe('executing')
+  })
+
+  it('transitions to success and back to idle after a COMMAND_RESULT', () => {
+    render(<FawkesRemotePage />)
+    authenticate()
+    const requestId = selectNetflix()
+
+    act(() => {
+      websocketMock.onMessage?.({
+        protocolVersion: 1,
+        type: 'COMMAND_RESULT',
+        requestId,
+        success: true,
+        message: 'Netflix aberto.',
+        data: {
+          intent: 'OPEN_PLATFORM',
+          platform: 'NETFLIX',
+          executed: true,
+          strategy: 'CHROME',
+        },
+      })
+    })
+    expect(orbState()).toBe('success')
+
+    act(() => vi.advanceTimersByTime(2000))
+    expect(orbState()).toBe('idle')
+  })
+
+  it('transitions to error and back to idle after an ERROR response', () => {
+    render(<FawkesRemotePage />)
+    authenticate()
+    const requestId = selectNetflix()
+
+    act(() => {
+      websocketMock.onMessage?.({
+        protocolVersion: 1,
+        type: 'ERROR',
+        requestId,
+        code: 'PLATFORM_OPEN_FAILED',
+        message: 'Não foi possível abrir o Netflix.',
+      })
+    })
+    expect(orbState()).toBe('error')
+    expect(screen.getByRole('alert').textContent).toBe('Não foi possível abrir o Netflix.')
+
+    act(() => vi.advanceTimersByTime(3000))
+    expect(orbState()).toBe('idle')
+  })
+
+  it('enters the error state when the socket refuses the message', () => {
+    render(<FawkesRemotePage />)
+    authenticate()
+    websocketMock.sendMessage.mockReturnValue(false)
+
+    selectNetflix()
+
+    expect(orbState()).toBe('error')
+  })
+
+  it('clears pending feedback timers on unmount', () => {
+    const clearTimeoutSpy = vi.spyOn(window, 'clearTimeout')
+    const { unmount } = render(<FawkesRemotePage />)
+    authenticate()
+    const requestId = selectNetflix()
+
+    act(() => {
+      websocketMock.onMessage?.({
+        protocolVersion: 1,
+        type: 'ERROR',
+        requestId,
+        code: 'PLATFORM_OPEN_FAILED',
+        message: 'Não foi possível abrir o Netflix.',
+      })
+    })
+
+    unmount()
+
+    expect(clearTimeoutSpy).toHaveBeenCalled()
   })
 })

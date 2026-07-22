@@ -1228,3 +1228,31 @@ def test_authenticated_unknown_text_command_returns_clear_error(client, dispatch
         assert error["code"] == "UNKNOWN_COMMAND"
         assert error["message"] == "Não entendi esse comando."
         assert ready["state"] == "READY"
+
+
+def test_websocket_rejects_non_object_payloads(client):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+
+        for raw in ("[]", "null", '"texto"', "123"):
+            websocket.send_text(raw)
+            data = websocket.receive_json()
+
+            assert data["type"] == "ERROR"
+            assert data["code"] == "INVALID_PAYLOAD"
+
+
+def test_websocket_rejects_message_without_request_id(client):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "PLATFORM_SELECTED",
+            "payload": {"platform": "NETFLIX"},
+        })
+
+        data = websocket.receive_json()
+
+        assert data["type"] == "ERROR"
+        assert data["requestId"] == "unknown"
+        assert data["code"] == "INVALID_PAYLOAD"

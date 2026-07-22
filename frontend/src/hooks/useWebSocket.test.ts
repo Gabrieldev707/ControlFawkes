@@ -162,6 +162,52 @@ describe('useWebSocket lifecycle', () => {
     expect(FakeWebSocket.instances).toHaveLength(1)
   })
 
+  it('updates the connection state on open and close', () => {
+    const { result } = renderHook(() => useWebSocket())
+    expect(result.current.connectionState).toBe('connecting')
+
+    act(() => FakeWebSocket.instances[0].open())
+    expect(result.current.connectionState).toBe('connected')
+
+    act(() => FakeWebSocket.instances[0].serverClose())
+    expect(result.current.connectionState).toBe('disconnected')
+  })
+
+  it('delivers valid server messages to the consumer', () => {
+    const onMessage = vi.fn()
+    renderHook(() => useWebSocket({ onMessage }))
+    const payload = {
+      protocolVersion: PROTOCOL_VERSION,
+      type: 'STATE_UPDATE',
+      state: 'READY',
+      message: 'Computador pronto.',
+    }
+
+    act(() => {
+      FakeWebSocket.instances[0].open()
+      FakeWebSocket.instances[0].onmessage?.(
+        new MessageEvent('message', { data: JSON.stringify(payload) }),
+      )
+    })
+
+    expect(onMessage).toHaveBeenCalledWith(payload)
+  })
+
+  it('ignores malformed or unknown server messages', () => {
+    const onMessage = vi.fn()
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    renderHook(() => useWebSocket({ onMessage }))
+
+    act(() => {
+      FakeWebSocket.instances[0].open()
+      for (const data of ['{ quebrado', '"texto"', '{"type":"MAGIC"}']) {
+        FakeWebSocket.instances[0].onmessage?.(new MessageEvent('message', { data }))
+      }
+    })
+
+    expect(onMessage).not.toHaveBeenCalled()
+  })
+
   it('sends only while the active socket is open', () => {
     const { result } = renderHook(() => useWebSocket())
     const message: ClientMessage = {

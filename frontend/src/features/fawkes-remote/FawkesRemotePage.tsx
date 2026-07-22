@@ -266,6 +266,14 @@ export const FawkesRemotePage: React.FC = () => {
   const showOrbPreview = import.meta.env.DEV
     && new URLSearchParams(window.location.search).get('orb-preview') === '1'
 
+  useEffect(() => {
+    return () => {
+      if (successTimeoutRef.current) {
+        clearTimeout(successTimeoutRef.current);
+      }
+    };
+  }, []);
+
   const handlePlatformSelect = (platform: Platform) => {
     if (controlsDisabled) return
     if (successTimeoutRef.current) clearTimeout(successTimeoutRef.current)
