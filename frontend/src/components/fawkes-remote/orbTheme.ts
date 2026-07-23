@@ -11,6 +11,13 @@ export interface OrbTheme {
   electronRate: number;
 }
 
+export const ORB_VISUAL_TUNING = {
+  spriteMidHaloOpacity: 0.42,
+  lineOpacityMultiplier: 0.085,
+  electronOpacity: 1,
+  initialPointOpacity: 1,
+} as const;
+
 export const ORB_THEMES: Record<OrbState, OrbTheme> = {
   idle: {
     colors: [
@@ -24,9 +31,9 @@ export const ORB_THEMES: Record<OrbState, OrbTheme> = {
     ],
     radius: 28,
     speed: 0.20,
-    brightness: 0.85, // aumentado de 0.65
-    size: 0.60,       // levemente maior (era 0.35)
-    lineAmount: 0.15, // aumentado de 0.08
+    brightness: 1.08,
+    size: 0.35,
+    lineAmount: 0.08,
     electronRate: 0,
   },
   listening: {
@@ -39,9 +46,9 @@ export const ORB_THEMES: Record<OrbState, OrbTheme> = {
     ],
     radius: 22,
     speed: 0.30,
-    brightness: 0.95,
-    size: 0.65,
-    lineAmount: 0.25,
+    brightness: 1.10,
+    size: 0.40,
+    lineAmount: 0.20,
     electronRate: 0,
   },
   transcribing: {
@@ -54,9 +61,9 @@ export const ORB_THEMES: Record<OrbState, OrbTheme> = {
     ],
     radius: 16,
     speed: 0.50,
-    brightness: 1.0,
-    size: 0.55,
-    lineAmount: 0.40,
+    brightness: 1.08,
+    size: 0.30,
+    lineAmount: 0.35,
     electronRate: 0.015,
   },
   needs_selection: {
@@ -69,9 +76,9 @@ export const ORB_THEMES: Record<OrbState, OrbTheme> = {
     ],
     radius: 18,
     speed: 0.20,
-    brightness: 0.95,
-    size: 0.65,
-    lineAmount: 0.30,
+    brightness: 1.06,
+    size: 0.40,
+    lineAmount: 0.22,
     electronRate: 0,
   },
   executing: {
@@ -84,9 +91,9 @@ export const ORB_THEMES: Record<OrbState, OrbTheme> = {
     ],
     radius: 16,
     speed: 0.60,
-    brightness: 1.0,
-    size: 0.60,
-    lineAmount: 0.40,
+    brightness: 1.10,
+    size: 0.35,
+    lineAmount: 0.35,
     electronRate: 0.02,
   },
   success: {
@@ -99,8 +106,8 @@ export const ORB_THEMES: Record<OrbState, OrbTheme> = {
     ],
     radius: 30,
     speed: 0.60,
-    brightness: 0.95,
-    size: 0.70,
+    brightness: 1.10,
+    size: 0.50,
     lineAmount: 0.15,
     electronRate: 0.05,
   },
@@ -114,9 +121,9 @@ export const ORB_THEMES: Record<OrbState, OrbTheme> = {
     ],
     radius: 20,
     speed: 0.40,
-    brightness: 0.85,
-    size: 0.50,
-    lineAmount: 0.15,
+    brightness: 1.02,
+    size: 0.25,
+    lineAmount: 0.10,
     electronRate: 0,
   }
 };

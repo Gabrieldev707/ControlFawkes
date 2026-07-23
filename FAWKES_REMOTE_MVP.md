@@ -1,5 +1,11 @@
 # Fawkes Remote — Especificação do MVP
 
+> **Contexto:** este documento registra a visão futura do produto. A Fase 1.6
+> implementa somente a fundação independente do ControlFawkes neste repositório.
+> Recursos de navegador, Windows, voz, volume, touchpad e teclado continuam fora
+> do escopo atual. O Fawkes original é apenas referência visual e não deve ser
+> alterado nem usado como dependência de execução.
+
 ## 1. Visão geral
 
 O **Fawkes Remote** será um módulo mobile-first para controlar, pelo iPhone, um computador Windows conectado à TV por HDMI.
@@ -55,12 +61,17 @@ Regras obrigatórias:
 
 ## 4. Decisão arquitetural
 
-O MVP deve ser implementado dentro do ecossistema atual do OrcTech, mas como módulo isolado.
+O ControlFawkes deve ser implementado como projeto independente. O OrcTech e o
+Fawkes original não fazem parte de sua árvore de código; a identidade visual do
+Fawkes pode ser consultada apenas como referência.
 
 Estrutura sugerida:
 
 ```text
-OrcTech/
+ControlFawkes/
+├── .github/
+│   └── workflows/
+├── docs/
 ├── frontend/
 │   └── src/
 │       ├── pages/
@@ -70,27 +81,25 @@ OrcTech/
 │       ├── hooks/
 │       └── services/
 │
-└── fawkes-remote/
+└── backend/
     ├── app/
     │   ├── api/
-    │   ├── browser/
     │   ├── commands/
-    │   ├── platforms/
-    │   ├── security/
-    │   ├── transcription/
-    │   ├── websocket/
-    │   └── windows/
-    ├── tests/
-    └── README.md
+    │   ├── protocol/
+    │   ├── schemas/
+    │   └── security/
+    ├── scripts/
+    └── tests/
 ```
 
-Branch sugerida:
+Branch da fundação:
 
 ```text
-feat/fawkes-remote-mvp
+feat/fase-1-6-foundation
 ```
 
-O módulo deve reaproveitar componentes visuais existentes do Fawkes sempre que isso não criar acoplamento desnecessário.
+O projeto pode recriar conceitos visuais do Fawkes, sem importar módulos ou
+criar acoplamento com o repositório original.
 
 ---
 

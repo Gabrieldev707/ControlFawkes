@@ -7,3 +7,7 @@ build/
 __pycache__/
 *.pyc
 .DS_Store
+backend/data/
+.pytest_cache/
+backend/.pytest-tmp/
+.playwright-mcp/

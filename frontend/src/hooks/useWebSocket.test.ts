@@ -1,206 +1,225 @@
-import { renderHook, act } from '@testing-library/react';
-import { useWebSocket } from './useWebSocket';
-import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { act, renderHook } from '@testing-library/react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-describe('useWebSocket', () => {
-  let wsInstances: any[] = [];
-  let originalWebSocket: any;
+import { buildWebSocketUrl, useWebSocket } from './useWebSocket'
+import { PROTOCOL_VERSION, type ClientMessage } from '../features/fawkes-remote/types'
 
-  class MockWebSocket {
-    url: string;
-    readyState: number;
-    onopen: any = null;
-    onclose: any = null;
-    onmessage: any = null;
-    send: any;
-    close: any;
 
-    static OPEN = 1;
-    static CONNECTING = 0;
-    static CLOSED = 3;
+class FakeWebSocket {
+  static readonly CONNECTING = 0
+  static readonly OPEN = 1
+  static readonly CLOSING = 2
+  static readonly CLOSED = 3
+  static instances: FakeWebSocket[] = []
 
-    constructor(url: string) {
-      this.url = url;
-      this.readyState = MockWebSocket.CONNECTING;
-      this.send = vi.fn();
-      this.close = vi.fn(() => {
-        this.readyState = MockWebSocket.CLOSED;
-        if (this.onclose) this.onclose({});
-      });
-      wsInstances.push(this);
-    }
+  readonly url: string
+  readyState = FakeWebSocket.CONNECTING
+  onopen: ((event: Event) => void) | null = null
+  onmessage: ((event: MessageEvent) => void) | null = null
+  onclose: ((event: CloseEvent) => void) | null = null
+  onerror: ((event: Event) => void) | null = null
+  send = vi.fn<(data: string) => void>()
+
+  constructor(url: string | URL) {
+    this.url = String(url)
+    FakeWebSocket.instances.push(this)
   }
 
+  open(): void {
+    this.readyState = FakeWebSocket.OPEN
+    this.onopen?.(new Event('open'))
+  }
+
+  serverClose(): void {
+    this.readyState = FakeWebSocket.CLOSED
+    this.onclose?.(new CloseEvent('close'))
+  }
+
+  close(): void {
+    if (this.readyState === FakeWebSocket.CLOSED) return
+    this.readyState = FakeWebSocket.CLOSED
+    this.onclose?.(new CloseEvent('close'))
+  }
+}
+
+
+describe('buildWebSocketUrl', () => {
+  it('uses the page hostname without the Vite port', () => {
+    expect(buildWebSocketUrl(undefined, '192.168.0.20', 'http:', '8100'))
+      .toBe('ws://192.168.0.20:8100/ws')
+  })
+
+  it('uses wss on an HTTPS page', () => {
+    expect(buildWebSocketUrl(undefined, 'fawkes.local', 'https:', '8100'))
+      .toBe('wss://fawkes.local:8100/ws')
+  })
+
+  it('prefers a configured override', () => {
+    expect(buildWebSocketUrl('ws://10.0.0.5:9000/ws', 'ignored', 'https:', '8100'))
+      .toBe('ws://10.0.0.5:9000/ws')
+  })
+})
+
+
+describe('useWebSocket lifecycle', () => {
   beforeEach(() => {
-    wsInstances = [];
-    originalWebSocket = globalThis.WebSocket;
-    // @ts-ignore
-    globalThis.WebSocket = MockWebSocket;
-    vi.useFakeTimers();
-  });
+    vi.useFakeTimers()
+    FakeWebSocket.instances = []
+    vi.stubGlobal('WebSocket', FakeWebSocket as unknown as typeof WebSocket)
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      value: 'visible',
+    })
+  })
 
   afterEach(() => {
-    // @ts-ignore
-    globalThis.WebSocket = originalWebSocket;
-    vi.clearAllTimers();
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-  });
+    vi.clearAllTimers()
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
 
-  it('should connect and update state', () => {
-    const { result } = renderHook(() => useWebSocket());
-    
-    expect(result.current.connectionState).toBe('connecting');
-    expect(wsInstances.length).toBe(1);
-    
-    // Simulate open
-    act(() => {
-      wsInstances[0].readyState = 1; // OPEN
-      wsInstances[0].onopen({});
-    });
-    
-    expect(result.current.connectionState).toBe('connected');
-  });
+  it('reconnects with 1.5x backoff and a 15 second cap without stopping', () => {
+    const timeoutSpy = vi.spyOn(window, 'setTimeout')
+    renderHook(() => useWebSocket())
 
-  it('should handle incoming valid ServerMessage', () => {
-    const onMessage = vi.fn();
-    renderHook(() => useWebSocket({ onMessage }));
-    
+    for (let attempt = 0; attempt < 13; attempt += 1) {
+      act(() => {
+        FakeWebSocket.instances.at(-1)?.serverClose()
+        vi.runOnlyPendingTimers()
+      })
+    }
+
+    const reconnectDelays = timeoutSpy.mock.calls
+      .map(([, delay]) => Number(delay))
+      .filter((delay) => delay >= 1000)
+    expect(reconnectDelays.slice(0, 4)).toEqual([1000, 1500, 2250, 3375])
+    expect(Math.max(...reconnectDelays)).toBe(15000)
+    expect(FakeWebSocket.instances).toHaveLength(14)
+  })
+
+  it('resets the backoff after a successful connection', () => {
+    const timeoutSpy = vi.spyOn(window, 'setTimeout')
+    renderHook(() => useWebSocket())
     act(() => {
-      wsInstances[0].readyState = 1;
-      wsInstances[0].onopen({});
-    });
+      FakeWebSocket.instances[0].serverClose()
+      vi.runOnlyPendingTimers()
+      FakeWebSocket.instances[1].open()
+      FakeWebSocket.instances[1].serverClose()
+    })
+
+    const delays = timeoutSpy.mock.calls.map(([, delay]) => Number(delay))
+    expect(delays.at(-1)).toBe(1000)
+  })
+
+  it('reconnects immediately when the network returns', () => {
+    renderHook(() => useWebSocket())
+    act(() => FakeWebSocket.instances[0].serverClose())
+    expect(FakeWebSocket.instances).toHaveLength(1)
+
+    act(() => window.dispatchEvent(new Event('online')))
+
+    expect(FakeWebSocket.instances).toHaveLength(2)
+  })
+
+  it('reconnects immediately when the page becomes visible', () => {
+    renderHook(() => useWebSocket())
+    act(() => FakeWebSocket.instances[0].serverClose())
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      value: 'visible',
+    })
+
+    act(() => document.dispatchEvent(new Event('visibilitychange')))
+
+    expect(FakeWebSocket.instances).toHaveLength(2)
+  })
+
+  it('supports manual reconnect without creating duplicate sockets', () => {
+    const { result } = renderHook(() => useWebSocket())
+
+    act(() => result.current.reconnect())
+    expect(FakeWebSocket.instances).toHaveLength(1)
 
     act(() => {
-      wsInstances[0].onmessage({
-        data: JSON.stringify({
-          type: 'COMMAND_RESULT',
-          requestId: '123',
-          success: true,
-          message: 'OK'
-        })
-      });
-    });
+      FakeWebSocket.instances[0].serverClose()
+      result.current.reconnect()
+    })
+    expect(FakeWebSocket.instances).toHaveLength(2)
+  })
 
-    expect(onMessage).toHaveBeenCalledTimes(1);
-    expect(onMessage.mock.calls[0][0].requestId).toBe('123');
-  });
-  
-  it('should ignore incoming invalid messages', () => {
-    const onMessage = vi.fn();
-    renderHook(() => useWebSocket({ onMessage }));
-    
+  it('cancels timers and listeners on unmount', () => {
+    const { unmount } = renderHook(() => useWebSocket())
+    act(() => FakeWebSocket.instances[0].serverClose())
+
+    unmount()
     act(() => {
-      wsInstances[0].readyState = 1;
-      wsInstances[0].onopen({});
-    });
+      vi.runOnlyPendingTimers()
+      window.dispatchEvent(new Event('online'))
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+
+    expect(FakeWebSocket.instances).toHaveLength(1)
+  })
+
+  it('updates the connection state on open and close', () => {
+    const { result } = renderHook(() => useWebSocket())
+    expect(result.current.connectionState).toBe('connecting')
+
+    act(() => FakeWebSocket.instances[0].open())
+    expect(result.current.connectionState).toBe('connected')
+
+    act(() => FakeWebSocket.instances[0].serverClose())
+    expect(result.current.connectionState).toBe('disconnected')
+  })
+
+  it('delivers valid server messages to the consumer', () => {
+    const onMessage = vi.fn()
+    renderHook(() => useWebSocket({ onMessage }))
+    const payload = {
+      protocolVersion: PROTOCOL_VERSION,
+      type: 'STATE_UPDATE',
+      state: 'READY',
+      message: 'Computador pronto.',
+    }
 
     act(() => {
-      wsInstances[0].onmessage({
-        data: JSON.stringify({
-          type: 'SOME_GARBAGE',
-          field: 'value'
-        })
-      });
-    });
+      FakeWebSocket.instances[0].open()
+      FakeWebSocket.instances[0].onmessage?.(
+        new MessageEvent('message', { data: JSON.stringify(payload) }),
+      )
+    })
 
-    expect(onMessage).not.toHaveBeenCalled();
-  });
+    expect(onMessage).toHaveBeenCalledWith(payload)
+  })
 
-  it('should reconnect with exponential backoff on close and respect limits', () => {
-    const { result } = renderHook(() => useWebSocket({ maxRetries: 2 }));
-    
-    // Simulate open
-    act(() => {
-      wsInstances[0].readyState = 1;
-      wsInstances[0].onopen({});
-    });
-    
-    // Simulate disconnect
-    act(() => {
-      wsInstances[0].close();
-    });
-    
-    expect(result.current.connectionState).toBe('disconnected');
-    
-    // Retry 1 (delay ~1000ms)
-    act(() => { vi.advanceTimersByTime(1000); });
-    expect(wsInstances.length).toBe(2);
-    
-    // Simulate disconnect on retry 1
-    act(() => { wsInstances[1].close(); });
-    
-    // Retry 2 (delay ~1500ms)
-    act(() => { vi.advanceTimersByTime(1500); });
-    expect(wsInstances.length).toBe(3);
-    
-    // Simulate disconnect on retry 2
-    act(() => { wsInstances[2].close(); });
-    
-    // Should go to error because maxRetries is 2
-    expect(result.current.connectionState).toBe('error');
-    
-    // Should not create a 4th instance
-    act(() => { vi.advanceTimersByTime(3000); });
-    expect(wsInstances.length).toBe(3);
-  });
+  it('ignores malformed or unknown server messages', () => {
+    const onMessage = vi.fn()
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    renderHook(() => useWebSocket({ onMessage }))
 
-  it('should not allow sending when disconnected', () => {
-    const { result } = renderHook(() => useWebSocket());
-    
-    // Not connected yet
-    let sent = false;
     act(() => {
-      sent = result.current.sendMessage({
-        type: 'TEXT_COMMAND',
-        requestId: '1',
-        payload: { query: 'test' }
-      });
-    });
-    expect(sent).toBe(false);
-  });
-  
-  it('should clean up on unmount', () => {
-    const { unmount } = renderHook(() => useWebSocket());
-    
-    expect(wsInstances.length).toBe(1);
-    const closeSpy = wsInstances[0].close;
-    
-    unmount();
-    
-    expect(closeSpy).toHaveBeenCalled();
-  });
-  
-  it('should not reconnect if unmounted while disconnected', () => {
-    const { unmount } = renderHook(() => useWebSocket());
-    
-    act(() => {
-      wsInstances[0].readyState = 1;
-      wsInstances[0].onopen({});
-    });
-    
-    act(() => {
-      wsInstances[0].close(); // Triggers a reconnect timer
-    });
-    
-    unmount(); // Should clear the timer
-    
-    act(() => {
-      vi.advanceTimersByTime(5000);
-    });
-    
-    // Should not have created a second instance
-    expect(wsInstances.length).toBe(1);
-  });
-  
-  it('should not create duplicate connections if connect is called twice', () => {
-    const { result } = renderHook(() => useWebSocket());
-    
-    act(() => {
-      result.current.reconnect();
-    });
-    
-    // Should still only have 1 instance because it was CONNECTING
-    expect(wsInstances.length).toBe(1);
-  });
-});
+      FakeWebSocket.instances[0].open()
+      for (const data of ['{ quebrado', '"texto"', '{"type":"MAGIC"}']) {
+        FakeWebSocket.instances[0].onmessage?.(new MessageEvent('message', { data }))
+      }
+    })
+
+    expect(onMessage).not.toHaveBeenCalled()
+  })
+
+  it('sends only while the active socket is open', () => {
+    const { result } = renderHook(() => useWebSocket())
+    const message: ClientMessage = {
+      protocolVersion: PROTOCOL_VERSION,
+      type: 'TEXT_COMMAND',
+      requestId: 'text-1',
+      payload: { query: 'ajuda' },
+    }
+
+    expect(result.current.sendMessage(message)).toBe(false)
+    act(() => FakeWebSocket.instances[0].open())
+    expect(result.current.sendMessage(message)).toBe(true)
+    expect(FakeWebSocket.instances[0].send).toHaveBeenCalledWith(JSON.stringify(message))
+  })
+})

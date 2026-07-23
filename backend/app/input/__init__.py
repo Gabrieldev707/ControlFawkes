@@ -1,0 +1,1 @@
+"""Allowlisted remote input adapters."""
