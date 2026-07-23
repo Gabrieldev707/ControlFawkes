@@ -1,5 +1,6 @@
 from urllib.parse import parse_qs, quote, urlencode, urlsplit
 
+from app.platforms.links import VIDEO_ID_PATTERN
 from app.schemas.ws import Platform
 
 
@@ -89,6 +90,24 @@ def suggested_search_platforms(music_hint: bool = False) -> list[Platform]:
     return list(_MUSIC_FIRST if music_hint else _VIDEO_FIRST)
 
 
+# Links de vídeo canônicos, montados por app/platforms/links.py a partir de um
+# id validado. O parâmetro "t" (tempo) é opcional.
+_WATCH_SPEC = ("www.youtube.com", "/watch", "v")
+
+
+def _is_allowed_watch_url(parsed) -> bool:
+    hostname, path, parameter = _WATCH_SPEC
+    if parsed.hostname != hostname or parsed.path != path:
+        return False
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    if set(query) - {parameter, "t"}:
+        return False
+    values = query.get(parameter)
+    # Mesmo formato exigido pelo parser de links: as duas camadas concordam, e
+    # nenhum /watch com id arbitrário passa por aqui.
+    return bool(values) and len(values) == 1 and bool(VIDEO_ID_PATTERN.fullmatch(values[0]))
+
+
 def _has_safe_shape(url: str) -> tuple[bool, object]:
     parsed = urlsplit(url)
     safe = not (
@@ -108,6 +127,9 @@ def is_browser_url_allowed(url: str) -> bool:
     safe, parsed = _has_safe_shape(url)
     if not safe:
         return False
+
+    if _is_allowed_watch_url(parsed):
+        return True
 
     for hostname, path, parameter in QUERY_SEARCH_SPECS.values():
         if parsed.hostname == hostname and parsed.path == path:

@@ -14,6 +14,7 @@ from app.schemas.ws import (
     CommandResultMessage,
     NeedsPlatformMessage,
     NavigationCommandData,
+    MediaLinkCommandData,
     ErrorCode,
     ErrorMessage,
     HelpCommandData,
@@ -47,6 +48,7 @@ from app.commands.parser import (
     HELP_COMMANDS,
     PLATFORM_LABELS,
     NeedsPlatformIntent,
+    OpenMediaLinkIntent,
     OpenPlatformIntent,
     SearchMediaIntent,
     ShowHelpIntent,
@@ -348,6 +350,8 @@ class Dispatcher:
                 message.requestId,
                 intent,
             )
+        elif isinstance(intent, OpenMediaLinkIntent):
+            await self._handle_media_link(websocket, message.requestId, intent)
         elif isinstance(intent, NeedsPlatformIntent):
             await self._ask_where_to_search(websocket, message.requestId, intent)
         elif isinstance(intent, ShowHelpIntent):
@@ -366,6 +370,39 @@ class Dispatcher:
             )
 
         await self._send_state(websocket, "READY", "Computador pronto.")
+
+    async def _handle_media_link(
+        self,
+        websocket: WebSocket,
+        request_id: str,
+        intent: OpenMediaLinkIntent,
+    ) -> None:
+        # A URL já foi validada e reconstruída pelo parser de links; aqui ela
+        # ainda passa pela allowlist do launcher, que é quem de fato abre.
+        launch = self.platform_launcher.open_url(intent.url)
+        if not launch.executed or launch.strategy is None:
+            error_message = (
+                "Google Chrome não foi encontrado no computador."
+                if launch.error == "CHROME_NOT_FOUND"
+                else "Não foi possível abrir o link."
+            )
+            await self._send_error(
+                websocket,
+                request_id,
+                "MEDIA_LINK_FAILED",
+                error_message,
+            )
+            return
+
+        response = CommandResultMessage(
+            requestId=request_id,
+            message="Link aberto no YouTube.",
+            data=MediaLinkCommandData(
+                platform=intent.platform,
+                strategy=launch.strategy,
+            ),
+        )
+        await websocket.send_json(response.model_dump())
 
     async def _ask_where_to_search(
         self,

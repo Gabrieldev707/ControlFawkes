@@ -276,3 +276,94 @@ describe('protocol v1 runtime validation', () => {
     })).toBe(false)
   })
 })
+
+describe('protocol v1 phase 2 additions', () => {
+  it('accepts search results from every searchable platform', () => {
+    for (const platform of ['NETFLIX', 'PRIME_VIDEO', 'YOUTUBE', 'SPOTIFY']) {
+      expect(isServerMessage({
+        protocolVersion: 1,
+        type: 'COMMAND_RESULT',
+        requestId: 'search-1',
+        success: true,
+        message: 'Pesquisa aberta.',
+        data: { intent: 'SEARCH_MEDIA', platform, executed: true, strategy: 'CHROME' },
+      })).toBe(true)
+    }
+  })
+
+  it('rejects a search result from a platform without search', () => {
+    for (const platform of ['MAX', 'DISNEY_PLUS']) {
+      expect(isServerMessage({
+        protocolVersion: 1,
+        type: 'COMMAND_RESULT',
+        requestId: 'search-1',
+        success: true,
+        message: 'Pesquisa aberta.',
+        data: { intent: 'SEARCH_MEDIA', platform, executed: true, strategy: 'CHROME' },
+      })).toBe(false)
+    }
+  })
+
+  it('accepts a platform choice and rejects a malformed one', () => {
+    expect(isServerMessage({
+      protocolVersion: 1,
+      type: 'NEEDS_PLATFORM',
+      requestId: 'text-1',
+      query: 'Interestelar',
+      suggestedPlatforms: ['NETFLIX', 'YOUTUBE'],
+    })).toBe(true)
+
+    // Plataforma sem busca não pode ser sugerida.
+    expect(isServerMessage({
+      protocolVersion: 1,
+      type: 'NEEDS_PLATFORM',
+      requestId: 'text-1',
+      query: 'Interestelar',
+      suggestedPlatforms: ['MAX'],
+    })).toBe(false)
+
+    expect(isServerMessage({
+      protocolVersion: 1,
+      type: 'NEEDS_PLATFORM',
+      requestId: 'text-1',
+      query: '',
+      suggestedPlatforms: ['NETFLIX'],
+    })).toBe(false)
+  })
+
+  it('accepts directional results and rejects an unknown action', () => {
+    expect(isServerMessage({
+      protocolVersion: 1,
+      type: 'COMMAND_RESULT',
+      requestId: 'nav-1',
+      success: true,
+      message: 'Cima enviado.',
+      data: { intent: 'NAVIGATION', action: 'NAVIGATE_UP', executed: true },
+    })).toBe(true)
+
+    expect(isServerMessage({
+      protocolVersion: 1,
+      type: 'COMMAND_RESULT',
+      requestId: 'nav-1',
+      success: true,
+      message: 'Home enviado.',
+      data: { intent: 'NAVIGATION', action: 'NAVIGATE_HOME', executed: true },
+    })).toBe(false)
+  })
+
+  it('accepts the media link result', () => {
+    expect(isServerMessage({
+      protocolVersion: 1,
+      type: 'COMMAND_RESULT',
+      requestId: 'link-1',
+      success: true,
+      message: 'Link aberto no YouTube.',
+      data: {
+        intent: 'OPEN_ALLOWED_MEDIA_LINK',
+        platform: 'YOUTUBE',
+        executed: true,
+        strategy: 'CHROME',
+      },
+    })).toBe(true)
+  })
+})

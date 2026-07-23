@@ -3,6 +3,7 @@ import re
 from typing import Literal, TypeAlias
 import unicodedata
 
+from app.platforms.links import parse_media_link
 from app.schemas.ws import Platform
 
 
@@ -207,6 +208,15 @@ class SearchMediaIntent:
 
 
 @dataclass(frozen=True)
+class OpenMediaLinkIntent:
+    """Link de vídeo explícito, já validado e canonizado pelo backend."""
+
+    url: str
+    platform: Literal["YOUTUBE"] = "YOUTUBE"
+    type: Literal["OPEN_ALLOWED_MEDIA_LINK"] = "OPEN_ALLOWED_MEDIA_LINK"
+
+
+@dataclass(frozen=True)
 class NeedsPlatformIntent:
     """Há uma consulta clara, mas nenhuma plataforma utilizável foi indicada.
 
@@ -225,6 +235,7 @@ class NeedsPlatformIntent:
 
 ParsedIntent: TypeAlias = (
     OpenPlatformIntent
+    | OpenMediaLinkIntent
     | SearchMediaIntent
     | NeedsPlatformIntent
     | ShowHelpIntent
@@ -255,8 +266,30 @@ def _remove_articles(command_text: str) -> str:
     )
 
 
+# Esquemas de URI que nunca devem virar consulta de busca. Um link válido já
+# foi tratado antes; o que sobra com esse formato é lixo ou tentativa de
+# injeção, e oferecer "procurar por javascript:alert(1)" seria higiene ruim.
+# A checagem é por prefixo exato para não recusar títulos como "Se7en: ...".
+_DANGEROUS_SCHEMES = (
+    "javascript:",
+    "data:",
+    "file:",
+    "vbscript:",
+    "about:",
+    "blob:",
+    "ftp:",
+)
+
+
+def _has_dangerous_scheme(text: str) -> bool:
+    lowered = text.strip().lower()
+    return any(lowered.startswith(scheme) for scheme in _DANGEROUS_SCHEMES)
+
+
 def _clean_query(raw_query: str | None) -> str | None:
     if raw_query is None:
+        return None
+    if _has_dangerous_scheme(raw_query):
         return None
     query = raw_query.strip(" \t\r\n.,!?;:\"'")
     normalized = normalize_command(query)
@@ -349,6 +382,13 @@ def parse_command(command_text: str) -> ParsedIntent:
     normalized = normalize_command(command_text)
     if normalized in HELP_PHRASES:
         return ShowHelpIntent()
+
+    # Antes de tudo: um link permitido é um comando por si só. A validação é
+    # do backend; texto com "http" que não passe aqui continua recusado pelos
+    # fragmentos inseguros mais abaixo.
+    link = parse_media_link(command_text)
+    if link is not None:
+        return OpenMediaLinkIntent(url=link.url)
 
     search_intent = _parse_search_media(command_text)
     if search_intent is not None:

@@ -54,6 +54,7 @@ ErrorCode = Literal[
     "PROTOCOL_VERSION_MISMATCH",
     "PLATFORM_OPEN_FAILED",
     "MEDIA_SEARCH_FAILED",
+    "MEDIA_LINK_FAILED",
     "MEDIA_CONTROL_FAILED",
     "MEDIA_SESSION_NOT_FOUND",
     "MEDIA_ACTION_UNSUPPORTED",
@@ -223,6 +224,15 @@ class KeyboardCommandData(BaseModel):
     executed: Literal[True] = True
 
 
+class MediaLinkCommandData(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    intent: Literal["OPEN_ALLOWED_MEDIA_LINK"] = "OPEN_ALLOWED_MEDIA_LINK"
+    platform: Literal["YOUTUBE"]
+    executed: Literal[True] = True
+    strategy: LaunchStrategy
+
+
 class NavigationCommandData(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -248,6 +258,7 @@ class CommandResultMessage(BaseModel):
         | PointerCommandData
         | KeyboardCommandData
         | NavigationCommandData
+        | MediaLinkCommandData
     )
 
 

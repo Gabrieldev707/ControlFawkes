@@ -56,7 +56,7 @@ function isSearchMediaData(value: unknown): boolean {
   return isRecord(value)
     && hasOnlyKeys(value, ['intent', 'platform', 'executed', 'strategy'])
     && value.intent === 'SEARCH_MEDIA'
-    && (value.platform === 'YOUTUBE' || value.platform === 'SPOTIFY')
+    && isSearchablePlatform(value.platform)
     && value.executed === true
     && typeof value.strategy === 'string'
     && LAUNCH_STRATEGIES.includes(value.strategy as (typeof LAUNCH_STRATEGIES)[number])
@@ -114,6 +114,16 @@ function isKeyboardData(value: unknown): boolean {
     && value.executed === true
 }
 
+function isMediaLinkData(value: unknown): boolean {
+  return isRecord(value)
+    && hasOnlyKeys(value, ['intent', 'platform', 'executed', 'strategy'])
+    && value.intent === 'OPEN_ALLOWED_MEDIA_LINK'
+    && value.platform === 'YOUTUBE'
+    && value.executed === true
+    && typeof value.strategy === 'string'
+    && LAUNCH_STRATEGIES.includes(value.strategy as (typeof LAUNCH_STRATEGIES)[number])
+}
+
 function isNavigationData(value: unknown): boolean {
   return isRecord(value)
     && hasOnlyKeys(value, ['intent', 'action', 'executed'])
@@ -166,6 +176,7 @@ export function isServerMessage(value: unknown): value is ServerMessage {
           || isPointerData(value.data)
           || isKeyboardData(value.data)
           || isNavigationData(value.data)
+          || isMediaLinkData(value.data)
         )
     case 'NEEDS_PLATFORM':
       return hasOnlyKeys(value, [

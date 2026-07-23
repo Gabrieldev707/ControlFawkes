@@ -22,3 +22,7 @@ class PlatformLauncher:
         if platform != "SPOTIFY":
             return BrowserLaunchResult(executed=False, error="PLATFORM_NOT_ALLOWED")
         return self._spotify_launcher.open()
+
+    def open_url(self, url: str) -> BrowserLaunchResult:
+        """Abre um link já validado. O launcher revalida pela allowlist."""
+        return self._browser_launcher.open(url)

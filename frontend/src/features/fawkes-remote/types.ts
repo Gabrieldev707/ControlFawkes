@@ -87,6 +87,7 @@ export const ERROR_CODES = [
   'PROTOCOL_VERSION_MISMATCH',
   'PLATFORM_OPEN_FAILED',
   'MEDIA_SEARCH_FAILED',
+  'MEDIA_LINK_FAILED',
   'MEDIA_CONTROL_FAILED',
   'MEDIA_SESSION_NOT_FOUND',
   'MEDIA_ACTION_UNSUPPORTED',
@@ -333,6 +334,13 @@ export interface VolumeCommandData {
   executed: true
 }
 
+export interface MediaLinkCommandData {
+  intent: 'OPEN_ALLOWED_MEDIA_LINK'
+  platform: 'YOUTUBE'
+  executed: true
+  strategy: LaunchStrategy
+}
+
 export interface NavigationCommandData {
   intent: 'NAVIGATION'
   action: NavigationAction
@@ -373,6 +381,7 @@ export interface CommandResultMessage {
     | PointerCommandData
     | KeyboardCommandData
     | NavigationCommandData
+    | MediaLinkCommandData
 }
 
 export interface ErrorMessage {

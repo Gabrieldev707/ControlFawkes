@@ -1575,3 +1575,91 @@ def test_navigation_reports_adapter_failure(client, dispatcher, keyboard_adapter
         })
 
         assert websocket.receive_json()["code"] == "NAVIGATION_FAILED"
+
+
+def test_authenticated_youtube_link_is_opened_only_in_chrome(
+    client,
+    dispatcher,
+    browser_launcher_mock,
+):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "TEXT_COMMAND",
+            "requestId": "link-1",
+            "payload": {"query": "https://youtu.be/dQw4w9WgXcQ"},
+        })
+
+        assert websocket.receive_json()["state"] == "BUSY"
+        result = websocket.receive_json()
+        assert websocket.receive_json()["state"] == "READY"
+
+        assert result["type"] == "COMMAND_RESULT"
+        assert result["data"] == {
+            "intent": "OPEN_ALLOWED_MEDIA_LINK",
+            "platform": "YOUTUBE",
+            "executed": True,
+            "strategy": "CHROME",
+        }
+
+    # A URL aberta é a canônica montada no backend, não a enviada pelo cliente.
+    browser_launcher_mock.open.assert_called_once_with(
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    )
+
+
+@pytest.mark.parametrize("query", [
+    "https://evil.example/watch?v=dQw4w9WgXcQ",
+    "https://www.youtube.com.evil.example/watch?v=dQw4w9WgXcQ",
+    "javascript:alert(1)",
+    "file:///C:/Windows/System32/cmd.exe",
+    "https://www.youtube.com/watch?v=dQw4w9WgXcQ&redirect=https://evil.example",
+])
+def test_unsafe_links_never_reach_the_browser(client, dispatcher, browser_launcher_mock, query):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "TEXT_COMMAND",
+            "requestId": "link-1",
+            "payload": {"query": query},
+        })
+
+        websocket.receive_json()
+        error = websocket.receive_json()
+
+        assert error["type"] == "ERROR"
+        assert error["code"] == "UNKNOWN_COMMAND"
+
+    browser_launcher_mock.open.assert_not_called()
+
+
+def test_media_link_failure_is_reported_without_false_success(
+    client,
+    dispatcher,
+    browser_launcher_mock,
+):
+    browser_launcher_mock.open.return_value = BrowserLaunchResult(
+        executed=False,
+        error="CHROME_NOT_FOUND",
+    )
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "TEXT_COMMAND",
+            "requestId": "link-1",
+            "payload": {"query": "https://youtu.be/dQw4w9WgXcQ"},
+        })
+
+        websocket.receive_json()
+        error = websocket.receive_json()
+
+        assert error["type"] == "ERROR"
+        assert error["code"] == "MEDIA_LINK_FAILED"
+        assert "Chrome" in error["message"]
