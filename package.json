@@ -1,0 +1,11 @@
+{
+  "name": "controlfawkes",
+  "private": true,
+  "description": "Atalhos da raiz: sobem frontend e backend juntos, sem precisar entrar em frontend/.",
+  "scripts": {
+    "dev": "npm --prefix frontend run dev",
+    "test": "npm --prefix frontend run test:run",
+    "lint": "npm --prefix frontend run lint",
+    "build": "npm --prefix frontend run build"
+  }
+}

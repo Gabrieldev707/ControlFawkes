@@ -84,22 +84,30 @@ Use `VITE_WS_URL` somente quando o backend estiver em outro host ou porta.
 
 ## Execução na rede local
 
-Abra dois terminais a partir da raiz do repositório. Inicie o backend:
+Um único comando, na raiz do repositório, sobe frontend e backend juntos:
+
+```powershell
+npm run dev
+```
+
+O Vite já escuta na rede (`server.host` no `vite.config.ts`), então ele imprime
+o endereço `Network:` para usar no iPhone. O backend imprime o PIN de seis
+dígitos do pareamento no mesmo terminal, com o prefixo `[backend]`.
+
+Para rodar apenas um dos lados, em terminais separados:
 
 ```powershell
 cd backend
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --host 0.0.0.0 --port 8100
 ```
 
-O terminal exibirá o PIN de seis dígitos do pareamento. Em outro terminal,
-inicie o frontend:
-
 ```powershell
 cd frontend
-npm run dev -- --host 0.0.0.0
+npm run dev:frontend
 ```
 
-Execute `ipconfig`, encontre o endereço IPv4 da interface Wi-Fi e, no iPhone,
+Use o endereço `Network:` impresso pelo Vite ou execute `ipconfig`, encontre o
+endereço IPv4 da interface Wi-Fi e, no iPhone,
 abra `http://SEU_IP:5173`. Digite o PIN mostrado pelo backend. O PIN dura cinco
 minutos, aceita até cinco tentativas e só pode ser usado uma vez.
 
