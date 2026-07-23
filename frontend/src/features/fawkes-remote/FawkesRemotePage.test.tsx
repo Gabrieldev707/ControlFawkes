@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ConnectionState, ServerMessage } from './types'
@@ -764,5 +764,162 @@ describe('FawkesRemotePage directional navigation', () => {
     })
 
     expect(screen.getByText('OK enviado.')).toBeTruthy()
+  })
+})
+
+
+describe('FawkesRemotePage platform choice', () => {
+  beforeEach(() => {
+    window.history.replaceState({}, '', '/')
+    localStorage.clear()
+    websocketMock.connectionState = 'connected'
+    websocketMock.onMessage = undefined
+    websocketMock.sendMessage.mockReset()
+    websocketMock.sendMessage.mockReturnValue(true)
+  })
+
+  function authenticate(): void {
+    act(() => {
+      websocketMock.onMessage?.({
+        protocolVersion: 1,
+        type: 'PAIR_RESULT',
+        requestId: 'pair-1',
+        success: true,
+        message: 'Pareamento concluído.',
+        deviceId: 'device-1',
+        token: 'new-secure-token-value',
+      })
+      websocketMock.onMessage?.({
+        protocolVersion: 1,
+        type: 'STATE_UPDATE',
+        state: 'READY',
+        message: 'Computador pronto.',
+      })
+    })
+  }
+
+  function askForContent(query = 'Interestelar'): string {
+    const input = screen.getByLabelText('Comando de texto')
+    fireEvent.change(input, { target: { value: query } })
+    fireEvent.submit(input.closest('form')!)
+    const sent = websocketMock.sendMessage.mock.calls.at(-1)?.[0] as { requestId: string }
+    return sent.requestId
+  }
+
+  function offerPlatforms(requestId: string, query = 'Interestelar'): void {
+    act(() => {
+      websocketMock.onMessage?.({
+        protocolVersion: 1,
+        type: 'NEEDS_PLATFORM',
+        requestId,
+        query,
+        suggestedPlatforms: ['NETFLIX', 'PRIME_VIDEO', 'YOUTUBE', 'SPOTIFY'],
+      })
+    })
+  }
+
+  it('asks where to search instead of failing on content without a platform', () => {
+    render(<FawkesRemotePage />)
+    authenticate()
+
+    offerPlatforms(askForContent())
+
+    expect(screen.getByText('Onde você quer procurar “Interestelar”?')).toBeTruthy()
+    // Escopo no grupo: a grade da Home também tem um botão "Netflix".
+    const choice = screen.getByRole('group', { name: /Onde você quer procurar/ })
+    expect(within(choice).getByRole('button', { name: 'Netflix' })).toBeTruthy()
+  })
+
+  it('offers only platforms that actually have search', () => {
+    render(<FawkesRemotePage />)
+    authenticate()
+    offerPlatforms(askForContent())
+
+    const choice = screen.getByRole('group', { name: /Onde você quer procurar/ })
+    // Max e Disney+ não têm busca: oferecê-los levaria a um beco sem saída.
+    expect(within(choice).queryByRole('button', { name: 'Max' })).toBeNull()
+    expect(within(choice).queryByRole('button', { name: 'Disney+' })).toBeNull()
+  })
+
+  it('sends only platform and query when the user chooses', () => {
+    render(<FawkesRemotePage />)
+    authenticate()
+    offerPlatforms(askForContent())
+    websocketMock.sendMessage.mockClear()
+
+    const choice = screen.getByRole('group', { name: /Onde você quer procurar/ })
+    fireEvent.click(within(choice).getByRole('button', { name: 'Netflix' }))
+
+    expect(websocketMock.sendMessage).toHaveBeenCalledWith({
+      protocolVersion: 1,
+      type: 'SEARCH_MEDIA',
+      requestId: expect.any(String),
+      payload: { platform: 'NETFLIX', query: 'Interestelar' },
+    })
+  })
+
+  it('keeps the query intact through the choice', () => {
+    render(<FawkesRemotePage />)
+    authenticate()
+    offerPlatforms(askForContent('Stranger Things'), 'Stranger Things')
+    websocketMock.sendMessage.mockClear()
+
+    const choice = screen.getByRole('group', { name: /Onde você quer procurar/ })
+    fireEvent.click(within(choice).getByRole('button', { name: 'YouTube' }))
+
+    const sent = websocketMock.sendMessage.mock.calls.at(-1)?.[0] as {
+      payload: { query: string }
+    }
+    expect(sent.payload.query).toBe('Stranger Things')
+  })
+
+  it('lets the user cancel without sending anything', () => {
+    render(<FawkesRemotePage />)
+    authenticate()
+    offerPlatforms(askForContent())
+    websocketMock.sendMessage.mockClear()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Cancelar busca' }))
+
+    expect(screen.queryByText('Onde você quer procurar “Interestelar”?')).toBeNull()
+    expect(websocketMock.sendMessage).not.toHaveBeenCalled()
+  })
+
+  it('dismisses the choice when the command finishes', () => {
+    render(<FawkesRemotePage />)
+    authenticate()
+    offerPlatforms(askForContent())
+    const choice = screen.getByRole('group', { name: /Onde você quer procurar/ })
+    fireEvent.click(within(choice).getByRole('button', { name: 'Netflix' }))
+    const sent = websocketMock.sendMessage.mock.calls.at(-1)?.[0] as { requestId: string }
+
+    act(() => {
+      websocketMock.onMessage?.({
+        protocolVersion: 1,
+        type: 'COMMAND_RESULT',
+        requestId: sent.requestId,
+        success: true,
+        message: 'Pesquisa aberta no Netflix.',
+        data: {
+          intent: 'SEARCH_MEDIA',
+          platform: 'NETFLIX',
+          executed: true,
+          strategy: 'CHROME',
+        },
+      })
+    })
+
+    expect(screen.queryByText(/Onde você quer procurar/)).toBeNull()
+    expect(screen.getByText('Pesquisa aberta no Netflix.')).toBeTruthy()
+  })
+
+  it('ignores a platform choice offered for an older request', () => {
+    render(<FawkesRemotePage />)
+    authenticate()
+    askForContent()
+
+    offerPlatforms('request-antigo')
+
+    expect(screen.queryByText(/Onde você quer procurar/)).toBeNull()
   })
 })

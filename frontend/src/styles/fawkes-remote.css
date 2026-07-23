@@ -1472,3 +1472,77 @@ body {
   font-size: 0.8rem;
   opacity: 0.6;
 }
+
+/* ── Escolha de plataforma ────────────────────────────────────────────────── */
+
+.platform-choice {
+  width: 100%;
+  padding: 1rem;
+  margin-bottom: 1rem;
+  border: 1px solid rgba(252, 211, 77, 0.28);
+  border-radius: 1.1rem;
+  background: rgba(252, 211, 77, 0.07);
+}
+
+.platform-choice__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.platform-choice__title {
+  margin: 0 0 0.85rem;
+  font-size: 0.98rem;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.platform-choice__cancel {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 2rem;
+  height: 2rem;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+  cursor: pointer;
+}
+
+.platform-choice__options {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7rem, 1fr));
+  gap: 0.6rem;
+}
+
+.platform-choice__option {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 0.85rem;
+  background: rgba(255, 255, 255, 0.05);
+  color: #f4f1ea;
+  font: inherit;
+  font-size: 0.88rem;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.platform-choice__option:active:not(:disabled) {
+  background: rgba(252, 211, 77, 0.2);
+}
+
+.platform-choice__option:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.platform-choice__option .platform-logo {
+  width: 1.4rem;
+  height: 1.4rem;
+  object-fit: contain;
+}

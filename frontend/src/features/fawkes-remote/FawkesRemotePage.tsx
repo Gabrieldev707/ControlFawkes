@@ -4,6 +4,7 @@ import type {
   AuthState,
   KeyboardAction,
   NavigationAction,
+  SearchablePlatform,
   MediaAction,
   OrbState,
   Platform,
@@ -27,6 +28,7 @@ import { VolumeScreen } from '../../pages/remote/VolumeScreen'
 import { TouchpadScreen } from '../../pages/remote/TouchpadScreen'
 import { KeyboardScreen } from '../../pages/remote/KeyboardScreen'
 import { NavigationScreen } from '../../pages/remote/NavigationScreen'
+import { PlatformChoice } from '../../components/fawkes-remote/PlatformChoice'
 import {
   AuthenticationStatus,
   ConnectionStatus,
@@ -81,6 +83,11 @@ export const FawkesRemotePage: React.FC = () => {
   const [currentPointerAction, setCurrentPointerAction] = useState<PointerAction | null>(null)
   const [currentKeyboardAction, setCurrentKeyboardAction] = useState<KeyboardAction | null>(null)
   const [currentNavigationAction, setCurrentNavigationAction] = useState<NavigationAction | null>(null)
+  // Escolha de plataforma pendente. Some ao escolher, cancelar ou receber
+  // outra resposta: nunca fica presa na tela.
+  const [pendingChoice, setPendingChoice] = useState<
+    { requestId: string; query: string; platforms: SearchablePlatform[] } | null
+  >(null)
   const [volumeLevel, setVolumeLevel] = useState<number | null>(null)
   const [volumeMuted, setVolumeMuted] = useState(false)
   const { currentScreen, navigate, goBack } = useRemoteNavigation()
@@ -153,6 +160,22 @@ export const FawkesRemotePage: React.FC = () => {
     }
 
     if ('requestId' in message && message.requestId !== currentRequestId.current) return
+
+    if (message.type === 'NEEDS_PLATFORM') {
+      setPendingChoice({
+        requestId: message.requestId,
+        query: message.query,
+        platforms: message.suggestedPlatforms,
+      })
+      setOrbState('needs_selection')
+      setStatusMessage(`Onde procurar “${message.query}”?`)
+      setStatusError(false)
+      return
+    }
+
+    if (message.type === 'COMMAND_RESULT' || message.type === 'ERROR') {
+      setPendingChoice(null)
+    }
 
     if (message.type === 'COMMAND_RESULT') {
       if (message.data.intent === 'SYSTEM_VOLUME') {
@@ -503,6 +526,39 @@ export const FawkesRemotePage: React.FC = () => {
     || authState !== 'authenticated'
     || serverState !== 'READY'
 
+  const handleChoosePlatform = useCallback((platform: SearchablePlatform) => {
+    if (pendingChoice === null || controlsDisabled) return
+    const query = pendingChoice.query
+    const requestId = generateRequestId()
+    currentRequestId.current = requestId
+    setPendingChoice(null)
+    setOrbState('executing')
+    setStatusMessage('Processando comando...')
+    setStatusError(false)
+
+    // Só plataforma e consulta: a URL é montada no backend.
+    const accepted = sendMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: 'SEARCH_MEDIA',
+      requestId,
+      payload: { platform, query },
+    })
+    if (!accepted) {
+      currentRequestId.current = null
+      setOrbState('error')
+      setStatusMessage('Conexão indisponível. Tente novamente.')
+      setStatusError(true)
+    }
+  }, [controlsDisabled, pendingChoice, sendMessage])
+
+  const handleCancelChoice = useCallback(() => {
+    setPendingChoice(null)
+    currentRequestId.current = null
+    setOrbState('idle')
+    setStatusMessage('Computador pronto.')
+    setStatusError(false)
+  }, [])
+
   const handleNavigationAction = useCallback((action: NavigationAction) => {
     if (navigationDisabled) return
     const requestId = generateRequestId()
@@ -590,6 +646,16 @@ export const FawkesRemotePage: React.FC = () => {
               />
 
               <div className="input-area">
+                {pendingChoice !== null ? (
+                  <PlatformChoice
+                    query={pendingChoice.query}
+                    platforms={pendingChoice.platforms}
+                    disabled={controlsDisabled}
+                    onChoose={handleChoosePlatform}
+                    onCancel={handleCancelChoice}
+                  />
+                ) : null}
+
                 <PlatformGrid
                   selectedPlatform={selectedPlatform}
                   disabled={controlsDisabled}
