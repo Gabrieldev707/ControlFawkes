@@ -1,6 +1,7 @@
 import pytest
 
 from app.commands.parser import (
+    NeedsPlatformIntent,
     OpenPlatformIntent,
     SearchMediaIntent,
     ShowHelpIntent,
@@ -121,9 +122,64 @@ def test_search_media_commands_extract_platform_and_clean_query(command, platfor
     [
         "pesquisa no YouTube",
         "procura no Spotify",
-        "pesquisa Interestelar na Netflix",
         "abre Spotify e desliga o computador",
     ],
 )
-def test_search_media_rejects_empty_unsupported_or_dangerous_queries(command):
+def test_search_media_rejects_empty_or_dangerous_queries(command):
     assert isinstance(parse_command(command), UnknownIntent)
+
+
+@pytest.mark.parametrize(
+    ("command", "platform", "query"),
+    [
+        ("pesquisa Interestelar na Netflix", "NETFLIX", "Interestelar"),
+        ("coloca Stranger Things na Netflix", "NETFLIX", "Stranger Things"),
+        ("assistir Breaking Bad na Netflix", "NETFLIX", "Breaking Bad"),
+        ("quero assistir Interestelar na Netflix", "NETFLIX", "Interestelar"),
+        ("passa One Piece no Prime Video", "PRIME_VIDEO", "One Piece"),
+        ("procura The Boys no Amazon Prime", "PRIME_VIDEO", "The Boys"),
+    ],
+)
+def test_search_media_supports_the_streaming_platforms_with_stable_urls(
+    command,
+    platform,
+    query,
+):
+    assert parse_command(command) == SearchMediaIntent(
+        type="SEARCH_MEDIA",
+        platform=platform,
+        query=query,
+    )
+
+
+@pytest.mark.parametrize(
+    ("command", "query"),
+    [
+        ("Interestelar", "Interestelar"),
+        ("Stranger Things", "Stranger Things"),
+        ("coloca Interestelar", "Interestelar"),
+        ("quero ver Interestelar", "Interestelar"),
+        # Max e Disney+ não têm busca: perguntamos onde procurar em vez de
+        # responder "não entendi".
+        ("coloca The Last of Us no Max", "The Last of Us"),
+        ("assistir Loki no Disney+", "Loki"),
+    ],
+)
+def test_content_without_a_usable_platform_asks_where_to_search(command, query):
+    assert parse_command(command) == NeedsPlatformIntent(query=query)
+
+
+def test_music_verb_only_reorders_the_suggestions():
+    """"Max" aqui é parte do nome do artista, não a plataforma."""
+    assert parse_command("toca Max Richter") == NeedsPlatformIntent(
+        query="Max Richter",
+        music_hint=True,
+    )
+    assert parse_command("Interestelar").music_hint is False
+
+
+@pytest.mark.parametrize("command", ["netflix", "spotify", "disney+"])
+def test_a_bare_platform_name_opens_the_platform(command):
+    result = parse_command(command)
+
+    assert isinstance(result, OpenPlatformIntent)

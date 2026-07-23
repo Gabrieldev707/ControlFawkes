@@ -12,6 +12,7 @@ from app.schemas.auth import (
 from app.schemas.ws import (
     ClientMessage,
     CommandResultMessage,
+    NeedsPlatformMessage,
     ErrorCode,
     ErrorMessage,
     HelpCommandData,
@@ -32,6 +33,7 @@ from app.schemas.ws import (
     PlatformCommandData,
     PlatformSelectedMessage,
     SearchMediaCommandData,
+    SearchMediaMessage,
     StateUpdateMessage,
     TextCommandMessage,
     VolumeCommandData,
@@ -43,6 +45,7 @@ from app.schemas.ws import (
 from app.commands.parser import (
     HELP_COMMANDS,
     PLATFORM_LABELS,
+    NeedsPlatformIntent,
     OpenPlatformIntent,
     SearchMediaIntent,
     ShowHelpIntent,
@@ -52,6 +55,7 @@ from app.security.device_store import DeviceStore
 from app.security.origins import is_origin_allowed
 from app.security.pairing import PairingService
 from app.platforms.launcher import PlatformLauncher
+from app.platforms.registry import suggested_search_platforms
 from app.platforms.search import MediaSearchLauncher
 from app.media.actions import MEDIA_ACTIONS, MEDIA_ACTION_LABELS
 from app.media.session import WindowsMediaSessionDetector
@@ -72,6 +76,7 @@ KNOWN_CLIENT_TYPES = {
     "PAIR_DEVICE",
     "PLATFORM_SELECTED",
     "TEXT_COMMAND",
+    "SEARCH_MEDIA",
     *MEDIA_ACTIONS,
     *VOLUME_ACTIONS,
     *POINTER_ACTIONS,
@@ -247,6 +252,18 @@ class Dispatcher:
             await self._handle_text_command(websocket, message)
             return
 
+        if isinstance(message, SearchMediaMessage):
+            await self._handle_search_media(
+                websocket,
+                message.requestId,
+                SearchMediaIntent(
+                    type="SEARCH_MEDIA",
+                    platform=message.payload.platform,
+                    query=message.payload.query,
+                ),
+            )
+            return
+
         if isinstance(message, MediaControlMessage):
             await self._handle_media_control(websocket, message)
             return
@@ -304,6 +321,8 @@ class Dispatcher:
                 message.requestId,
                 intent,
             )
+        elif isinstance(intent, NeedsPlatformIntent):
+            await self._ask_where_to_search(websocket, message.requestId, intent)
         elif isinstance(intent, ShowHelpIntent):
             response = CommandResultMessage(
                 requestId=message.requestId,
@@ -320,6 +339,19 @@ class Dispatcher:
             )
 
         await self._send_state(websocket, "READY", "Computador pronto.")
+
+    async def _ask_where_to_search(
+        self,
+        websocket: WebSocket,
+        request_id: str,
+        intent: NeedsPlatformIntent,
+    ) -> None:
+        response = NeedsPlatformMessage(
+            requestId=request_id,
+            query=intent.query,
+            suggestedPlatforms=suggested_search_platforms(intent.music_hint),
+        )
+        await websocket.send_json(response.model_dump())
 
     async def _handle_open_platform(
         self,

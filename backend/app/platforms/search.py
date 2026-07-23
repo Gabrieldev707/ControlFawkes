@@ -1,11 +1,19 @@
 from typing import Literal
-from urllib.parse import urlencode
 
 from app.platforms.browser import BrowserLaunchResult, BrowserLauncher
+from app.platforms.registry import build_search_url
 from app.platforms.spotify import SpotifyLauncher
 
 
-SearchPlatform = Literal["YOUTUBE", "SPOTIFY"]
+# Somente plataformas com URL de busca estável e verificada. Max e Disney+ não
+# entram: ver a nota em app/platforms/registry.py.
+SearchPlatform = Literal["YOUTUBE", "SPOTIFY", "NETFLIX", "PRIME_VIDEO"]
+SEARCH_PLATFORM_VALUES: tuple[SearchPlatform, ...] = (
+    "YOUTUBE",
+    "SPOTIFY",
+    "NETFLIX",
+    "PRIME_VIDEO",
+)
 
 
 class MediaSearchLauncher:
@@ -24,14 +32,15 @@ class MediaSearchLauncher:
         platform: SearchPlatform,
         query: str,
     ) -> BrowserLaunchResult:
-        if platform == "YOUTUBE":
-            encoded = urlencode({"search_query": query})
-            return self._browser_launcher.open(
-                f"https://www.youtube.com/results?{encoded}"
-            )
+        # O Spotify tem app nativo; as demais abrem no Chrome pela URL montada
+        # no backend.
         if platform == "SPOTIFY":
             return self._spotify_launcher.search(query)
-        return BrowserLaunchResult(
-            executed=False,
-            error="SEARCH_PLATFORM_NOT_ALLOWED",
-        )
+
+        url = build_search_url(platform, query)
+        if url is None:
+            return BrowserLaunchResult(
+                executed=False,
+                error="SEARCH_PLATFORM_NOT_ALLOWED",
+            )
+        return self._browser_launcher.open(url)

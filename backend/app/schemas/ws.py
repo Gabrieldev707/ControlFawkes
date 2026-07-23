@@ -33,6 +33,9 @@ Platform = Literal[
     "YOUTUBE",
     "SPOTIFY",
 ]
+# Plataformas com URL de busca estável e verificada. Max e Disney+ não entram;
+# ver a nota em app/platforms/registry.py.
+SearchablePlatform = Literal["YOUTUBE", "SPOTIFY", "NETFLIX", "PRIME_VIDEO"]
 LaunchStrategy = Literal["CHROME", "SPOTIFY_APP", "SPOTIFY_WEB_CHROME"]
 ServerState = Literal["AUTH_REQUIRED", "PAIRING", "READY", "BUSY"]
 ErrorCode = Literal[
@@ -92,6 +95,27 @@ class TextCommandMessage(BaseModel):
     payload: TextCommandPayload
 
 
+class SearchMediaPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    platform: SearchablePlatform
+    query: str = Field(min_length=1, max_length=200)
+
+
+class SearchMediaMessage(BaseModel):
+    """Busca com plataforma já escolhida pelo usuário.
+
+    O cliente manda plataforma e consulta; a URL é montada no backend.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    protocolVersion: ProtocolVersion
+    type: Literal["SEARCH_MEDIA"]
+    requestId: str = Field(min_length=1, max_length=128)
+    payload: SearchMediaPayload
+
+
 class MediaControlMessage(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -105,6 +129,7 @@ ClientMessage = Annotated[
     | PairDeviceMessage
     | PlatformSelectedMessage
     | TextCommandMessage
+    | SearchMediaMessage
     | MediaControlMessage
     | VolumeGetMessage
     | VolumeSetMessage
@@ -145,7 +170,7 @@ class SearchMediaCommandData(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     intent: Literal["SEARCH_MEDIA"] = "SEARCH_MEDIA"
-    platform: Literal["YOUTUBE", "SPOTIFY"]
+    platform: SearchablePlatform
     executed: Literal[True] = True
     strategy: LaunchStrategy
 
@@ -211,6 +236,22 @@ class CommandResultMessage(BaseModel):
         | PointerCommandData
         | KeyboardCommandData
     )
+
+
+class NeedsPlatformMessage(BaseModel):
+    """Consulta entendida, mas sem plataforma: o usuário escolhe onde procurar.
+
+    Só entram plataformas com busca funcional — oferecer uma que não busca
+    levaria a um beco sem saída.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    protocolVersion: ProtocolVersion = 1
+    type: Literal["NEEDS_PLATFORM"] = "NEEDS_PLATFORM"
+    requestId: str
+    query: str = Field(min_length=1, max_length=200)
+    suggestedPlatforms: list[SearchablePlatform] = Field(min_length=1)
 
 
 class ErrorMessage(BaseModel):
