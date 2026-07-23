@@ -5,6 +5,7 @@ import type {
   KeyboardAction,
   NavigationAction,
   SearchablePlatform,
+  VolumeScope,
   MediaAction,
   OrbState,
   Platform,
@@ -88,6 +89,8 @@ export const FawkesRemotePage: React.FC = () => {
   const [currentNavigationAction, setCurrentNavigationAction] = useState<NavigationAction | null>(null)
   // Escolha de plataforma pendente. Some ao escolher, cancelar ou receber
   // outra resposta: nunca fica presa na tela.
+  const [volumeScope, setVolumeScope] = useState<VolumeScope>('GLOBAL')
+  const [volumeTarget, setVolumeTarget] = useState<string | null>(null)
   const [orbQuality, setOrbQuality] = useState<OrbQuality>(
     () => loadOrbQuality(localStorage.getItem(DEVICE_ID_KEY)),
   )
@@ -187,6 +190,10 @@ export const FawkesRemotePage: React.FC = () => {
       if (message.data.intent === 'SYSTEM_VOLUME') {
         setVolumeLevel(message.data.level)
         setVolumeMuted(message.data.muted)
+        // O que foi realmente afetado: o aplicativo ou o Windows inteiro.
+        // O fallback precisa ficar visível, não implícito.
+        setVolumeScope(message.data.scope)
+        setVolumeTarget(message.data.target)
       }
       if (message.data.intent === 'POINTER_CONTROL') {
         setCurrentPointerAction(null)
@@ -719,6 +726,8 @@ export const FawkesRemotePage: React.FC = () => {
               loading={currentVolumeAction !== null && orbState === 'executing'}
               level={volumeLevel}
               muted={volumeMuted}
+              scope={volumeScope}
+              target={volumeTarget}
               statusMessage={statusMessage}
               statusError={statusError}
               onSetLevel={(level) => handleVolumeAction('SYSTEM_VOLUME_SET', level)}

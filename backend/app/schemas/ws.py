@@ -37,6 +37,8 @@ Platform = Literal[
 # Plataformas com URL de busca estável e verificada. Max e Disney+ não entram;
 # ver a nota em app/platforms/registry.py.
 SearchablePlatform = Literal["YOUTUBE", "SPOTIFY", "NETFLIX", "PRIME_VIDEO"]
+# LOCAL: só o aplicativo. GLOBAL: o volume do Windows inteiro.
+VolumeScope = Literal["LOCAL", "GLOBAL"]
 LaunchStrategy = Literal["CHROME", "SPOTIFY_APP", "SPOTIFY_WEB_CHROME"]
 ServerState = Literal["AUTH_REQUIRED", "PAIRING", "READY", "BUSY"]
 ErrorCode = Literal[
@@ -205,6 +207,10 @@ class VolumeCommandData(BaseModel):
     action: VolumeAction
     level: StrictInt = Field(ge=0, le=100)
     muted: bool
+    # Em que escopo a mudança aconteceu de fato. O fallback para o volume do
+    # Windows nunca é silencioso: a interface precisa poder dizer a verdade.
+    scope: VolumeScope = "GLOBAL"
+    target: str | None = None
     executed: Literal[True] = True
 
 

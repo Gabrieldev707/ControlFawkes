@@ -4,11 +4,13 @@ import {
   MEDIA_ACTIONS,
   NAVIGATION_ACTIONS,
   VOLUME_ACTIONS,
+  VOLUME_SCOPES,
   POINTER_ACTIONS,
   isPlatform,
   isSearchablePlatform,
   type ErrorCode,
   type NavigationAction,
+  type VolumeScope,
   type ServerMessage,
   type ServerState,
 } from './types'
@@ -85,8 +87,13 @@ function isMediaData(value: unknown): boolean {
 
 function isVolumeData(value: unknown): boolean {
   return isRecord(value)
-    && hasOnlyKeys(value, ['intent', 'action', 'level', 'muted', 'executed'])
+    && hasOnlyKeys(value, [
+      'intent', 'action', 'level', 'muted', 'scope', 'target', 'executed',
+    ])
     && value.intent === 'SYSTEM_VOLUME'
+    && typeof value.scope === 'string'
+    && VOLUME_SCOPES.includes(value.scope as VolumeScope)
+    && (value.target === null || typeof value.target === 'string')
     && typeof value.action === 'string'
     && VOLUME_ACTIONS.includes(value.action as (typeof VOLUME_ACTIONS)[number])
     && typeof value.level === 'number'

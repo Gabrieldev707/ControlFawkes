@@ -189,6 +189,8 @@ describe('protocol v1 runtime validation', () => {
         action: 'SYSTEM_VOLUME_GET',
         level: 42,
         muted: false,
+        scope: 'GLOBAL',
+        target: null,
         executed: true,
       },
     }

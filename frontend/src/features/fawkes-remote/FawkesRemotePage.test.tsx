@@ -430,6 +430,8 @@ describe('FawkesRemotePage authentication', () => {
           action: 'SYSTEM_VOLUME_GET',
           level: 42,
           muted: false,
+          scope: 'GLOBAL',
+          target: null,
           executed: true,
         },
       })

@@ -65,6 +65,11 @@ from app.media.session import WindowsMediaSessionDetector
 from app.media.windows_adapter import WindowsMediaAdapter
 from app.schemas.volume import VOLUME_ACTIONS
 from app.windows.volume import WindowsVolumeAdapter, WindowsVolumeError
+from app.windows.app_volume import (
+    SCOPE_LABELS,
+    AppVolumeUnavailable,
+    WindowsAppVolumeAdapter,
+)
 from app.input.pointer import PointerRateLimiter, WindowsPointerAdapter
 from app.schemas.pointer import POINTER_ACTIONS
 from app.input.keyboard import WindowsKeyboardAdapter
@@ -116,6 +121,7 @@ class Dispatcher:
         pointer_adapter: WindowsPointerAdapter | None = None,
         pointer_rate_limiter: PointerRateLimiter | None = None,
         keyboard_adapter: WindowsKeyboardAdapter | None = None,
+        app_volume_adapter: WindowsAppVolumeAdapter | None = None,
         message_rate_limiter: PointerRateLimiter | None = None,
         navigation_rate_limiter: PointerRateLimiter | None = None,
     ) -> None:
@@ -129,6 +135,10 @@ class Dispatcher:
         self.pointer_adapter = pointer_adapter or WindowsPointerAdapter()
         self.pointer_rate_limiter = pointer_rate_limiter or PointerRateLimiter()
         self.keyboard_adapter = keyboard_adapter or WindowsKeyboardAdapter()
+        self.app_volume_adapter = (
+            app_volume_adapter if app_volume_adapter is not None
+            else WindowsAppVolumeAdapter()
+        )
         self.message_rate_limiter = message_rate_limiter or PointerRateLimiter(
             max_updates=self.MAX_MESSAGES_PER_SECOND,
         )
@@ -559,6 +569,14 @@ class Dispatcher:
         | VolumeDeltaMessage
         | VolumeMuteToggleMessage,
     ) -> None:
+        # LOCAL primeiro: mexer só no aplicativo que está tocando. Se não der,
+        # cai para o volume do Windows — e o fallback vai explícito na resposta,
+        # nunca escondido.
+        local = await self._try_local_volume(message)
+        if local is not None:
+            await self._send_volume_result(websocket, message, *local)
+            return
+
         try:
             if isinstance(message, VolumeGetMessage):
                 state = await self.volume_adapter.get_state()
@@ -577,10 +595,44 @@ class Dispatcher:
             )
             return
 
+        await self._send_volume_result(websocket, message, state, "GLOBAL", None)
+
+    async def _try_local_volume(self, message):
+        """Tenta o volume do aplicativo ativo. None quando não é possível."""
+        if self.app_volume_adapter is None:
+            return None
+        session = self.media_session_detector.detect()
+        if session is None:
+            return None
+
+        try:
+            if isinstance(message, VolumeGetMessage):
+                state = self.app_volume_adapter.get_state(session.platform)
+            elif isinstance(message, VolumeSetMessage):
+                state = self.app_volume_adapter.set_level(
+                    session.platform, message.payload.level,
+                )
+            elif isinstance(message, VolumeDeltaMessage):
+                state = self.app_volume_adapter.change_level(
+                    session.platform, message.payload.delta,
+                )
+            else:
+                state = self.app_volume_adapter.toggle_mute(session.platform)
+        except AppVolumeUnavailable:
+            return None
+        except Exception:  # noqa: BLE001 - qualquer falha local cai no global
+            return None
+
+        return state, "LOCAL", SCOPE_LABELS.get(state.process, state.process)
+
+    async def _send_volume_result(self, websocket, message, state, scope, target) -> None:
+        alvo = target or "Windows"
+        prefixo = f"Volume do {alvo}" if scope == "LOCAL" else "Volume do Windows"
+        sufixo = "" if scope == "LOCAL" else " (fallback)"
         response_message = (
-            f"Mudo {'ativado' if state.muted else 'desativado'}. Volume: {state.level}%."
+            f"{prefixo}{sufixo}: mudo {'ativado' if state.muted else 'desativado'}, {state.level}%."
             if isinstance(message, VolumeMuteToggleMessage)
-            else f"Volume: {state.level}%."
+            else f"{prefixo}{sufixo}: {state.level}%."
         )
         response = CommandResultMessage(
             requestId=message.requestId,
@@ -589,6 +641,8 @@ class Dispatcher:
                 action=message.type,
                 level=state.level,
                 muted=state.muted,
+                scope=scope,
+                target=target,
             ),
         )
         await websocket.send_json(response.model_dump())

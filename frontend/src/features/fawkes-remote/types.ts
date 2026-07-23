@@ -326,11 +326,19 @@ export interface MediaCommandData {
   executed: true
 }
 
+// LOCAL: só o aplicativo que está tocando. GLOBAL: o volume do Windows todo.
+export const VOLUME_SCOPES = ['LOCAL', 'GLOBAL'] as const
+
+export type VolumeScope = (typeof VOLUME_SCOPES)[number]
+
 export interface VolumeCommandData {
   intent: 'SYSTEM_VOLUME'
   action: VolumeAction
   level: number
   muted: boolean
+  // O fallback para o volume do Windows nunca é escondido.
+  scope: VolumeScope
+  target: string | null
   executed: true
 }
 

@@ -1594,3 +1594,10 @@ button,
   background: rgba(252, 211, 77, 0.22);
   border-color: rgba(252, 211, 77, 0.4);
 }
+
+.volume-screen__scope {
+  margin: 0.5rem 0 0;
+  font-size: 0.78rem;
+  text-align: center;
+  color: var(--text-secondary);
+}

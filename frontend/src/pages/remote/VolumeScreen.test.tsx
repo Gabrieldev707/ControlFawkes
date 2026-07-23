@@ -60,3 +60,36 @@ describe('VolumeScreen', () => {
     expect((screen.getByRole('slider', { name: 'Volume do computador' }) as HTMLInputElement).disabled).toBe(true)
   })
 })
+
+describe('VolumeScreen scope feedback', () => {
+  function renderScope(scope: 'LOCAL' | 'GLOBAL', target: string | null) {
+    render(
+      <VolumeScreen
+        disabled={false}
+        loading={false}
+        level={40}
+        muted={false}
+        scope={scope}
+        target={target}
+        statusMessage=""
+        statusError={false}
+        onDelta={vi.fn()}
+        onSetLevel={vi.fn()}
+        onToggleMute={vi.fn()}
+        onBack={vi.fn()}
+      />,
+    )
+  }
+
+  it('names the application when only it was changed', () => {
+    renderScope('LOCAL', 'Spotify')
+
+    expect(screen.getByText('Controlando o volume do Spotify')).toBeTruthy()
+  })
+
+  it('never hides the fallback to the whole system', () => {
+    renderScope('GLOBAL', null)
+
+    expect(screen.getByText(/Windows \(fallback\)/)).toBeTruthy()
+  })
+})

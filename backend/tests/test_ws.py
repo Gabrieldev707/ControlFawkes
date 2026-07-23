@@ -17,6 +17,11 @@ from app.security.pairing import PairingService
 from app.media.windows_adapter import WindowsMediaAdapter
 from app.media.session import MediaSession, WindowsMediaSessionDetector
 from app.windows.volume import VolumeState, WindowsVolumeAdapter, WindowsVolumeError
+from app.windows.app_volume import (
+    AppVolumeState,
+    AppVolumeUnavailable,
+    WindowsAppVolumeAdapter,
+)
 from app.input.pointer import PointerRateLimiter, WindowsPointerAdapter
 from app.input.keyboard import WindowsKeyboardAdapter
 from app.platforms.browser import BrowserLaunchResult, BrowserLauncher
@@ -95,6 +100,17 @@ def pointer_adapter_mock():
 
 
 @pytest.fixture
+def app_volume_adapter_mock():
+    """Sem sessão local por padrão: exercita o fallback para o volume global."""
+    adapter = Mock(spec=WindowsAppVolumeAdapter)
+    adapter.get_state.side_effect = AppVolumeUnavailable("sem sessão")
+    adapter.set_level.side_effect = AppVolumeUnavailable("sem sessão")
+    adapter.change_level.side_effect = AppVolumeUnavailable("sem sessão")
+    adapter.toggle_mute.side_effect = AppVolumeUnavailable("sem sessão")
+    return adapter
+
+
+@pytest.fixture
 def keyboard_adapter_mock():
     adapter = Mock(spec=WindowsKeyboardAdapter)
     adapter.write_text.return_value = True
@@ -114,6 +130,7 @@ def dispatcher(
     volume_adapter_mock,
     pointer_adapter_mock,
     keyboard_adapter_mock,
+    app_volume_adapter_mock,
 ):
     store = DeviceStore(
         filepath=tmp_path / "paired_devices.json",
@@ -133,6 +150,7 @@ def dispatcher(
         pointer_adapter=pointer_adapter_mock,
         pointer_rate_limiter=PointerRateLimiter(max_updates=60),
         keyboard_adapter=keyboard_adapter_mock,
+        app_volume_adapter=app_volume_adapter_mock,
     )
     monkeypatch.setattr(websocket_module, "dispatcher", instance)
     return instance
@@ -720,6 +738,9 @@ def test_authenticated_volume_commands_return_real_adapter_state(
             "action": message["type"],
             "level": expected_level,
             "muted": expected_muted,
+            # Sem sessão local: caiu para o volume do Windows, e isso aparece.
+            "scope": "GLOBAL",
+            "target": None,
             "executed": True,
         }
         mocked_method = getattr(volume_adapter_mock, method)
@@ -1732,3 +1753,119 @@ def test_disconnecting_releases_the_keyboard(client, dispatcher, keyboard_adapte
 
     # Cair a conexão no meio de um comando não pode deixar seta repetindo.
     keyboard_adapter_mock.release_all.assert_called()
+
+
+def test_volume_prefers_the_active_app_and_says_so(
+    client,
+    dispatcher,
+    app_volume_adapter_mock,
+    volume_adapter_mock,
+):
+    app_volume_adapter_mock.change_level.side_effect = None
+    app_volume_adapter_mock.change_level.return_value = AppVolumeState(
+        level=55,
+        muted=False,
+        process="spotify.exe",
+    )
+    dispatcher.media_session_detector.detect.return_value = MediaSession(
+        platform="SPOTIFY",
+        kind="APP",
+    )
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "SYSTEM_VOLUME_DELTA",
+            "requestId": "volume-1",
+            "payload": {"delta": 5},
+        })
+
+        result = websocket.receive_json()
+
+        assert result["data"]["scope"] == "LOCAL"
+        assert result["data"]["target"] == "Spotify"
+        assert result["data"]["level"] == 55
+        assert result["message"] == "Volume do Spotify: 55%."
+
+    # O volume do Windows não foi tocado.
+    volume_adapter_mock.change_level.assert_not_called()
+
+
+def test_volume_falls_back_to_windows_without_hiding_it(
+    client,
+    dispatcher,
+    app_volume_adapter_mock,
+    volume_adapter_mock,
+):
+    # Sem sessão de áudio do aplicativo: precisa cair no global e avisar.
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "SYSTEM_VOLUME_DELTA",
+            "requestId": "volume-1",
+            "payload": {"delta": 5},
+        })
+
+        result = websocket.receive_json()
+
+        assert result["data"]["scope"] == "GLOBAL"
+        assert "fallback" in result["message"]
+        assert result["message"] == "Volume do Windows (fallback): 47%."
+
+    volume_adapter_mock.change_level.assert_called_once_with(5)
+
+
+def test_volume_falls_back_when_no_media_session_is_identified(
+    client,
+    dispatcher,
+    app_volume_adapter_mock,
+    volume_adapter_mock,
+):
+    dispatcher.media_session_detector.detect.return_value = None
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "SYSTEM_VOLUME_GET",
+            "requestId": "volume-1",
+        })
+
+        result = websocket.receive_json()
+
+        assert result["data"]["scope"] == "GLOBAL"
+    app_volume_adapter_mock.get_state.assert_not_called()
+    volume_adapter_mock.get_state.assert_called_once()
+
+
+def test_local_mute_reports_the_app_it_muted(
+    client,
+    dispatcher,
+    app_volume_adapter_mock,
+):
+    app_volume_adapter_mock.toggle_mute.side_effect = None
+    app_volume_adapter_mock.toggle_mute.return_value = AppVolumeState(
+        level=40,
+        muted=True,
+        process="chrome.exe",
+    )
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "SYSTEM_MUTE_TOGGLE",
+            "requestId": "mute-1",
+        })
+
+        result = websocket.receive_json()
+
+        assert result["data"]["scope"] == "LOCAL"
+        assert result["data"]["target"] == "Chrome"
+        assert result["message"] == "Volume do Chrome: mudo ativado, 40%."
