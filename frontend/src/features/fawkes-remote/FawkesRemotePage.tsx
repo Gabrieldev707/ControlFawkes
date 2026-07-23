@@ -292,10 +292,12 @@ export const FawkesRemotePage: React.FC = () => {
     || authState !== 'authenticated'
     || serverState !== 'READY'
 
+  // Só o que torna o teclado realmente indisponível. O comando em voo ficou de
+  // fora: incluí-lo desabilitava o input e o iOS fechava o teclado virtual a
+  // cada envio. O backend já limita a taxa.
   const keyboardDisabled = connectionState !== 'connected'
     || authState !== 'authenticated'
     || serverState !== 'READY'
-    || currentKeyboardAction !== null
 
   const showOrbPreview = import.meta.env.DEV
     && new URLSearchParams(window.location.search).get('orb-preview') === '1'
