@@ -1,4 +1,11 @@
-import { Gamepad2, House, LayoutGrid, MousePointer2, Settings } from 'lucide-react'
+import {
+  Gamepad2,
+  House,
+  LayoutGrid,
+  MousePointer2,
+  Navigation,
+  Settings,
+} from 'lucide-react'
 
 import type { NavigableScreen } from '../../state/currentScreen'
 
@@ -11,6 +18,7 @@ interface RemoteNavigationProps {
 const NAV_ITEMS = [
   { screen: 'HOME', label: 'Início', icon: House },
   { screen: 'REMOTE_CONTROL', label: 'Controle', icon: Gamepad2 },
+  { screen: 'NAVIGATION', label: 'Navegar', icon: Navigation },
   { screen: 'TOUCHPAD', label: 'Touchpad', icon: MousePointer2 },
   { screen: 'PLATFORMS', label: 'Plataformas', icon: LayoutGrid },
   { screen: 'SETTINGS', label: 'Ajustes', icon: Settings },

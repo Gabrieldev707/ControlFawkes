@@ -7,7 +7,16 @@ import {
 import type { NavigableScreen } from '../../state/currentScreen'
 
 
-type FeatureScreen = Exclude<NavigableScreen, 'HOME' | 'PLATFORMS' | 'REMOTE_CONTROL' | 'VOLUME' | 'TOUCHPAD' | 'KEYBOARD'>
+type FeatureScreen = Exclude<
+  NavigableScreen,
+  | 'HOME'
+  | 'PLATFORMS'
+  | 'REMOTE_CONTROL'
+  | 'VOLUME'
+  | 'TOUCHPAD'
+  | 'KEYBOARD'
+  | 'NAVIGATION'
+>
 
 interface RemoteFeatureScreenProps {
   screen: FeatureScreen

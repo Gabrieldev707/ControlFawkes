@@ -1381,3 +1381,94 @@ body {
     padding-bottom: 10px;
   }
 }
+
+/* ── Controle direcional ──────────────────────────────────────────────────── */
+
+.dpad {
+  display: grid;
+  grid-template-areas:
+    '.              NAVIGATE_UP      .'
+    'NAVIGATE_LEFT  NAVIGATE_CONFIRM NAVIGATE_RIGHT'
+    '.              NAVIGATE_DOWN    .';
+  gap: 0.6rem;
+  width: min(19rem, 82vw);
+  margin: 0 auto;
+}
+
+.dpad__button {
+  aspect-ratio: 1;
+  display: grid;
+  place-items: center;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 1.15rem;
+  background: rgba(255, 255, 255, 0.05);
+  color: #f4f1ea;
+  font: inherit;
+  cursor: pointer;
+  /* Sem seleção nem menu de contexto ao segurar a seta no iPhone. */
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  transition: background 120ms ease, transform 120ms ease;
+}
+
+.dpad__button:active:not(:disabled),
+.dpad__button[data-active='true'] {
+  background: rgba(252, 211, 77, 0.22);
+  transform: scale(0.95);
+}
+
+.dpad__button:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.dpad__button--confirm {
+  border-radius: 50%;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  background: rgba(252, 211, 77, 0.14);
+  border-color: rgba(252, 211, 77, 0.35);
+}
+
+.navigation-screen__actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+}
+
+.navigation-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.7rem 1.4rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #f4f1ea;
+  font: inherit;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.navigation-action:active:not(:disabled),
+.navigation-action[data-active='true'] {
+  background: rgba(252, 211, 77, 0.2);
+}
+
+.navigation-action:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.navigation-screen__hint {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0;
+  font-size: 0.8rem;
+  opacity: 0.6;
+}

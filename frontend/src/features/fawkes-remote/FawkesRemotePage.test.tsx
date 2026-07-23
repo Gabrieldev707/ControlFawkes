@@ -672,3 +672,97 @@ describe('FawkesRemotePage command feedback', () => {
     expect(clearTimeoutSpy).toHaveBeenCalled()
   })
 })
+
+
+describe('FawkesRemotePage directional navigation', () => {
+  beforeEach(() => {
+    window.history.replaceState({}, '', '/')
+    localStorage.clear()
+    websocketMock.connectionState = 'connected'
+    websocketMock.onMessage = undefined
+    websocketMock.sendMessage.mockReset()
+    websocketMock.sendMessage.mockReturnValue(true)
+  })
+
+  function authenticate(): void {
+    act(() => {
+      websocketMock.onMessage?.({
+        protocolVersion: 1,
+        type: 'PAIR_RESULT',
+        requestId: 'pair-1',
+        success: true,
+        message: 'Pareamento concluído.',
+        deviceId: 'device-1',
+        token: 'new-secure-token-value',
+      })
+      websocketMock.onMessage?.({
+        protocolVersion: 1,
+        type: 'STATE_UPDATE',
+        state: 'READY',
+        message: 'Computador pronto.',
+      })
+    })
+  }
+
+  it('sends an allowlisted directional action from the Navigation screen', () => {
+    render(<FawkesRemotePage />)
+    authenticate()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Abrir Navegar' }))
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Cima' }))
+
+    expect(websocketMock.sendMessage).toHaveBeenCalledWith({
+      protocolVersion: 1,
+      type: 'NAVIGATE_UP',
+      requestId: expect.any(String),
+    })
+  })
+
+  it('keeps sending while an arrow is held, without waiting for each reply', () => {
+    render(<FawkesRemotePage />)
+    authenticate()
+    fireEvent.click(screen.getByRole('button', { name: 'Abrir Navegar' }))
+    websocketMock.sendMessage.mockClear()
+
+    const down = screen.getByRole('button', { name: 'Baixo' })
+    fireEvent.pointerDown(down)
+    fireEvent.pointerDown(down)
+
+    // Sem resposta do servidor entre os dois: o direcional não bloqueia.
+    expect(websocketMock.sendMessage).toHaveBeenCalledTimes(2)
+    fireEvent.pointerUp(down)
+  })
+
+  it('reports a real failure when the socket refuses the directional command', () => {
+    render(<FawkesRemotePage />)
+    authenticate()
+    fireEvent.click(screen.getByRole('button', { name: 'Abrir Navegar' }))
+    websocketMock.sendMessage.mockReturnValue(false)
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Cima' }))
+
+    expect(screen.getByRole('alert').textContent).toBe('Navegação indisponível.')
+  })
+
+  it('shows the backend confirmation for a directional command', () => {
+    render(<FawkesRemotePage />)
+    authenticate()
+    fireEvent.click(screen.getByRole('button', { name: 'Abrir Navegar' }))
+    // OK responde a click, não a pointerDown: é o botão que não repete.
+    fireEvent.click(screen.getByRole('button', { name: 'OK' }))
+    const sent = websocketMock.sendMessage.mock.calls.at(-1)?.[0] as { requestId: string }
+
+    act(() => {
+      websocketMock.onMessage?.({
+        protocolVersion: 1,
+        type: 'COMMAND_RESULT',
+        requestId: sent.requestId,
+        success: true,
+        message: 'OK enviado.',
+        data: { intent: 'NAVIGATION', action: 'NAVIGATE_CONFIRM', executed: true },
+      })
+    })
+
+    expect(screen.getByText('OK enviado.')).toBeTruthy()
+  })
+})

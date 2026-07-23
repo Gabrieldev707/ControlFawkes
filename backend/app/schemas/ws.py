@@ -22,6 +22,7 @@ from app.schemas.pointer import (
     PointerUpMessage,
 )
 from app.schemas.keyboard import KeyboardAction, KeyboardKeyMessage, KeyboardTextMessage
+from app.schemas.navigation import NavigationAction, NavigationMessage
 
 
 ProtocolVersion = Literal[1]
@@ -61,6 +62,8 @@ ErrorCode = Literal[
     "POINTER_RATE_LIMITED",
     "RATE_LIMITED",
     "KEYBOARD_CONTROL_FAILED",
+    "NAVIGATION_FAILED",
+    "NAVIGATION_RATE_LIMITED",
     "INTERNAL_ERROR",
 ]
 
@@ -143,7 +146,8 @@ ClientMessage = Annotated[
     | PointerDownMessage
     | PointerUpMessage
     | KeyboardTextMessage
-    | KeyboardKeyMessage,
+    | KeyboardKeyMessage
+    | NavigationMessage,
     Field(discriminator="type"),
 ]
 
@@ -219,6 +223,14 @@ class KeyboardCommandData(BaseModel):
     executed: Literal[True] = True
 
 
+class NavigationCommandData(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    intent: Literal["NAVIGATION"] = "NAVIGATION"
+    action: NavigationAction
+    executed: Literal[True] = True
+
+
 class CommandResultMessage(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -235,6 +247,7 @@ class CommandResultMessage(BaseModel):
         | VolumeCommandData
         | PointerCommandData
         | KeyboardCommandData
+        | NavigationCommandData
     )
 
 

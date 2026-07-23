@@ -13,6 +13,7 @@ from app.schemas.ws import (
     ClientMessage,
     CommandResultMessage,
     NeedsPlatformMessage,
+    NavigationCommandData,
     ErrorCode,
     ErrorMessage,
     HelpCommandData,
@@ -66,6 +67,13 @@ from app.input.pointer import PointerRateLimiter, WindowsPointerAdapter
 from app.schemas.pointer import POINTER_ACTIONS
 from app.input.keyboard import WindowsKeyboardAdapter
 from app.schemas.keyboard import KEYBOARD_ACTIONS
+from app.schemas.navigation import (
+    NAVIGATION_ACTIONS,
+    NAVIGATION_KEYS,
+    NAVIGATION_LABELS,
+    REPEATABLE_ACTIONS,
+    NavigationMessage,
+)
 
 
 WS_POLICY_VIOLATION = 1008
@@ -81,6 +89,7 @@ KNOWN_CLIENT_TYPES = {
     *VOLUME_ACTIONS,
     *POINTER_ACTIONS,
     *KEYBOARD_ACTIONS,
+    *NAVIGATION_ACTIONS,
 }
 
 
@@ -88,6 +97,10 @@ class Dispatcher:
     # Acima do teto do touchpad (60/s), para não atrapalhar o uso legítimo.
     MAX_MESSAGES_PER_SECOND = 120
     MAX_CONNECTIONS = 32
+    # Auto-repeat confortável ao segurar a seta, sem virar inundação.
+    MAX_NAVIGATION_PER_SECOND = 20
+    # Confirmar/voltar: no máximo ~3 por segundo, contra toque duplo acidental.
+    MAX_NON_REPEATABLE_PER_SECOND = 3
 
     def __init__(
         self,
@@ -102,6 +115,7 @@ class Dispatcher:
         pointer_rate_limiter: PointerRateLimiter | None = None,
         keyboard_adapter: WindowsKeyboardAdapter | None = None,
         message_rate_limiter: PointerRateLimiter | None = None,
+        navigation_rate_limiter: PointerRateLimiter | None = None,
     ) -> None:
         self.device_store = device_store or DeviceStore()
         self.pairing_service = pairing_service or PairingService(self.device_store)
@@ -115,6 +129,12 @@ class Dispatcher:
         self.keyboard_adapter = keyboard_adapter or WindowsKeyboardAdapter()
         self.message_rate_limiter = message_rate_limiter or PointerRateLimiter(
             max_updates=self.MAX_MESSAGES_PER_SECOND,
+        )
+        self.navigation_rate_limiter = navigation_rate_limiter or PointerRateLimiter(
+            max_updates=self.MAX_NAVIGATION_PER_SECOND,
+        )
+        self.navigation_repeat_guard = PointerRateLimiter(
+            max_updates=self.MAX_NON_REPEATABLE_PER_SECOND,
         )
         self._client_adapter = TypeAdapter(ClientMessage)
         self._authenticated: dict[WebSocket, str] = {}
@@ -149,6 +169,9 @@ class Dispatcher:
             self._held_pointer_buttons.discard(websocket)
         self.pointer_rate_limiter.clear(websocket)
         self.message_rate_limiter.clear(websocket)
+        self.navigation_rate_limiter.clear(websocket)
+        for action in NAVIGATION_ACTIONS:
+            self.navigation_repeat_guard.clear((websocket, action))
         self._authenticated.pop(websocket, None)
         self._connections.discard(websocket)
 
@@ -292,6 +315,10 @@ class Dispatcher:
 
         if isinstance(message, (KeyboardTextMessage, KeyboardKeyMessage)):
             await self._handle_keyboard_control(websocket, message)
+            return
+
+        if isinstance(message, NavigationMessage):
+            await self._handle_navigation(websocket, message)
             return
 
         await self._send_error(
@@ -580,6 +607,50 @@ class Dispatcher:
             requestId=message.requestId,
             message=response_message,
             data=KeyboardCommandData(action=message.type),
+        )
+        await websocket.send_json(response.model_dump())
+
+    async def _handle_navigation(
+        self,
+        websocket: WebSocket,
+        message: NavigationMessage,
+    ) -> None:
+        # Limite próprio, separado do teclado: o direcional repete ao segurar a
+        # seta, e uma repetição acelerada não pode consumir a cota do teclado.
+        if not self.navigation_rate_limiter.allow(websocket):
+            await self._send_error(
+                websocket,
+                message.requestId,
+                "NAVIGATION_RATE_LIMITED",
+                "Navegação rápida demais.",
+            )
+            return
+
+        # Confirmar e voltar não repetem: entrariam em vários itens ou sairiam
+        # de várias telas de uma vez.
+        if message.type not in REPEATABLE_ACTIONS:
+            if not self.navigation_repeat_guard.allow((websocket, message.type)):
+                await self._send_error(
+                    websocket,
+                    message.requestId,
+                    "NAVIGATION_RATE_LIMITED",
+                    "Aguarde antes de repetir esse comando.",
+                )
+                return
+
+        if not self.keyboard_adapter.press_key(NAVIGATION_KEYS[message.type]):
+            await self._send_error(
+                websocket,
+                message.requestId,
+                "NAVIGATION_FAILED",
+                "Navegação indisponível.",
+            )
+            return
+
+        response = CommandResultMessage(
+            requestId=message.requestId,
+            message=f"{NAVIGATION_LABELS[message.type]} enviado.",
+            data=NavigationCommandData(action=message.type),
         )
         await websocket.send_json(response.model_dump())
 

@@ -2,10 +2,13 @@ import {
   ERROR_CODES,
   LAUNCH_STRATEGIES,
   MEDIA_ACTIONS,
+  NAVIGATION_ACTIONS,
   VOLUME_ACTIONS,
   POINTER_ACTIONS,
   isPlatform,
+  isSearchablePlatform,
   type ErrorCode,
+  type NavigationAction,
   type ServerMessage,
   type ServerState,
 } from './types'
@@ -111,6 +114,15 @@ function isKeyboardData(value: unknown): boolean {
     && value.executed === true
 }
 
+function isNavigationData(value: unknown): boolean {
+  return isRecord(value)
+    && hasOnlyKeys(value, ['intent', 'action', 'executed'])
+    && value.intent === 'NAVIGATION'
+    && typeof value.action === 'string'
+    && NAVIGATION_ACTIONS.includes(value.action as NavigationAction)
+    && value.executed === true
+}
+
 export function isServerMessage(value: unknown): value is ServerMessage {
   if (!isRecord(value) || value.protocolVersion !== 1 || typeof value.type !== 'string') {
     return false
@@ -153,7 +165,19 @@ export function isServerMessage(value: unknown): value is ServerMessage {
           || isVolumeData(value.data)
           || isPointerData(value.data)
           || isKeyboardData(value.data)
+          || isNavigationData(value.data)
         )
+    case 'NEEDS_PLATFORM':
+      return hasOnlyKeys(value, [
+        'protocolVersion', 'type', 'requestId', 'query', 'suggestedPlatforms',
+      ])
+        && isRequestId(value.requestId)
+        && typeof value.query === 'string'
+        && value.query.length > 0
+        && value.query.length <= 200
+        && Array.isArray(value.suggestedPlatforms)
+        && value.suggestedPlatforms.length > 0
+        && value.suggestedPlatforms.every(isSearchablePlatform)
     case 'ERROR':
       return hasOnlyKeys(value, ['protocolVersion', 'type', 'requestId', 'code', 'message'])
         && isRequestId(value.requestId)

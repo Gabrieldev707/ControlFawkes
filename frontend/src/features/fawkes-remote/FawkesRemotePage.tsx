@@ -3,6 +3,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import type {
   AuthState,
   KeyboardAction,
+  NavigationAction,
   MediaAction,
   OrbState,
   Platform,
@@ -25,6 +26,7 @@ import { RemoteControlScreen } from '../../pages/remote/RemoteControlScreen'
 import { VolumeScreen } from '../../pages/remote/VolumeScreen'
 import { TouchpadScreen } from '../../pages/remote/TouchpadScreen'
 import { KeyboardScreen } from '../../pages/remote/KeyboardScreen'
+import { NavigationScreen } from '../../pages/remote/NavigationScreen'
 import {
   AuthenticationStatus,
   ConnectionStatus,
@@ -78,6 +80,7 @@ export const FawkesRemotePage: React.FC = () => {
   const [currentVolumeAction, setCurrentVolumeAction] = useState<VolumeAction | null>(null)
   const [currentPointerAction, setCurrentPointerAction] = useState<PointerAction | null>(null)
   const [currentKeyboardAction, setCurrentKeyboardAction] = useState<KeyboardAction | null>(null)
+  const [currentNavigationAction, setCurrentNavigationAction] = useState<NavigationAction | null>(null)
   const [volumeLevel, setVolumeLevel] = useState<number | null>(null)
   const [volumeMuted, setVolumeMuted] = useState(false)
   const { currentScreen, navigate, goBack } = useRemoteNavigation()
@@ -158,6 +161,14 @@ export const FawkesRemotePage: React.FC = () => {
       }
       if (message.data.intent === 'POINTER_CONTROL') {
         setCurrentPointerAction(null)
+        currentRequestId.current = null
+        setOrbState('idle')
+        setStatusMessage(message.message)
+        setStatusError(false)
+        return
+      }
+      if (message.data.intent === 'NAVIGATION') {
+        setCurrentNavigationAction(null)
         currentRequestId.current = null
         setOrbState('idle')
         setStatusMessage(message.message)
@@ -486,6 +497,30 @@ export const FawkesRemotePage: React.FC = () => {
     }
   }, [keyboardDisabled, sendMessage])
 
+  // O direcional é o único controle que não espera a resposta anterior: sem
+  // isso, segurar a seta enviaria um único comando.
+  const navigationDisabled = connectionState !== 'connected'
+    || authState !== 'authenticated'
+    || serverState !== 'READY'
+
+  const handleNavigationAction = useCallback((action: NavigationAction) => {
+    if (navigationDisabled) return
+    const requestId = generateRequestId()
+    currentRequestId.current = requestId
+    setCurrentNavigationAction(action)
+    const accepted = sendMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: action,
+      requestId,
+    })
+    if (!accepted) {
+      currentRequestId.current = null
+      setCurrentNavigationAction(null)
+      setStatusMessage('Navegação indisponível.')
+      setStatusError(true)
+    }
+  }, [navigationDisabled, sendMessage])
+
   useEffect(() => {
     if (currentScreen !== 'VOLUME') {
       hasLoadedVolumeScreen.current = false
@@ -615,6 +650,15 @@ export const FawkesRemotePage: React.FC = () => {
               statusMessage={statusMessage}
               statusError={statusError}
               onAction={handlePointerAction}
+              onBack={goBack}
+            />
+          ) : currentScreen === 'NAVIGATION' ? (
+            <NavigationScreen
+              disabled={navigationDisabled}
+              currentAction={currentNavigationAction}
+              statusMessage={statusMessage}
+              statusError={statusError}
+              onAction={handleNavigationAction}
               onBack={goBack}
             />
           ) : currentScreen === 'KEYBOARD' ? (

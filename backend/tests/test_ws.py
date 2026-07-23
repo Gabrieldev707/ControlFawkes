@@ -1423,3 +1423,155 @@ def test_connection_limit_protects_the_server(client, dispatcher):
     finally:
         for context, _ in opened:
             context.__exit__(None, None, None)
+
+
+NAVIGATION_TO_KEY = [
+    ("NAVIGATE_UP", "ARROW_UP"),
+    ("NAVIGATE_DOWN", "ARROW_DOWN"),
+    ("NAVIGATE_LEFT", "ARROW_LEFT"),
+    ("NAVIGATE_RIGHT", "ARROW_RIGHT"),
+    ("NAVIGATE_CONFIRM", "ENTER"),
+    ("NAVIGATE_BACK", "ESCAPE"),
+]
+
+
+def test_navigation_requires_authentication(client, keyboard_adapter_mock):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "NAVIGATE_UP",
+            "requestId": "nav-1",
+        })
+
+        assert websocket.receive_json()["code"] == "UNAUTHORIZED"
+
+    keyboard_adapter_mock.press_key.assert_not_called()
+
+
+@pytest.mark.parametrize(("action", "key"), NAVIGATION_TO_KEY)
+def test_authenticated_navigation_uses_only_allowlisted_keys(
+    client,
+    dispatcher,
+    keyboard_adapter_mock,
+    action,
+    key,
+):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": action,
+            "requestId": "nav-1",
+        })
+
+        result = websocket.receive_json()
+
+        assert result["type"] == "COMMAND_RESULT"
+        assert result["data"] == {
+            "intent": "NAVIGATION",
+            "action": action,
+            "executed": True,
+        }
+
+    keyboard_adapter_mock.press_key.assert_called_once_with(key)
+
+
+def test_navigation_rejects_home_and_arbitrary_payloads(client, dispatcher, keyboard_adapter_mock):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+
+        # NAVIGATE_HOME ainda não existe: não pode ser aceito por engano.
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "NAVIGATE_HOME",
+            "requestId": "nav-home",
+        })
+        assert websocket.receive_json()["code"] == "UNSUPPORTED_MESSAGE"
+
+        # Sem payload livre: nada de tecla arbitrária pelo direcional.
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "NAVIGATE_UP",
+            "requestId": "nav-2",
+            "payload": {"key": "F4"},
+        })
+        assert websocket.receive_json()["code"] == "INVALID_PAYLOAD"
+
+    keyboard_adapter_mock.press_key.assert_not_called()
+
+
+def test_arrows_repeat_while_confirm_and_back_do_not(client, dispatcher, keyboard_adapter_mock):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+
+        # Segurar a seta: repetição é esperada e permitida.
+        for index in range(8):
+            websocket.send_json({
+                "protocolVersion": 1,
+                "type": "NAVIGATE_DOWN",
+                "requestId": f"down-{index}",
+            })
+            assert websocket.receive_json()["type"] == "COMMAND_RESULT"
+
+        # Confirmar repetido entra em vários itens: precisa ser barrado.
+        codes = []
+        for index in range(8):
+            websocket.send_json({
+                "protocolVersion": 1,
+                "type": "NAVIGATE_CONFIRM",
+                "requestId": f"ok-{index}",
+            })
+            message = websocket.receive_json()
+            codes.append(message.get("code") or message["type"])
+
+    assert "NAVIGATION_RATE_LIMITED" in codes
+
+
+def test_navigation_flood_is_rate_limited_without_consuming_the_keyboard_quota(
+    client,
+    dispatcher,
+    keyboard_adapter_mock,
+):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+
+        codes = []
+        for index in range(Dispatcher.MAX_NAVIGATION_PER_SECOND + 5):
+            websocket.send_json({
+                "protocolVersion": 1,
+                "type": "NAVIGATE_UP",
+                "requestId": f"nav-{index}",
+            })
+            message = websocket.receive_json()
+            codes.append(message.get("code") or message["type"])
+
+        assert "NAVIGATION_RATE_LIMITED" in codes
+
+        # O teclado remoto continua utilizável: os limites são independentes.
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "KEYBOARD_KEY",
+            "requestId": "kb-1",
+            "payload": {"key": "ENTER"},
+        })
+        assert websocket.receive_json()["type"] == "COMMAND_RESULT"
+
+
+def test_navigation_reports_adapter_failure(client, dispatcher, keyboard_adapter_mock):
+    keyboard_adapter_mock.press_key.return_value = False
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "NAVIGATE_UP",
+            "requestId": "nav-1",
+        })
+
+        assert websocket.receive_json()["code"] == "NAVIGATION_FAILED"
