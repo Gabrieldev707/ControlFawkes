@@ -1570,3 +1570,27 @@ button,
   height: 1.4rem;
   object-fit: contain;
 }
+
+/* Painel de qualidade do orb (somente desenvolvimento) */
+.orb-quality-picker {
+  display: flex;
+  gap: 0.4rem;
+  justify-content: center;
+  margin-top: 0.5rem;
+}
+
+.orb-quality-picker button {
+  padding: 0.35rem 0.7rem;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.05);
+  color: #f4f1ea;
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+
+.orb-quality-picker button[aria-pressed='true'] {
+  background: rgba(252, 211, 77, 0.22);
+  border-color: rgba(252, 211, 77, 0.4);
+}

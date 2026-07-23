@@ -29,6 +29,9 @@ import { TouchpadScreen } from '../../pages/remote/TouchpadScreen'
 import { KeyboardScreen } from '../../pages/remote/KeyboardScreen'
 import { NavigationScreen } from '../../pages/remote/NavigationScreen'
 import { PlatformChoice } from '../../components/fawkes-remote/PlatformChoice'
+import { OrbQualityPicker } from '../../components/fawkes-remote/OrbQualityPicker'
+import type { OrbQuality } from '../../components/fawkes-remote/orbQuality'
+import { loadOrbQuality, saveOrbQuality } from './orbPreferences'
 import {
   AuthenticationStatus,
   ConnectionStatus,
@@ -85,6 +88,9 @@ export const FawkesRemotePage: React.FC = () => {
   const [currentNavigationAction, setCurrentNavigationAction] = useState<NavigationAction | null>(null)
   // Escolha de plataforma pendente. Some ao escolher, cancelar ou receber
   // outra resposta: nunca fica presa na tela.
+  const [orbQuality, setOrbQuality] = useState<OrbQuality>(
+    () => loadOrbQuality(localStorage.getItem(DEVICE_ID_KEY)),
+  )
   const [pendingChoice, setPendingChoice] = useState<
     { requestId: string; query: string; platforms: SearchablePlatform[] } | null
   >(null)
@@ -635,9 +641,18 @@ export const FawkesRemotePage: React.FC = () => {
           {currentScreen === 'HOME' ? (
             <main className="remote-home">
               <div className="orb-container">
-                <RemoteOrb state={orbState} />
+                <RemoteOrb state={orbState} quality={orbQuality} />
                 {showOrbPreview ? (
-                  <OrbStatePreview state={orbState} onChange={setOrbState} />
+                  <>
+                    <OrbStatePreview state={orbState} onChange={setOrbState} />
+                    <OrbQualityPicker
+                      quality={orbQuality}
+                      onChange={(next) => {
+                        setOrbQuality(next)
+                        saveOrbQuality(localStorage.getItem(DEVICE_ID_KEY), next)
+                      }}
+                    />
+                  </>
                 ) : null}
               </div>
 

@@ -1,14 +1,19 @@
 import React, { useRef, useEffect } from 'react';
 import { FawkesOrb } from './FawkesOrb';
 import type { OrbState } from '../../features/fawkes-remote/types';
+import { DEFAULT_ORB_QUALITY, type OrbQuality } from './orbQuality';
 
 interface RemoteOrbProps {
   state: OrbState;
+  quality?: OrbQuality;
 }
 
 
 
-export const RemoteOrb: React.FC<RemoteOrbProps> = ({ state }) => {
+export const RemoteOrb: React.FC<RemoteOrbProps> = ({
+  state,
+  quality = DEFAULT_ORB_QUALITY,
+}) => {
   const mountRef = useRef<HTMLDivElement>(null);
   const orbRef = useRef<FawkesOrb | null>(null);
 
@@ -24,7 +29,7 @@ export const RemoteOrb: React.FC<RemoteOrbProps> = ({ state }) => {
     mountNode.appendChild(canvas);
 
     // Initialize the real Fawkes Orb
-    const orb = new FawkesOrb(canvas);
+    const orb = new FawkesOrb(canvas, quality);
     orbRef.current = orb;
 
     return () => {
@@ -34,7 +39,9 @@ export const RemoteOrb: React.FC<RemoteOrbProps> = ({ state }) => {
       }
       orbRef.current = null;
     };
-  }, []);
+    // Recria ao trocar de nível: pixel ratio e tamanho do ponto são fixados na
+    // construção do renderer.
+  }, [quality]);
 
   // Sync state changes
   useEffect(() => {
