@@ -1663,3 +1663,72 @@ def test_media_link_failure_is_reported_without_false_success(
         assert error["type"] == "ERROR"
         assert error["code"] == "MEDIA_LINK_FAILED"
         assert "Chrome" in error["message"]
+
+
+def test_reset_input_state_releases_keys_and_the_mouse(
+    client,
+    dispatcher,
+    keyboard_adapter_mock,
+    pointer_adapter_mock,
+):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "POINTER_DOWN",
+            "requestId": "down-1",
+        })
+        websocket.receive_json()
+
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "RESET_INPUT_STATE",
+            "requestId": "reset-1",
+        })
+        result = websocket.receive_json()
+
+        assert result["type"] == "COMMAND_RESULT"
+        assert result["data"]["action"] == "RESET_INPUT_STATE"
+        keyboard_adapter_mock.release_all.assert_called()
+        pointer_adapter_mock.pointer_up.assert_called()
+        assert dispatcher._held_pointer_buttons == set()
+
+
+def test_reset_input_state_is_never_rate_limited(client, dispatcher, keyboard_adapter_mock):
+    """É a saída de emergência: barrá-la deixaria a tecla presa."""
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+
+        for index in range(Dispatcher.MAX_NAVIGATION_PER_SECOND + 10):
+            websocket.send_json({
+                "protocolVersion": 1,
+                "type": "RESET_INPUT_STATE",
+                "requestId": f"reset-{index}",
+            })
+            assert websocket.receive_json()["type"] == "COMMAND_RESULT"
+
+
+def test_reset_input_state_requires_authentication(client, keyboard_adapter_mock):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "RESET_INPUT_STATE",
+            "requestId": "reset-1",
+        })
+
+        assert websocket.receive_json()["code"] == "UNAUTHORIZED"
+        # Verificado ainda dentro da conexão: sair do contexto dispara o
+        # release defensivo do disconnect, que é esperado.
+        keyboard_adapter_mock.release_all.assert_not_called()
+
+
+def test_disconnecting_releases_the_keyboard(client, dispatcher, keyboard_adapter_mock):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+
+    # Cair a conexão no meio de um comando não pode deixar seta repetindo.
+    keyboard_adapter_mock.release_all.assert_called()

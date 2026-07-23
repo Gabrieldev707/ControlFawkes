@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from 'react'
+import React, { useCallback, useEffect, useRef } from 'react'
 import {
   ArrowDown,
   ArrowLeft,
@@ -13,6 +13,15 @@ import {
   REPEATABLE_NAVIGATION_ACTIONS,
   type NavigationAction,
 } from '../../features/fawkes-remote/types'
+
+
+// Log só em desenvolvimento, para diagnosticar o direcional no aparelho sem
+// deixar rastro em produção.
+function debugNavigation(action: NavigationAction, phase: string): void {
+  if (import.meta.env.DEV) {
+    console.info(`[nav] ${action} ${phase}`)
+  }
+}
 
 
 interface NavigationScreenProps {
@@ -71,10 +80,37 @@ export function NavigationScreen({
   }, [onAction, stopRepeating])
 
   const handlePress = useCallback((action: NavigationAction) => {
-    if (disabled) return
+    if (disabled) {
+      debugNavigation(action, 'ignorado (controles desabilitados)')
+      return
+    }
+    debugNavigation(action, 'enviado')
     onAction(action)
     startRepeating(action)
   }, [disabled, onAction, startRepeating])
+
+  // Todos os botões respondem a pointerdown, inclusive OK e voltar.
+  //
+  // Antes o OK usava onClick e não funcionava no iPhone: o Safari cancela o
+  // click quando o dedo se move alguns pixels entre o toque e o soltar, o que
+  // acontece o tempo todo com o aparelho na mão. As setas já usavam
+  // pointerdown e por isso funcionavam — era essa a diferença.
+  //
+  // Verificado que o caminho do backend estava correto antes de mexer aqui:
+  // uma janela de teste no Windows recebeu KEYDOWN/KEYUP de Return sem
+  // modificadores.
+  function pressHandlers(action: NavigationAction) {
+    return {
+      onPointerDown: (event: React.PointerEvent) => {
+        // Evita que o toque vire também um clique sintético e envie duas vezes.
+        event.preventDefault()
+        handlePress(action)
+      },
+      onPointerUp: stopRepeating,
+      onPointerLeave: stopRepeating,
+      onPointerCancel: stopRepeating,
+    }
+  }
 
   function directionButton(action: keyof typeof DIRECTIONS) {
     const { label, icon: Icon } = DIRECTIONS[action]
@@ -86,10 +122,7 @@ export function NavigationScreen({
         aria-label={label}
         disabled={disabled}
         data-active={currentAction === action}
-        onPointerDown={() => handlePress(action)}
-        onPointerUp={stopRepeating}
-        onPointerLeave={stopRepeating}
-        onPointerCancel={stopRepeating}
+        {...pressHandlers(action)}
       >
         <Icon size={26} aria-hidden="true" />
       </button>
@@ -123,7 +156,7 @@ export function NavigationScreen({
           aria-label="OK"
           disabled={disabled}
           data-active={currentAction === 'NAVIGATE_CONFIRM'}
-          onClick={() => handlePress('NAVIGATE_CONFIRM')}
+          {...pressHandlers('NAVIGATE_CONFIRM')}
         >
           OK
         </button>
@@ -137,7 +170,7 @@ export function NavigationScreen({
           className="navigation-action"
           disabled={disabled}
           data-active={currentAction === 'NAVIGATE_BACK'}
-          onClick={() => handlePress('NAVIGATE_BACK')}
+          {...pressHandlers('NAVIGATE_BACK')}
         >
           <Undo2 size={20} aria-hidden="true" />
           Voltar na TV

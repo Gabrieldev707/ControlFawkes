@@ -17,6 +17,7 @@ from app.input.keyboard import SafeKey
 
 
 NavigationAction: TypeAlias = Literal[
+    "RESET_INPUT_STATE",
     "NAVIGATE_UP",
     "NAVIGATE_DOWN",
     "NAVIGATE_LEFT",
@@ -26,6 +27,7 @@ NavigationAction: TypeAlias = Literal[
 ]
 
 NAVIGATION_ACTIONS: tuple[NavigationAction, ...] = (
+    "RESET_INPUT_STATE",
     "NAVIGATE_UP",
     "NAVIGATE_DOWN",
     "NAVIGATE_LEFT",
@@ -34,6 +36,8 @@ NAVIGATION_ACTIONS: tuple[NavigationAction, ...] = (
     "NAVIGATE_BACK",
 )
 
+# RESET_INPUT_STATE não aperta tecla nenhuma: apenas solta, por isso fica fora
+# deste mapa.
 # Mapeamento fechado para as teclas já allowlisted do teclado remoto.
 NAVIGATION_KEYS: dict[NavigationAction, SafeKey] = {
     "NAVIGATE_UP": "ARROW_UP",
@@ -45,6 +49,7 @@ NAVIGATION_KEYS: dict[NavigationAction, SafeKey] = {
 }
 
 NAVIGATION_LABELS: dict[NavigationAction, str] = {
+    "RESET_INPUT_STATE": "Teclado liberado",
     "NAVIGATE_UP": "Cima",
     "NAVIGATE_DOWN": "Baixo",
     "NAVIGATE_LEFT": "Esquerda",

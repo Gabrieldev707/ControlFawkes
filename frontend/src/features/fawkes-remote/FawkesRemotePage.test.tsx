@@ -748,8 +748,7 @@ describe('FawkesRemotePage directional navigation', () => {
     render(<FawkesRemotePage />)
     authenticate()
     fireEvent.click(screen.getByRole('button', { name: 'Abrir Navegar' }))
-    // OK responde a click, não a pointerDown: é o botão que não repete.
-    fireEvent.click(screen.getByRole('button', { name: 'OK' }))
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'OK' }))
     const sent = websocketMock.sendMessage.mock.calls.at(-1)?.[0] as { requestId: string }
 
     act(() => {

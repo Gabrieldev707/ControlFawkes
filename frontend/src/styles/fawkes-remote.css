@@ -36,6 +36,30 @@ body {
   font-family: var(--font-ui);
   -webkit-font-smoothing: antialiased;
   overflow: hidden; /* Mobile app feel */
+
+  /* No iOS, dois toques rápidos em qualquer lugar sem `touch-action` dão
+     double-tap-to-zoom. Pressionar o direcional em sequência disparava isso
+     repetidamente e a página ia acumulando zoom. Aplicar na raiz cobre também
+     os vãos entre botões, que é justamente onde o toque escapava.
+     `manipulation` remove só o double-tap: o pinch continua disponível, então
+     quem precisa ampliar ainda consegue. */
+  touch-action: manipulation;
+
+  /* Evita o iOS inflar a fonte ao girar o aparelho. */
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+/* Controles não são texto selecionável: o toque longo abria a lupa de seleção
+   e o menu de copiar por cima do direcional. */
+button,
+.dpad,
+.remote-navigation,
+.touchpad-surface {
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 
 /* Layout Principal */

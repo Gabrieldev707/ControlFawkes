@@ -89,11 +89,35 @@ describe('NavigationScreen', () => {
   ])('never repeats %s', (label, action) => {
     const { onAction } = renderScreen()
 
-    fireEvent.click(screen.getByRole('button', { name: label }))
+    fireEvent.pointerDown(screen.getByRole('button', { name: label }))
     act(() => void vi.advanceTimersByTime(5000))
 
     expect(onAction).toHaveBeenCalledTimes(1)
     expect(onAction).toHaveBeenCalledWith(action)
+  })
+
+  it.each([
+    ['OK', 'NAVIGATE_CONFIRM'],
+    ['Voltar na TV', 'NAVIGATE_BACK'],
+    ['Cima', 'NAVIGATE_UP'],
+  ])('%s responds to the touch itself, not to a click', (label, action) => {
+    // O iOS cancela o click quando o dedo se move alguns pixels, o que fazia o
+    // OK não funcionar no aparelho enquanto as setas funcionavam.
+    const { onAction } = renderScreen()
+
+    fireEvent.pointerDown(screen.getByRole('button', { name: label }))
+
+    expect(onAction).toHaveBeenCalledWith(action)
+  })
+
+  it('does not send twice when the touch also produces a click', () => {
+    const { onAction } = renderScreen()
+    const ok = screen.getByRole('button', { name: 'OK' })
+
+    fireEvent.pointerDown(ok)
+    fireEvent.click(ok)
+
+    expect(onAction).toHaveBeenCalledTimes(1)
   })
 
   it('stops repeating when the screen unmounts mid-hold', () => {
@@ -120,7 +144,7 @@ describe('NavigationScreen', () => {
     const { onAction } = renderScreen({ disabled: true })
 
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Cima' }))
-    fireEvent.click(screen.getByRole('button', { name: 'OK' }))
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'OK' }))
     act(() => void vi.advanceTimersByTime(5000))
 
     expect(onAction).not.toHaveBeenCalled()

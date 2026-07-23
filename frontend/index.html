@@ -3,7 +3,16 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- viewport-fit=cover é o que faz env(safe-area-inset-*) valer no iPhone;
+         sem ele o CSS já usava safe-area, mas recebia sempre 0 e o conteúdo
+         passava por baixo do notch e da barra inferior.
+         Sem user-scalable=no de propósito: o iOS o ignora desde a versão 10 e
+         ele quebraria a acessibilidade. O double-tap-to-zoom acidental é
+         resolvido por `touch-action: manipulation` no CSS. -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover"
+    />
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Syncopate:wght@400;700&display=swap" rel="stylesheet">

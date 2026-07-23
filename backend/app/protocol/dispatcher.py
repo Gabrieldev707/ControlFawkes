@@ -166,9 +166,10 @@ class Dispatcher:
         await self._send_error(websocket, "unknown", "INVALID_PAYLOAD", "Frame não suportado.")
 
     async def disconnect(self, websocket: WebSocket) -> None:
-        if websocket in self._held_pointer_buttons:
-            self.pointer_adapter.pointer_up()
-            self._held_pointer_buttons.discard(websocket)
+        self._release_input(websocket)
+        # Desconectar no meio de um comando podia deixar tecla presa: uma seta
+        # presa repete sozinha até o usuário mexer no teclado físico.
+        self.keyboard_adapter.release_all()
         self.pointer_rate_limiter.clear(websocket)
         self.message_rate_limiter.clear(websocket)
         self.navigation_rate_limiter.clear(websocket)
@@ -370,6 +371,34 @@ class Dispatcher:
             )
 
         await self._send_state(websocket, "READY", "Computador pronto.")
+
+    async def _handle_reset_input_state(
+        self,
+        websocket: WebSocket,
+        request_id: str,
+    ) -> None:
+        self._release_input(websocket)
+        if not self.keyboard_adapter.release_all():
+            await self._send_error(
+                websocket,
+                request_id,
+                "NAVIGATION_FAILED",
+                "Não foi possível liberar o teclado.",
+            )
+            return
+
+        response = CommandResultMessage(
+            requestId=request_id,
+            message="Teclado e mouse liberados.",
+            data=NavigationCommandData(action="RESET_INPUT_STATE"),
+        )
+        await websocket.send_json(response.model_dump())
+
+    def _release_input(self, websocket: WebSocket) -> None:
+        """Solta o que possa ter ficado preso nesta conexão."""
+        if websocket in self._held_pointer_buttons:
+            self.pointer_adapter.pointer_up()
+            self._held_pointer_buttons.discard(websocket)
 
     async def _handle_media_link(
         self,
@@ -652,6 +681,12 @@ class Dispatcher:
         websocket: WebSocket,
         message: NavigationMessage,
     ) -> None:
+        # O reset é a saída de emergência para tecla presa: nunca pode ser
+        # barrado por limite nem por guarda de repetição.
+        if message.type == "RESET_INPUT_STATE":
+            await self._handle_reset_input_state(websocket, message.requestId)
+            return
+
         # Limite próprio, separado do teclado: o direcional repete ao segurar a
         # seta, e uma repetição acelerada não pode consumir a cota do teclado.
         if not self.navigation_rate_limiter.allow(websocket):
