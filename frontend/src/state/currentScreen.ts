@@ -1,7 +1,6 @@
 export const CURRENT_SCREENS = [
   'HOME',
   'REMOTE_CONTROL',
-  'NAVIGATION',
   'TOUCHPAD',
   'KEYBOARD',
   'VOLUME',

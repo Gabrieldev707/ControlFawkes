@@ -268,7 +268,7 @@ describe('FawkesRemotePage authentication', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Controle' }))
 
-    expect(screen.getByRole('heading', { name: 'Mídia' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: 'Controle' })).toBeTruthy()
     expect(screen.queryByLabelText('Comando de texto')).toBeNull()
     expect(websocketMock.sendMessage).not.toHaveBeenCalled()
 
@@ -706,11 +706,11 @@ describe('FawkesRemotePage directional navigation', () => {
     })
   }
 
-  it('sends an allowlisted directional action from the Navigation screen', () => {
+  it('sends an allowlisted directional action from the unified Control screen', () => {
     render(<FawkesRemotePage />)
     authenticate()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Abrir Navegar' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Abrir Controle' }))
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Cima' }))
 
     expect(websocketMock.sendMessage).toHaveBeenCalledWith({
@@ -723,7 +723,7 @@ describe('FawkesRemotePage directional navigation', () => {
   it('keeps sending while an arrow is held, without waiting for each reply', () => {
     render(<FawkesRemotePage />)
     authenticate()
-    fireEvent.click(screen.getByRole('button', { name: 'Abrir Navegar' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Abrir Controle' }))
     websocketMock.sendMessage.mockClear()
 
     const down = screen.getByRole('button', { name: 'Baixo' })
@@ -738,7 +738,7 @@ describe('FawkesRemotePage directional navigation', () => {
   it('reports a real failure when the socket refuses the directional command', () => {
     render(<FawkesRemotePage />)
     authenticate()
-    fireEvent.click(screen.getByRole('button', { name: 'Abrir Navegar' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Abrir Controle' }))
     websocketMock.sendMessage.mockReturnValue(false)
 
     fireEvent.pointerDown(screen.getByRole('button', { name: 'Cima' }))
@@ -749,7 +749,7 @@ describe('FawkesRemotePage directional navigation', () => {
   it('shows the backend confirmation for a directional command', () => {
     render(<FawkesRemotePage />)
     authenticate()
-    fireEvent.click(screen.getByRole('button', { name: 'Abrir Navegar' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Abrir Controle' }))
     fireEvent.pointerDown(screen.getByRole('button', { name: 'OK' }))
     const sent = websocketMock.sendMessage.mock.calls.at(-1)?.[0] as { requestId: string }
 

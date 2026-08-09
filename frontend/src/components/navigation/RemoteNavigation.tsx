@@ -3,7 +3,6 @@ import {
   House,
   LayoutGrid,
   MousePointer2,
-  Navigation,
   Settings,
 } from 'lucide-react'
 
@@ -18,7 +17,6 @@ interface RemoteNavigationProps {
 const NAV_ITEMS = [
   { screen: 'HOME', label: 'Início', icon: House },
   { screen: 'REMOTE_CONTROL', label: 'Controle', icon: Gamepad2 },
-  { screen: 'NAVIGATION', label: 'Navegar', icon: Navigation },
   { screen: 'TOUCHPAD', label: 'Touchpad', icon: MousePointer2 },
   { screen: 'PLATFORMS', label: 'Plataformas', icon: LayoutGrid },
   { screen: 'SETTINGS', label: 'Ajustes', icon: Settings },

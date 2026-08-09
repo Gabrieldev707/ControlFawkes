@@ -15,7 +15,6 @@ type FeatureScreen = Exclude<
   | 'VOLUME'
   | 'TOUCHPAD'
   | 'KEYBOARD'
-  | 'NAVIGATION'
 >
 
 interface RemoteFeatureScreenProps {
