@@ -22,6 +22,7 @@ from app.schemas.pointer import (
     PointerUpMessage,
 )
 from app.schemas.keyboard import KeyboardAction, KeyboardKeyMessage, KeyboardTextMessage
+from app.schemas.navigation import NavigationAction, NavigationMessage
 
 
 ProtocolVersion = Literal[1]
@@ -33,6 +34,11 @@ Platform = Literal[
     "YOUTUBE",
     "SPOTIFY",
 ]
+# Plataformas com URL de busca estável e verificada. Max e Disney+ não entram;
+# ver a nota em app/platforms/registry.py.
+SearchablePlatform = Literal["YOUTUBE", "SPOTIFY", "NETFLIX", "PRIME_VIDEO"]
+# LOCAL: só o aplicativo. GLOBAL: o volume do Windows inteiro.
+VolumeScope = Literal["LOCAL", "GLOBAL"]
 LaunchStrategy = Literal["CHROME", "SPOTIFY_APP", "SPOTIFY_WEB_CHROME"]
 ServerState = Literal["AUTH_REQUIRED", "PAIRING", "READY", "BUSY"]
 ErrorCode = Literal[
@@ -50,6 +56,7 @@ ErrorCode = Literal[
     "PROTOCOL_VERSION_MISMATCH",
     "PLATFORM_OPEN_FAILED",
     "MEDIA_SEARCH_FAILED",
+    "MEDIA_LINK_FAILED",
     "MEDIA_CONTROL_FAILED",
     "MEDIA_SESSION_NOT_FOUND",
     "MEDIA_ACTION_UNSUPPORTED",
@@ -58,6 +65,8 @@ ErrorCode = Literal[
     "POINTER_RATE_LIMITED",
     "RATE_LIMITED",
     "KEYBOARD_CONTROL_FAILED",
+    "NAVIGATION_FAILED",
+    "NAVIGATION_RATE_LIMITED",
     "INTERNAL_ERROR",
 ]
 
@@ -92,6 +101,27 @@ class TextCommandMessage(BaseModel):
     payload: TextCommandPayload
 
 
+class SearchMediaPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    platform: SearchablePlatform
+    query: str = Field(min_length=1, max_length=200)
+
+
+class SearchMediaMessage(BaseModel):
+    """Busca com plataforma já escolhida pelo usuário.
+
+    O cliente manda plataforma e consulta; a URL é montada no backend.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    protocolVersion: ProtocolVersion
+    type: Literal["SEARCH_MEDIA"]
+    requestId: str = Field(min_length=1, max_length=128)
+    payload: SearchMediaPayload
+
+
 class MediaControlMessage(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -105,6 +135,7 @@ ClientMessage = Annotated[
     | PairDeviceMessage
     | PlatformSelectedMessage
     | TextCommandMessage
+    | SearchMediaMessage
     | MediaControlMessage
     | VolumeGetMessage
     | VolumeSetMessage
@@ -118,7 +149,8 @@ ClientMessage = Annotated[
     | PointerDownMessage
     | PointerUpMessage
     | KeyboardTextMessage
-    | KeyboardKeyMessage,
+    | KeyboardKeyMessage
+    | NavigationMessage,
     Field(discriminator="type"),
 ]
 
@@ -145,7 +177,7 @@ class SearchMediaCommandData(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     intent: Literal["SEARCH_MEDIA"] = "SEARCH_MEDIA"
-    platform: Literal["YOUTUBE", "SPOTIFY"]
+    platform: SearchablePlatform
     executed: Literal[True] = True
     strategy: LaunchStrategy
 
@@ -175,6 +207,10 @@ class VolumeCommandData(BaseModel):
     action: VolumeAction
     level: StrictInt = Field(ge=0, le=100)
     muted: bool
+    # Em que escopo a mudança aconteceu de fato. O fallback para o volume do
+    # Windows nunca é silencioso: a interface precisa poder dizer a verdade.
+    scope: VolumeScope = "GLOBAL"
+    target: str | None = None
     executed: Literal[True] = True
 
 
@@ -194,6 +230,23 @@ class KeyboardCommandData(BaseModel):
     executed: Literal[True] = True
 
 
+class MediaLinkCommandData(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    intent: Literal["OPEN_ALLOWED_MEDIA_LINK"] = "OPEN_ALLOWED_MEDIA_LINK"
+    platform: Literal["YOUTUBE"]
+    executed: Literal[True] = True
+    strategy: LaunchStrategy
+
+
+class NavigationCommandData(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    intent: Literal["NAVIGATION"] = "NAVIGATION"
+    action: NavigationAction
+    executed: Literal[True] = True
+
+
 class CommandResultMessage(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -210,7 +263,25 @@ class CommandResultMessage(BaseModel):
         | VolumeCommandData
         | PointerCommandData
         | KeyboardCommandData
+        | NavigationCommandData
+        | MediaLinkCommandData
     )
+
+
+class NeedsPlatformMessage(BaseModel):
+    """Consulta entendida, mas sem plataforma: o usuário escolhe onde procurar.
+
+    Só entram plataformas com busca funcional — oferecer uma que não busca
+    levaria a um beco sem saída.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    protocolVersion: ProtocolVersion = 1
+    type: Literal["NEEDS_PLATFORM"] = "NEEDS_PLATFORM"
+    requestId: str
+    query: str = Field(min_length=1, max_length=200)
+    suggestedPlatforms: list[SearchablePlatform] = Field(min_length=1)
 
 
 class ErrorMessage(BaseModel):

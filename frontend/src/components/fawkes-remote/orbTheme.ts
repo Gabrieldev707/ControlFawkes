@@ -20,21 +20,26 @@ export const ORB_VISUAL_TUNING = {
 
 export const ORB_THEMES: Record<OrbState, OrbTheme> = {
   idle: {
+    // Contraste medido contra o fundo #050508. A paleta anterior tinha cinco
+    // destas sete cores abaixo de 2,2:1 e sumia no OLED; os valores entre
+    // parênteses são o contraste novo.
     colors: [
-      new THREE.Color('#4c1d95'), // roxo profundo
-      new THREE.Color('#7c3aed'), // violeta
-      new THREE.Color('#1e1b4b'), // azul noturno
-      new THREE.Color('#312e81'), // azul cósmico
-      new THREE.Color('#4a044e'), // lilás escuro
-      new THREE.Color('#831843'), // magenta discreto
-      new THREE.Color('#fcd34d'), // pontos dourados
+      new THREE.Color('#7c3aed'), // violeta (3.6:1)
+      new THREE.Color('#a78bfa'), // violeta claro (7.5:1)
+      new THREE.Color('#4338ca'), // índigo (2.6:1)
+      new THREE.Color('#6366f1'), // índigo claro (4.6:1)
+      new THREE.Color('#a21caf'), // fúcsia (3.2:1)
+      new THREE.Color('#db2777'), // rosa (4.4:1)
+      new THREE.Color('#fcd34d'), // dourado (14.1:1)
     ],
     radius: 28,
     speed: 0.20,
     brightness: 1.08,
-    size: 0.35,
+    size: 0.45,
     lineAmount: 0.08,
-    electronRate: 0,
+    // O estado padrão não emitia elétron nenhum: era parte do "quase
+    // invisível". Baixo o bastante para continuar calmo em repouso.
+    electronRate: 0.012,
   },
   listening: {
     colors: [
@@ -49,7 +54,7 @@ export const ORB_THEMES: Record<OrbState, OrbTheme> = {
     brightness: 1.10,
     size: 0.40,
     lineAmount: 0.20,
-    electronRate: 0,
+    electronRate: 0.018,
   },
   transcribing: {
     colors: [
@@ -79,7 +84,7 @@ export const ORB_THEMES: Record<OrbState, OrbTheme> = {
     brightness: 1.06,
     size: 0.40,
     lineAmount: 0.22,
-    electronRate: 0,
+    electronRate: 0.015,
   },
   executing: {
     colors: [
@@ -124,6 +129,6 @@ export const ORB_THEMES: Record<OrbState, OrbTheme> = {
     brightness: 1.02,
     size: 0.25,
     lineAmount: 0.10,
-    electronRate: 0,
+    electronRate: 0.02,
   }
 };

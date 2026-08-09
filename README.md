@@ -27,6 +27,11 @@ O MVP atual oferece:
 - leitura, ajuste, delta e mudo do volume principal pelo Core Audio;
 - touchpad relativo com agrupamento por frame, limite backend de 60 movimentos/s e failsafe;
 - texto Unicode limitado e nove teclas especiais seguras no teclado remoto.
+- tela Controle unificada com D-pad, reprodução, volume rápido, seek,
+  fullscreen, Touchpad e Teclado, sem destino de navegação duplicado;
+- parser determinístico para mídia e volume comuns, sem custo de inferência;
+- interpretação local opcional via Ollama, sempre depois do parser e sem
+  qualquer executor próprio, API paga ou dependência de nuvem.
 
 Toda confirmação funcional depende do retorno do adapter. Falha nativa produz
 `ERROR`; a interface não apresenta sucesso otimista.
@@ -49,6 +54,7 @@ ControlFawkes/
 
 - Python 3.12 ou compatível;
 - Node.js 22 e npm;
+- Ollama é opcional; o produto inteiro funciona sem ele;
 - computador e iPhone na mesma rede Wi-Fi;
 - permissão no firewall do Windows para as portas 5173 e 8100 em rede privada.
 
@@ -78,6 +84,10 @@ automaticamente o mesmo hostname pelo qual a página foi aberta e a porta 8100:
 
 ```dotenv
 VITE_WS_PORT=8100
+CONTROLFAWKES_LOCAL_AI=auto
+CONTROLFAWKES_OLLAMA_URL=http://127.0.0.1:11434
+CONTROLFAWKES_OLLAMA_MODEL=
+CONTROLFAWKES_OLLAMA_TIMEOUT=5
 ```
 
 Use `VITE_WS_URL` somente quando o backend estiver em outro host ou porta.
@@ -149,13 +159,35 @@ abre youtube
 abre spotify
 abre youtube Kanye West
 toca Runaway no Spotify
+pesquisa Interestelar na Netflix
+procura The Boys no Prime Video
+play
+volume 42
+mudo
 ```
 
 Variações fechadas como `abrir a max`, `vai para o youtube` e `coloca spotify`
-também são reconhecidas. Pesquisas determinísticas aceitam somente YouTube e
-Spotify e apenas abrem a página de resultados, sem escolher ou reproduzir algo
-ambíguo. Texto fora da tabela retorna `UNKNOWN_COMMAND`; não há LLM, pesquisa
-fora desses templates ou execução arbitrária.
+também são reconhecidas. Pesquisas determinísticas aceitam YouTube, Spotify,
+Netflix e Prime Video e apenas abrem a página de resultados, sem escolher ou
+reproduzir algo ambíguo.
+
+### IA local opcional
+
+Ollama é apenas um fallback para texto que o parser devolveu como desconhecido.
+Em `auto`, deixar `CONTROLFAWKES_OLLAMA_MODEL` vazio desliga toda inferência.
+Para usar um modelo local já instalado, por exemplo:
+
+```powershell
+$env:CONTROLFAWKES_LOCAL_AI = "auto"
+$env:CONTROLFAWKES_OLLAMA_MODEL = "qwen2.5:3b"
+npm run dev
+```
+
+O modelo só escolhe entre intents existentes e devolve JSON validado. Plataforma
+e ação precisam estar ancoradas no texto ou no contexto curto do mesmo
+`deviceId`. JSON inválido, campo extra, ação inventada, timeout, modelo ausente
+ou Ollama desligado preservam o fallback `UNKNOWN_COMMAND`. Não existe chamada
+de shell, PowerShell, URL ou tecla arbitrária, e nenhuma API externa é usada.
 
 ## Protocolo resumido
 
@@ -196,13 +228,18 @@ O roteiro físico completo de 16 passos está em [docs/TESTING.md](docs/TESTING.
 
 ## Limites atuais
 
-O MVP controla a janela/aplicativo atualmente ativo. A identificação de mídia
+O produto controla a janela/aplicativo atualmente ativo. A identificação de mídia
 depende de uma plataforma conhecida no título da janela em primeiro plano e não
 descobre players em segundo plano. Não escolhe conteúdo,
 não confirma reprodução dentro de serviços, não controla TV e não automatiza
 login. Voz e transcrição permanecem desabilitadas. Seek e fullscreen dependem
 dos atalhos aceitos pelo aplicativo ativo. O teste físico final no iPhone
 permanece responsabilidade do usuário.
+
+O contexto da IA local é volátil, limitado a 32 dispositivos e expira em dez
+minutos. O primeiro uso após o modelo ser descarregado da memória pode exceder
+o timeout e cair com segurança para `UNKNOWN_COMMAND`; aumente o timeout até 10
+segundos somente se a máquina local precisar.
 
 Se o iPhone não acessar a página, confirme o IPv4, o perfil privado da rede e
 as regras do firewall; verifique também se o roteador não usa isolamento de

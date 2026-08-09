@@ -1,4 +1,10 @@
-import { Gamepad2, House, LayoutGrid, MousePointer2, Settings } from 'lucide-react'
+import {
+  Gamepad2,
+  House,
+  LayoutGrid,
+  MousePointer2,
+  Settings,
+} from 'lucide-react'
 
 import type { NavigableScreen } from '../../state/currentScreen'
 

@@ -11,7 +11,9 @@ sistema operacional.
 iPhone / React
   -> WebSocket v1
     -> validação Pydantic + autenticação
-      -> dispatcher de ações fechadas
+      -> parser determinístico
+        -> fallback local opcional e estritamente estruturado
+          -> dispatcher de ações fechadas
         -> adapters isolados
           -> navegador / mídia / Core Audio / mouse / teclado do Windows
 ```
@@ -21,7 +23,9 @@ iPhone / React
 - `api/`: endpoints HTTP e WebSocket.
 - `protocol/`: valida versão, autenticação e direciona mensagens.
 - `security/`: PIN temporário, tokens, hashes e store de dispositivos.
-- `commands/`: parser determinístico, sem LLM ou shell.
+- `commands/`: parser determinístico, sempre executado primeiro.
+- `intelligence/`: contexto volátil por dispositivo, schemas fechados,
+  resolver substituível e adapter Ollama somente em loopback.
 - `platforms/`: registry de URLs, localização do Chrome e launchers injetáveis.
 - `media/`: detecção conservadora da plataforma ativa, matriz de ações suportadas e adapter de teclas fixas.
 - `windows/`: adapter assíncrono de volume Core Audio.
@@ -41,7 +45,8 @@ mapeada para ela.
 ## Frontend
 
 - `features/fawkes-remote/`: orquestra conexão, autenticação e ações atuais.
-- `state/` e `hooks/`: navegação e transporte WebSocket.
+- `state/` e `hooks/`: navegação, transporte WebSocket, credenciais locais e
+  correlação/timers de feedback.
 - `pages/remote/`: telas funcionais de mídia, plataformas, volume, touchpad e teclado.
 - `components/`: orb, pareamento, feedback e navegação compartilhados.
 - `styles/`: tokens e layouts mobile.
@@ -55,4 +60,6 @@ separados. O frontend só mostra sucesso depois de `COMMAND_RESULT` válido.
 - o alvo de mídia/teclado é a janela ativa; a sessão de mídia é identificada
   conservadoramente pelo título dessa janela, sem descoberta em segundo plano;
 - não há descoberta remota, nuvem, conta externa ou exposição à internet;
-- não há Redux, shell, execução de URL recebida, atalhos combinados ou histórico de texto.
+- não há Redux, shell, execução de URL recebida, atalhos combinados ou histórico persistente de texto;
+- Ollama é progressive enhancement: modelo ausente, inválido, lento ou offline
+  não afeta pairing nem nenhum comando fechado.

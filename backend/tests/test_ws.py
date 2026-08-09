@@ -17,12 +17,19 @@ from app.security.pairing import PairingService
 from app.media.windows_adapter import WindowsMediaAdapter
 from app.media.session import MediaSession, WindowsMediaSessionDetector
 from app.windows.volume import VolumeState, WindowsVolumeAdapter, WindowsVolumeError
+from app.windows.app_volume import (
+    AppVolumeState,
+    AppVolumeUnavailable,
+    WindowsAppVolumeAdapter,
+)
 from app.input.pointer import PointerRateLimiter, WindowsPointerAdapter
 from app.input.keyboard import WindowsKeyboardAdapter
 from app.platforms.browser import BrowserLaunchResult, BrowserLauncher
 from app.platforms.launcher import PlatformLauncher
 from app.platforms.spotify import SpotifyLauncher
 from app.platforms.search import MediaSearchLauncher
+from app.intelligence.intents import LocalSearchMediaIntent
+from app.intelligence.service import IntentFallbackService
 
 
 @pytest.fixture
@@ -95,6 +102,17 @@ def pointer_adapter_mock():
 
 
 @pytest.fixture
+def app_volume_adapter_mock():
+    """Sem sessão local por padrão: exercita o fallback para o volume global."""
+    adapter = Mock(spec=WindowsAppVolumeAdapter)
+    adapter.get_state.side_effect = AppVolumeUnavailable("sem sessão")
+    adapter.set_level.side_effect = AppVolumeUnavailable("sem sessão")
+    adapter.change_level.side_effect = AppVolumeUnavailable("sem sessão")
+    adapter.toggle_mute.side_effect = AppVolumeUnavailable("sem sessão")
+    return adapter
+
+
+@pytest.fixture
 def keyboard_adapter_mock():
     adapter = Mock(spec=WindowsKeyboardAdapter)
     adapter.write_text.return_value = True
@@ -114,6 +132,7 @@ def dispatcher(
     volume_adapter_mock,
     pointer_adapter_mock,
     keyboard_adapter_mock,
+    app_volume_adapter_mock,
 ):
     store = DeviceStore(
         filepath=tmp_path / "paired_devices.json",
@@ -133,6 +152,7 @@ def dispatcher(
         pointer_adapter=pointer_adapter_mock,
         pointer_rate_limiter=PointerRateLimiter(max_updates=60),
         keyboard_adapter=keyboard_adapter_mock,
+        app_volume_adapter=app_volume_adapter_mock,
     )
     monkeypatch.setattr(websocket_module, "dispatcher", instance)
     return instance
@@ -720,6 +740,9 @@ def test_authenticated_volume_commands_return_real_adapter_state(
             "action": message["type"],
             "level": expected_level,
             "muted": expected_muted,
+            # Sem sessão local: caiu para o volume do Windows, e isso aparece.
+            "scope": "GLOBAL",
+            "target": None,
             "executed": True,
         }
         mocked_method = getattr(volume_adapter_mock, method)
@@ -1219,6 +1242,54 @@ def test_authenticated_help_command_returns_supported_examples(client, dispatche
         assert "abre netflix" in result["data"]["commands"]
 
 
+def test_deterministic_media_text_uses_the_existing_media_handler(
+    client,
+    dispatcher,
+    windows_key_event_mock,
+):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "TEXT_COMMAND",
+            "requestId": "text-media",
+            "payload": {"query": "play"},
+        })
+
+        assert websocket.receive_json()["state"] == "BUSY"
+        result = websocket.receive_json()
+        assert websocket.receive_json()["state"] == "READY"
+
+    assert result["data"]["intent"] == "MEDIA_CONTROL"
+    assert result["data"]["action"] == "MEDIA_PLAY_PAUSE"
+    assert windows_key_event_mock.call_count == 2
+
+
+def test_deterministic_volume_text_uses_the_existing_volume_handler(
+    client,
+    dispatcher,
+    volume_adapter_mock,
+):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "TEXT_COMMAND",
+            "requestId": "text-volume",
+            "payload": {"query": "volume 42"},
+        })
+
+        assert websocket.receive_json()["state"] == "BUSY"
+        result = websocket.receive_json()
+        assert websocket.receive_json()["state"] == "READY"
+
+    assert result["data"]["intent"] == "SYSTEM_VOLUME"
+    assert result["data"]["action"] == "SYSTEM_VOLUME_SET"
+    volume_adapter_mock.set_level.assert_awaited_once_with(42)
+
+
 def test_authenticated_unknown_text_command_returns_clear_error(client, dispatcher):
     with client.websocket_connect("/ws") as websocket:
         receive_auth_required(websocket)
@@ -1240,6 +1311,91 @@ def test_authenticated_unknown_text_command_returns_clear_error(client, dispatch
         assert error["code"] == "UNKNOWN_COMMAND"
         assert error["message"] == "Não entendi esse comando."
         assert ready["state"] == "READY"
+
+
+def test_known_text_command_bypasses_the_local_resolver(client, dispatcher):
+    resolver = AsyncMock()
+    dispatcher.intent_service = IntentFallbackService(resolver)
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "TEXT_COMMAND",
+            "requestId": "known-bypass",
+            "payload": {"query": "play"},
+        })
+        assert websocket.receive_json()["state"] == "BUSY"
+        assert websocket.receive_json()["type"] == "COMMAND_RESULT"
+        assert websocket.receive_json()["state"] == "READY"
+
+    resolver.resolve.assert_not_awaited()
+
+
+def test_unknown_text_may_resolve_once_through_local_intent_and_existing_adapter(
+    client,
+    dispatcher,
+    media_search_launcher_mock,
+):
+    resolver = AsyncMock()
+    resolver.resolve.return_value = LocalSearchMediaIntent(
+        intent="SEARCH_MEDIA",
+        platform="YOUTUBE",
+        query="Interestelar trailer",
+    )
+    dispatcher.intent_service = IntentFallbackService(resolver)
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        credentials = pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "TEXT_COMMAND",
+            "requestId": "seed-context",
+            "payload": {"query": "abre YouTube"},
+        })
+        assert websocket.receive_json()["state"] == "BUSY"
+        assert websocket.receive_json()["type"] == "COMMAND_RESULT"
+        assert websocket.receive_json()["state"] == "READY"
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "TEXT_COMMAND",
+            "requestId": "unknown-local",
+            "payload": {"query": "escolhe um filme"},
+        })
+        assert websocket.receive_json()["state"] == "BUSY"
+        result = websocket.receive_json()
+        assert websocket.receive_json()["state"] == "READY"
+
+    assert result["data"]["intent"] == "SEARCH_MEDIA"
+    resolver.resolve.assert_awaited_once()
+    assert resolver.resolve.await_args.args[0] == "escolhe um filme"
+    media_search_launcher_mock.search.assert_called_once_with("YOUTUBE", "Interestelar trailer")
+    context = dispatcher.intent_service.context_store.get(credentials["deviceId"])
+    assert context.query == "Interestelar trailer"
+
+
+def test_invalid_local_output_preserves_unknown_command_fallback(client, dispatcher):
+    resolver = AsyncMock()
+    resolver.resolve.return_value = None
+    dispatcher.intent_service = IntentFallbackService(resolver)
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "TEXT_COMMAND",
+            "requestId": "unknown-safe",
+            "payload": {"query": "escolhe um filme"},
+        })
+        assert websocket.receive_json()["state"] == "BUSY"
+        error = websocket.receive_json()
+        assert websocket.receive_json()["state"] == "READY"
+
+    assert error["code"] == "UNKNOWN_COMMAND"
+    resolver.resolve.assert_awaited_once()
 
 
 def test_websocket_rejects_non_object_payloads(client):
@@ -1423,3 +1579,428 @@ def test_connection_limit_protects_the_server(client, dispatcher):
     finally:
         for context, _ in opened:
             context.__exit__(None, None, None)
+
+
+NAVIGATION_TO_KEY = [
+    ("NAVIGATE_UP", "ARROW_UP"),
+    ("NAVIGATE_DOWN", "ARROW_DOWN"),
+    ("NAVIGATE_LEFT", "ARROW_LEFT"),
+    ("NAVIGATE_RIGHT", "ARROW_RIGHT"),
+    ("NAVIGATE_CONFIRM", "ENTER"),
+    ("NAVIGATE_BACK", "ESCAPE"),
+]
+
+
+def test_navigation_requires_authentication(client, keyboard_adapter_mock):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "NAVIGATE_UP",
+            "requestId": "nav-1",
+        })
+
+        assert websocket.receive_json()["code"] == "UNAUTHORIZED"
+
+    keyboard_adapter_mock.press_key.assert_not_called()
+
+
+@pytest.mark.parametrize(("action", "key"), NAVIGATION_TO_KEY)
+def test_authenticated_navigation_uses_only_allowlisted_keys(
+    client,
+    dispatcher,
+    keyboard_adapter_mock,
+    action,
+    key,
+):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": action,
+            "requestId": "nav-1",
+        })
+
+        result = websocket.receive_json()
+
+        assert result["type"] == "COMMAND_RESULT"
+        assert result["data"] == {
+            "intent": "NAVIGATION",
+            "action": action,
+            "executed": True,
+        }
+
+    keyboard_adapter_mock.press_key.assert_called_once_with(key)
+
+
+def test_navigation_rejects_home_and_arbitrary_payloads(client, dispatcher, keyboard_adapter_mock):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+
+        # NAVIGATE_HOME ainda não existe: não pode ser aceito por engano.
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "NAVIGATE_HOME",
+            "requestId": "nav-home",
+        })
+        assert websocket.receive_json()["code"] == "UNSUPPORTED_MESSAGE"
+
+        # Sem payload livre: nada de tecla arbitrária pelo direcional.
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "NAVIGATE_UP",
+            "requestId": "nav-2",
+            "payload": {"key": "F4"},
+        })
+        assert websocket.receive_json()["code"] == "INVALID_PAYLOAD"
+
+    keyboard_adapter_mock.press_key.assert_not_called()
+
+
+def test_arrows_repeat_while_confirm_and_back_do_not(client, dispatcher, keyboard_adapter_mock):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+
+        # Segurar a seta: repetição é esperada e permitida.
+        for index in range(8):
+            websocket.send_json({
+                "protocolVersion": 1,
+                "type": "NAVIGATE_DOWN",
+                "requestId": f"down-{index}",
+            })
+            assert websocket.receive_json()["type"] == "COMMAND_RESULT"
+
+        # Confirmar repetido entra em vários itens: precisa ser barrado.
+        codes = []
+        for index in range(8):
+            websocket.send_json({
+                "protocolVersion": 1,
+                "type": "NAVIGATE_CONFIRM",
+                "requestId": f"ok-{index}",
+            })
+            message = websocket.receive_json()
+            codes.append(message.get("code") or message["type"])
+
+    assert "NAVIGATION_RATE_LIMITED" in codes
+
+
+def test_navigation_flood_is_rate_limited_without_consuming_the_keyboard_quota(
+    client,
+    dispatcher,
+    keyboard_adapter_mock,
+):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+
+        codes = []
+        for index in range(Dispatcher.MAX_NAVIGATION_PER_SECOND + 5):
+            websocket.send_json({
+                "protocolVersion": 1,
+                "type": "NAVIGATE_UP",
+                "requestId": f"nav-{index}",
+            })
+            message = websocket.receive_json()
+            codes.append(message.get("code") or message["type"])
+
+        assert "NAVIGATION_RATE_LIMITED" in codes
+
+        # O teclado remoto continua utilizável: os limites são independentes.
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "KEYBOARD_KEY",
+            "requestId": "kb-1",
+            "payload": {"key": "ENTER"},
+        })
+        assert websocket.receive_json()["type"] == "COMMAND_RESULT"
+
+
+def test_navigation_reports_adapter_failure(client, dispatcher, keyboard_adapter_mock):
+    keyboard_adapter_mock.press_key.return_value = False
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "NAVIGATE_UP",
+            "requestId": "nav-1",
+        })
+
+        assert websocket.receive_json()["code"] == "NAVIGATION_FAILED"
+
+
+def test_authenticated_youtube_link_is_opened_only_in_chrome(
+    client,
+    dispatcher,
+    browser_launcher_mock,
+):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "TEXT_COMMAND",
+            "requestId": "link-1",
+            "payload": {"query": "https://youtu.be/dQw4w9WgXcQ"},
+        })
+
+        assert websocket.receive_json()["state"] == "BUSY"
+        result = websocket.receive_json()
+        assert websocket.receive_json()["state"] == "READY"
+
+        assert result["type"] == "COMMAND_RESULT"
+        assert result["data"] == {
+            "intent": "OPEN_ALLOWED_MEDIA_LINK",
+            "platform": "YOUTUBE",
+            "executed": True,
+            "strategy": "CHROME",
+        }
+
+    # A URL aberta é a canônica montada no backend, não a enviada pelo cliente.
+    browser_launcher_mock.open.assert_called_once_with(
+        "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+    )
+
+
+@pytest.mark.parametrize("query", [
+    "https://evil.example/watch?v=dQw4w9WgXcQ",
+    "https://www.youtube.com.evil.example/watch?v=dQw4w9WgXcQ",
+    "javascript:alert(1)",
+    "file:///C:/Windows/System32/cmd.exe",
+    "https://www.youtube.com/watch?v=dQw4w9WgXcQ&redirect=https://evil.example",
+])
+def test_unsafe_links_never_reach_the_browser(client, dispatcher, browser_launcher_mock, query):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "TEXT_COMMAND",
+            "requestId": "link-1",
+            "payload": {"query": query},
+        })
+
+        websocket.receive_json()
+        error = websocket.receive_json()
+
+        assert error["type"] == "ERROR"
+        assert error["code"] == "UNKNOWN_COMMAND"
+
+    browser_launcher_mock.open.assert_not_called()
+
+
+def test_media_link_failure_is_reported_without_false_success(
+    client,
+    dispatcher,
+    browser_launcher_mock,
+):
+    browser_launcher_mock.open.return_value = BrowserLaunchResult(
+        executed=False,
+        error="CHROME_NOT_FOUND",
+    )
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "TEXT_COMMAND",
+            "requestId": "link-1",
+            "payload": {"query": "https://youtu.be/dQw4w9WgXcQ"},
+        })
+
+        websocket.receive_json()
+        error = websocket.receive_json()
+
+        assert error["type"] == "ERROR"
+        assert error["code"] == "MEDIA_LINK_FAILED"
+        assert "Chrome" in error["message"]
+
+
+def test_reset_input_state_releases_keys_and_the_mouse(
+    client,
+    dispatcher,
+    keyboard_adapter_mock,
+    pointer_adapter_mock,
+):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "POINTER_DOWN",
+            "requestId": "down-1",
+        })
+        websocket.receive_json()
+
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "RESET_INPUT_STATE",
+            "requestId": "reset-1",
+        })
+        result = websocket.receive_json()
+
+        assert result["type"] == "COMMAND_RESULT"
+        assert result["data"]["action"] == "RESET_INPUT_STATE"
+        keyboard_adapter_mock.release_all.assert_called()
+        pointer_adapter_mock.pointer_up.assert_called()
+        assert dispatcher._held_pointer_buttons == set()
+
+
+def test_reset_input_state_is_never_rate_limited(client, dispatcher, keyboard_adapter_mock):
+    """É a saída de emergência: barrá-la deixaria a tecla presa."""
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+
+        for index in range(Dispatcher.MAX_NAVIGATION_PER_SECOND + 10):
+            websocket.send_json({
+                "protocolVersion": 1,
+                "type": "RESET_INPUT_STATE",
+                "requestId": f"reset-{index}",
+            })
+            assert websocket.receive_json()["type"] == "COMMAND_RESULT"
+
+
+def test_reset_input_state_requires_authentication(client, keyboard_adapter_mock):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "RESET_INPUT_STATE",
+            "requestId": "reset-1",
+        })
+
+        assert websocket.receive_json()["code"] == "UNAUTHORIZED"
+        # Verificado ainda dentro da conexão: sair do contexto dispara o
+        # release defensivo do disconnect, que é esperado.
+        keyboard_adapter_mock.release_all.assert_not_called()
+
+
+def test_disconnecting_releases_the_keyboard(client, dispatcher, keyboard_adapter_mock):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+
+    # Cair a conexão no meio de um comando não pode deixar seta repetindo.
+    keyboard_adapter_mock.release_all.assert_called()
+
+
+def test_volume_prefers_the_active_app_and_says_so(
+    client,
+    dispatcher,
+    app_volume_adapter_mock,
+    volume_adapter_mock,
+):
+    app_volume_adapter_mock.change_level.side_effect = None
+    app_volume_adapter_mock.change_level.return_value = AppVolumeState(
+        level=55,
+        muted=False,
+        process="spotify.exe",
+    )
+    dispatcher.media_session_detector.detect.return_value = MediaSession(
+        platform="SPOTIFY",
+        kind="APP",
+    )
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "SYSTEM_VOLUME_DELTA",
+            "requestId": "volume-1",
+            "payload": {"delta": 5},
+        })
+
+        result = websocket.receive_json()
+
+        assert result["data"]["scope"] == "LOCAL"
+        assert result["data"]["target"] == "Spotify"
+        assert result["data"]["level"] == 55
+        assert result["message"] == "Volume do Spotify: 55%."
+
+    # O volume do Windows não foi tocado.
+    volume_adapter_mock.change_level.assert_not_called()
+
+
+def test_volume_falls_back_to_windows_without_hiding_it(
+    client,
+    dispatcher,
+    app_volume_adapter_mock,
+    volume_adapter_mock,
+):
+    # Sem sessão de áudio do aplicativo: precisa cair no global e avisar.
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "SYSTEM_VOLUME_DELTA",
+            "requestId": "volume-1",
+            "payload": {"delta": 5},
+        })
+
+        result = websocket.receive_json()
+
+        assert result["data"]["scope"] == "GLOBAL"
+        assert "fallback" in result["message"]
+        assert result["message"] == "Volume do Windows (fallback): 47%."
+
+    volume_adapter_mock.change_level.assert_called_once_with(5)
+
+
+def test_volume_falls_back_when_no_media_session_is_identified(
+    client,
+    dispatcher,
+    app_volume_adapter_mock,
+    volume_adapter_mock,
+):
+    dispatcher.media_session_detector.detect.return_value = None
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "SYSTEM_VOLUME_GET",
+            "requestId": "volume-1",
+        })
+
+        result = websocket.receive_json()
+
+        assert result["data"]["scope"] == "GLOBAL"
+    app_volume_adapter_mock.get_state.assert_not_called()
+    volume_adapter_mock.get_state.assert_called_once()
+
+
+def test_local_mute_reports_the_app_it_muted(
+    client,
+    dispatcher,
+    app_volume_adapter_mock,
+):
+    app_volume_adapter_mock.toggle_mute.side_effect = None
+    app_volume_adapter_mock.toggle_mute.return_value = AppVolumeState(
+        level=40,
+        muted=True,
+        process="chrome.exe",
+    )
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "SYSTEM_MUTE_TOGGLE",
+            "requestId": "mute-1",
+        })
+
+        result = websocket.receive_json()
+
+        assert result["data"]["scope"] == "LOCAL"
+        assert result["data"]["target"] == "Chrome"
+        assert result["message"] == "Volume do Chrome: mudo ativado, 40%."

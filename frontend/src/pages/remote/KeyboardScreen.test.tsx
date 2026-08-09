@@ -62,7 +62,10 @@ describe('KeyboardScreen', () => {
     expect(screen.queryByRole('button', { name: 'Alt' })).toBeNull()
   })
 
-  it('shows loading and disables text and keys while awaiting confirmation', () => {
+  it('keeps typing available while a command is in flight', () => {
+    // Desabilitar o input em voo fechava o teclado virtual do iOS a cada
+    // envio: o usuário tinha de tocar no campo de novo a cada tecla. O estado
+    // em voo passou a ser apenas visual.
     render(
       <KeyboardScreen
         disabled={false}
@@ -75,7 +78,66 @@ describe('KeyboardScreen', () => {
       />,
     )
 
-    expect((screen.getByLabelText('Texto para enviar') as HTMLTextAreaElement).disabled).toBe(true)
+    const input = screen.getByLabelText('Texto para enviar') as HTMLInputElement
+    expect(input.disabled).toBe(false)
+    expect(input.getAttribute('aria-busy')).toBe('true')
+    expect((screen.getByRole('button', { name: 'Enter' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('blocks everything only when the keyboard is really unavailable', () => {
+    render(
+      <KeyboardScreen
+        disabled
+        loading={false}
+        statusMessage="Desconectado."
+        statusError
+        onText={vi.fn(() => true)}
+        onKey={vi.fn()}
+        onBack={vi.fn()}
+      />,
+    )
+
+    expect((screen.getByLabelText('Texto para enviar') as HTMLInputElement).disabled).toBe(true)
     expect((screen.getByRole('button', { name: 'Enter' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('keeps the text when sending fails and clears it on success', () => {
+    const failing = vi.fn(() => false)
+    const { unmount } = render(
+      <KeyboardScreen
+        disabled={false}
+        loading={false}
+        statusMessage=""
+        statusError={false}
+        onText={failing}
+        onKey={vi.fn()}
+        onBack={vi.fn()}
+      />,
+    )
+
+    const input = screen.getByLabelText('Texto para enviar') as HTMLInputElement
+    fireEvent.change(input, { target: { value: 'texto importante' } })
+    fireEvent.submit(input.closest('form')!)
+    expect(input.value).toBe('texto importante')
+    unmount()
+
+    const succeeding = vi.fn(() => true)
+    render(
+      <KeyboardScreen
+        disabled={false}
+        loading={false}
+        statusMessage=""
+        statusError={false}
+        onText={succeeding}
+        onKey={vi.fn()}
+        onBack={vi.fn()}
+      />,
+    )
+    const second = screen.getByLabelText('Texto para enviar') as HTMLInputElement
+    fireEvent.change(second, { target: { value: 'Olá 👋 café' } })
+    fireEvent.submit(second.closest('form')!)
+
+    expect(succeeding).toHaveBeenCalledWith('Olá 👋 café')
+    expect(second.value).toBe('')
   })
 })

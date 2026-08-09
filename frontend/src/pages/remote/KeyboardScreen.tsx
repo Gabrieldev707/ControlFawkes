@@ -51,7 +51,11 @@ export function KeyboardScreen({
   onBack,
 }: KeyboardScreenProps) {
   const [text, setText] = useState('')
-  const controlsDisabled = disabled || loading
+  // `loading` (comando em voo) NÃO desabilita nada: no iOS, marcar um input
+  // focado como disabled fecha o teclado virtual na hora, então cada envio
+  // derrubava o teclado e o usuário precisava tocar no campo de novo.
+  // O estado em voo agora é só visual, via aria-busy.
+  const controlsDisabled = disabled
 
   return (
     <main className="remote-screen keyboard-screen" aria-labelledby="keyboard-screen-title">
@@ -70,6 +74,7 @@ export function KeyboardScreen({
 
       <form
         className="keyboard-text"
+        aria-busy={loading}
         onSubmit={(event) => {
           event.preventDefault()
           if (controlsDisabled || !text.trim()) return
@@ -87,6 +92,10 @@ export function KeyboardScreen({
             spellCheck={false}
             disabled={controlsDisabled}
             placeholder="Digite sem salvar histórico"
+            enterKeyHint="send"
+            autoCapitalize="sentences"
+            autoCorrect="off"
+            aria-busy={loading}
             onChange={(event) => setText(event.target.value)}
           />
           <button

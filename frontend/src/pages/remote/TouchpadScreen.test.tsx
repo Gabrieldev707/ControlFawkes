@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react'
+import { act, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { TouchpadScreen } from './TouchpadScreen'
@@ -88,17 +88,18 @@ describe('TouchpadScreen', () => {
     const onAction = renderTouchpad()
     const surface = screen.getByLabelText('Área do touchpad')
 
+    // 15px: além da tolerância de toque, que é 10px.
     fireEvent.pointerDown(surface, { pointerId: 1, clientX: 10, clientY: 10 })
-    fireEvent.pointerMove(surface, { pointerId: 1, clientX: 18, clientY: 10 })
+    fireEvent.pointerMove(surface, { pointerId: 1, clientX: 25, clientY: 10 })
     scheduled.shift()!(16)
-    fireEvent.pointerUp(surface, { pointerId: 1, clientX: 18, clientY: 10 })
+    fireEvent.pointerUp(surface, { pointerId: 1, clientX: 25, clientY: 10 })
 
     fireEvent.pointerDown(surface, { pointerId: 2, clientX: 20, clientY: 20 })
     vi.advanceTimersByTime(300)
     fireEvent.pointerUp(surface, { pointerId: 2, clientX: 20, clientY: 20 })
 
     expect(onAction).toHaveBeenCalledTimes(1)
-    expect(onAction).toHaveBeenCalledWith('POINTER_MOVE', { dx: 8, dy: 0 })
+    expect(onAction).toHaveBeenCalledWith('POINTER_MOVE', { dx: 15, dy: 0 })
     expect(onAction).not.toHaveBeenCalledWith('POINTER_CLICK')
   })
 
@@ -174,5 +175,60 @@ describe('TouchpadScreen', () => {
     expect(onAction).not.toHaveBeenCalledWith('POINTER_MOVE', expect.anything())
     expect(screen.getByRole('button', { name: 'Ativar touchpad' })).toBeTruthy()
     expect(screen.queryByLabelText('Área do touchpad')).toBeNull()
+  })
+})
+
+describe('TouchpadScreen tap and drag separation', () => {
+  it('does not click when a drag starts', () => {
+    // O bug: o arraste era promovido depois de o cursor já ter andado, então o
+    // botão descia e subia quase no mesmo ponto e virava clique.
+    vi.useFakeTimers()
+    vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1))
+    vi.stubGlobal('cancelAnimationFrame', vi.fn())
+    const onAction = renderTouchpad()
+    const surface = screen.getByLabelText('Área do touchpad')
+
+    fireEvent.pointerDown(surface, { pointerId: 1, clientX: 50, clientY: 50 })
+    act(() => void vi.advanceTimersByTime(400))
+    fireEvent.pointerMove(surface, { pointerId: 1, clientX: 150, clientY: 150 })
+    fireEvent.pointerUp(surface, { pointerId: 1, clientX: 150, clientY: 150 })
+
+    const actions = onAction.mock.calls.map(([action]) => action)
+    expect(actions).toContain('POINTER_DOWN')
+    expect(actions).toContain('POINTER_UP')
+    expect(actions).not.toContain('POINTER_CLICK')
+    // O botão desce antes de qualquer movimento.
+    expect(actions.indexOf('POINTER_DOWN')).toBeLessThan(actions.indexOf('POINTER_UP'))
+  })
+
+  it('releases the button when the gesture is cancelled mid-drag', () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1))
+    vi.stubGlobal('cancelAnimationFrame', vi.fn())
+    const onAction = renderTouchpad()
+    const surface = screen.getByLabelText('Área do touchpad')
+
+    fireEvent.pointerDown(surface, { pointerId: 1, clientX: 50, clientY: 50 })
+    act(() => void vi.advanceTimersByTime(400))
+    fireEvent.pointerCancel(surface, { pointerId: 1 })
+
+    expect(onAction.mock.calls.map(([action]) => action)).toContain('POINTER_UP')
+  })
+
+  it('does not arm a drag once the finger has moved', () => {
+    vi.useFakeTimers()
+    vi.stubGlobal('requestAnimationFrame', vi.fn(() => 1))
+    vi.stubGlobal('cancelAnimationFrame', vi.fn())
+    const onAction = renderTouchpad()
+    const surface = screen.getByLabelText('Área do touchpad')
+
+    fireEvent.pointerDown(surface, { pointerId: 1, clientX: 50, clientY: 50 })
+    fireEvent.pointerMove(surface, { pointerId: 1, clientX: 120, clientY: 50 })
+    act(() => void vi.advanceTimersByTime(1000))
+    fireEvent.pointerUp(surface, { pointerId: 1, clientX: 120, clientY: 50 })
+
+    const actions = onAction.mock.calls.map(([action]) => action)
+    expect(actions).not.toContain('POINTER_DOWN')
+    expect(actions).not.toContain('POINTER_CLICK')
   })
 })

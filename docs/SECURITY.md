@@ -20,7 +20,7 @@ podem isolar iPhone e computador.
 - plataformas são identificadores fechados; o frontend nunca envia URL;
 - o Chrome recebe somente URLs oficiais do registry do backend, sem shell,
   perfil codificado, credencial, URL arbitrária ou alteração do navegador padrão;
-- pesquisa aceita somente rotas de resultados do YouTube e Spotify construídas
+- pesquisa aceita somente rotas de resultados do YouTube, Spotify, Netflix e Prime Video construídas
   e codificadas no backend; ela não escolhe nem reproduz resultado ambíguo;
 - mídia usa somente sete ações fechadas; o backend exige uma plataforma
   conhecida em primeiro plano e aplica uma matriz de teclas por plataforma;
@@ -28,6 +28,17 @@ podem isolar iPhone e computador.
 - pointer aceita movimento relativo limitado, scroll fixo e no máximo 60 movimentos/s;
 - teclado aceita texto de até 256 caracteres sem controles e nove teclas especiais;
 - Ctrl, Alt, combinações, hotkeys, shell e teclas arbitrárias não existem no contrato.
+
+## Inteligência local
+
+- nenhuma API cloud, chave externa ou telemetria é usada;
+- a URL do Ollama precisa ser HTTP loopback sem credenciais;
+- o parser determinístico sempre roda antes e comandos conhecidos não chamam o modelo;
+- a saída usa schema discriminado, enums fechados, tipos estritos e `extra=forbid`;
+- plataforma e ação precisam estar ancoradas no texto ou no contexto do mesmo dispositivo;
+- timeout, erro de transporte, JSON inválido, campo extra, alucinação e exceção
+  inesperada retornam ao erro seguro, sem executor alternativo;
+- o modelo nunca recebe capacidade de shell, URL, tecla, pointer ou chamada de sistema.
 
 ## Failsafes
 
@@ -37,6 +48,8 @@ unmount descartam movimento pendente e liberam o botão. O backend também envia
 
 ## Privacidade
 
-Texto remoto não é registrado, persistido, adicionado a histórico nem devolvido
-na resposta. O adapter usa eventos Unicode do Windows, sem clipboard. Tokens,
+Texto remoto não é registrado nem devolvido na resposta. Quando a IA local está
+ativa, somente plataforma, última consulta e ação ficam em memória por até dez
+minutos, isoladas por `deviceId`, com limite de 32 dispositivos; nada disso é
+persistido. O adapter usa eventos Unicode do Windows, sem clipboard. Tokens,
 PINs, dados locais e arquivos temporários permanecem fora do Git.

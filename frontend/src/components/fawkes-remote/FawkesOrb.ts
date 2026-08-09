@@ -1,6 +1,12 @@
 import * as THREE from 'three';
 import type { OrbState } from '../../features/fawkes-remote/types';
 import { ORB_THEMES, ORB_VISUAL_TUNING } from './orbTheme';
+import {
+  DEFAULT_ORB_QUALITY,
+  orbQualityProfile,
+  type OrbQuality,
+  type OrbQualityProfile,
+} from './orbQuality';
 
 // ── Constants ─────────────────────────────────────────────────────────────────
 const N             = 2000;
@@ -98,9 +104,16 @@ export class FawkesOrb {
   private rafId = 0;
   private destroyed = false;
 
-  constructor(canvas: HTMLCanvasElement) {
+  private readonly quality: OrbQualityProfile;
+
+  constructor(canvas: HTMLCanvasElement, quality: OrbQuality = DEFAULT_ORB_QUALITY) {
+    this.quality = orbQualityProfile(quality);
     this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+    // O teto era 1.5 enquanto o iPhone tem DPR 3: o canvas renderizava a meia
+    // resolução e era ampliado, borrando justamente os pontos de 1px.
+    this.renderer.setPixelRatio(
+      Math.min(window.devicePixelRatio, this.quality.pixelRatioCap),
+    );
     
     const parent = canvas.parentElement;
     const w = parent ? parent.clientWidth : window.innerWidth;
@@ -146,7 +159,7 @@ export class FawkesOrb {
     this.geo.setAttribute('color', new THREE.BufferAttribute(this.colors, 3));
 
     this.mat = new THREE.PointsMaterial({
-      size:            0.6, // Voltar ao normal
+      size:            0.6 * this.quality.sizeScale,
       map:             sprite,
       alphaMap:        sprite,
       transparent:     true,
@@ -189,7 +202,7 @@ export class FawkesOrb {
     this.electronGeo.setDrawRange(0, 0);
 
     this.electronMat = new THREE.PointsMaterial({
-      size:            0.9, // Pouco maior
+      size:            0.9 * this.quality.sizeScale,
       map:             sprite,
       alphaMap:        sprite,
       transparent:     true,
@@ -307,7 +320,7 @@ export class FawkesOrb {
     this.targetBright = theme.brightness;
     this.targetSize = theme.size;
     this.targetLineAmount = theme.lineAmount;
-    this.targetElectronRate = theme.electronRate;
+    this.targetElectronRate = theme.electronRate * this.quality.electronScale;
 
     // ── Lerp Configuration ───────────────────────────────────────────────────
     const lr = 0.02;

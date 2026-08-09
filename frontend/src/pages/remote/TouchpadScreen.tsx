@@ -4,6 +4,11 @@ import type { PointerEvent as ReactPointerEvent } from 'react'
 
 import { RemoteStatusText } from '../../components/fawkes-remote/RemoteStatusText'
 import type { PointerAction, PointerPayload } from '../../features/fawkes-remote/types'
+import {
+  DEFAULT_GESTURE_LIMITS,
+  TouchpadGesture,
+  type GestureEffect,
+} from '../../features/fawkes-remote/touchpadGesture'
 
 
 interface TouchpadScreenProps {
@@ -15,20 +20,6 @@ interface TouchpadScreenProps {
   onBack: () => void
 }
 
-interface PointerGesture {
-  id: number
-  startedAt: number
-  startX: number
-  startY: number
-  lastX: number
-  lastY: number
-  clickCancelled: boolean
-  dragging: boolean
-}
-
-const CLICK_DISTANCE_PX = 6
-const TAP_MAX_DURATION_MS = 250
-const DRAG_HOLD_DURATION_MS = 350
 const clampDelta = (value: number) => Math.max(-160, Math.min(160, value))
 
 export function TouchpadScreen({
@@ -40,8 +31,10 @@ export function TouchpadScreen({
   onBack,
 }: TouchpadScreenProps) {
   const [active, setActive] = useState(false)
-  const gestureRef = useRef<PointerGesture | null>(null)
-  const activePointersRef = useRef(new Set<number>())
+  // A separação entre toque, movimento e arraste vive numa máquina de estados
+  // própria e testada; aqui só traduzimos eventos e executamos os efeitos.
+  const gestureRef = useRef(new TouchpadGesture())
+  const holdTimerRef = useRef<number | null>(null)
   const accumulatedRef = useRef({ dx: 0, dy: 0 })
   const frameRef = useRef<number | null>(null)
   const actionRef = useRef(onAction)
@@ -58,25 +51,44 @@ export function TouchpadScreen({
     }
   }
 
-  const resetGesture = (release: boolean, flushPending = true) => {
-    if (frameRef.current !== null) {
-      cancelAnimationFrame(frameRef.current)
-      if (flushPending) {
-        flushMovement()
-      } else {
-        frameRef.current = null
+  const clearHoldTimer = () => {
+    if (holdTimerRef.current !== null) {
+      window.clearTimeout(holdTimerRef.current)
+      holdTimerRef.current = null
+    }
+  }
+
+  const runEffects = (effects: GestureEffect[]) => {
+    for (const effect of effects) {
+      if (effect.type === 'MOVE') {
+        accumulatedRef.current.dx += effect.dx
+        accumulatedRef.current.dy += effect.dy
+        if (frameRef.current === null) {
+          frameRef.current = requestAnimationFrame(flushMovement)
+        }
+      } else if (effect.type === 'PRESS') {
+        actionRef.current('POINTER_DOWN')
+      } else if (effect.type === 'RELEASE') {
+        actionRef.current('POINTER_UP')
+      } else if (effect.type === 'CLICK') {
+        actionRef.current('POINTER_CLICK')
       }
     }
-    if (release && gestureRef.current?.dragging) {
-      actionRef.current('POINTER_UP')
+  }
+
+  const abortGesture = () => {
+    clearHoldTimer()
+    if (frameRef.current !== null) {
+      cancelAnimationFrame(frameRef.current)
+      frameRef.current = null
     }
-    gestureRef.current = null
     accumulatedRef.current = { dx: 0, dy: 0 }
+    runEffects(gestureRef.current.cancel())
+    gestureRef.current.reset()
   }
 
   const deactivate = () => {
-    resetGesture(true, false)
-    activePointersRef.current.clear()
+    abortGesture()
     setActive(false)
   }
 
@@ -84,93 +96,62 @@ export function TouchpadScreen({
     if (disabled && active) deactivate()
   }, [disabled, active])
 
-  useEffect(() => () => resetGesture(true, false), [])
+  // Sair da tela no meio de um arraste não pode deixar o botão pressionado.
+  useEffect(() => () => abortGesture(), [])
 
   const handlePointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault()
     if (!active || disabled) return
-    activePointersRef.current.add(event.pointerId)
-    if (gestureRef.current) {
-      gestureRef.current.clickCancelled = true
-      return
-    }
     event.currentTarget.setPointerCapture?.(event.pointerId)
-    gestureRef.current = {
-      id: event.pointerId,
-      startedAt: Date.now(),
-      startX: event.clientX,
-      startY: event.clientY,
-      lastX: event.clientX,
-      lastY: event.clientY,
-      clickCancelled: false,
-      dragging: false,
-    }
+    runEffects(gestureRef.current.down(
+      event.pointerId,
+      event.clientX,
+      event.clientY,
+      Date.now(),
+    ))
+    clearHoldTimer()
+    // O arraste é armado por pressão parada. Enviar o POINTER_DOWN antes de
+    // qualquer movimento é o que evita o clique acidental.
+    holdTimerRef.current = window.setTimeout(() => {
+      holdTimerRef.current = null
+      runEffects(gestureRef.current.holdElapsed())
+    }, DEFAULT_GESTURE_LIMITS.dragHoldMs)
   }
 
   const handlePointerMove = (event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault()
-    const gesture = gestureRef.current
-    if (!gesture || gesture.id !== event.pointerId || disabled) return
-    const dx = event.clientX - gesture.lastX
-    const dy = event.clientY - gesture.lastY
-    gesture.lastX = event.clientX
-    gesture.lastY = event.clientY
-    if (dx === 0 && dy === 0) return
-
-    const displacement = Math.hypot(
-      event.clientX - gesture.startX,
-      event.clientY - gesture.startY,
-    )
-    if (displacement > CLICK_DISTANCE_PX || activePointersRef.current.size > 1) {
-      gesture.clickCancelled = true
-    }
-    if (
-      !gesture.dragging
-      && displacement > CLICK_DISTANCE_PX
-      && Date.now() - gesture.startedAt >= DRAG_HOLD_DURATION_MS
-    ) {
-      gesture.dragging = true
-      actionRef.current('POINTER_DOWN')
-    }
-    accumulatedRef.current.dx += dx
-    accumulatedRef.current.dy += dy
-    if (frameRef.current === null) {
-      frameRef.current = requestAnimationFrame(flushMovement)
+    if (disabled) return
+    const before = gestureRef.current.phase
+    runEffects(gestureRef.current.move(
+      event.pointerId,
+      event.clientX,
+      event.clientY,
+    ))
+    // Assim que vira movimento, o arraste não pode mais ser armado.
+    if (before === 'POSSIBLE_TAP' && gestureRef.current.phase !== 'POSSIBLE_TAP') {
+      clearHoldTimer()
     }
   }
 
   const handlePointerUp = (event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault()
-    activePointersRef.current.delete(event.pointerId)
-    const gesture = gestureRef.current
-    if (!gesture || gesture.id !== event.pointerId) return
-    const displacement = Math.hypot(
-      event.clientX - gesture.startX,
-      event.clientY - gesture.startY,
-    )
-    if (displacement > CLICK_DISTANCE_PX) {
-      gesture.clickCancelled = true
+    clearHoldTimer()
+    if (frameRef.current !== null) {
+      cancelAnimationFrame(frameRef.current)
+      flushMovement()
     }
-    const shouldClick = !gesture.clickCancelled
-      && !gesture.dragging
-      && Date.now() - gesture.startedAt <= TAP_MAX_DURATION_MS
-    if (gesture.dragging) {
-      resetGesture(true)
-    } else {
-      resetGesture(false)
-    }
-    if (shouldClick) {
-      actionRef.current('POINTER_CLICK')
-    }
+    runEffects(gestureRef.current.up(
+      event.pointerId,
+      event.clientX,
+      event.clientY,
+      Date.now(),
+    ))
+    gestureRef.current.reset()
   }
 
   const handlePointerCancel = (event: ReactPointerEvent<HTMLDivElement>) => {
     event.preventDefault()
-    activePointersRef.current.delete(event.pointerId)
-    if (gestureRef.current?.id === event.pointerId) {
-      gestureRef.current.clickCancelled = true
-      resetGesture(true, false)
-    }
+    abortGesture()
   }
 
   return (
@@ -213,15 +194,15 @@ export function TouchpadScreen({
             onPointerMove={handlePointerMove}
             onPointerUp={handlePointerUp}
             onPointerCancel={handlePointerCancel}
+            onLostPointerCapture={handlePointerCancel}
             onClick={(event) => {
               event.preventDefault()
               event.stopPropagation()
             }}
             onWheel={(event) => {
               event.preventDefault()
-              if (gestureRef.current) {
-                gestureRef.current.clickCancelled = true
-              }
+              // Rolagem cancela o toque em andamento: não é clique.
+              abortGesture()
               if (event.deltaY !== 0) {
                 onAction('POINTER_SCROLL', { delta: event.deltaY > 0 ? -120 : 120 })
               }
@@ -229,7 +210,7 @@ export function TouchpadScreen({
           >
             <MousePointer2 size={30} aria-hidden="true" />
             <strong>Mova para controlar</strong>
-            <span>Toque para clicar · segure e arraste para mover</span>
+            <span>Toque para clicar · segure parado e arraste para mover</span>
           </div>
 
           <div className="touchpad-clicks" aria-label="Cliques do touchpad">

@@ -12,6 +12,9 @@ from app.schemas.auth import (
 from app.schemas.ws import (
     ClientMessage,
     CommandResultMessage,
+    NeedsPlatformMessage,
+    NavigationCommandData,
+    MediaLinkCommandData,
     ErrorCode,
     ErrorMessage,
     HelpCommandData,
@@ -32,6 +35,7 @@ from app.schemas.ws import (
     PlatformCommandData,
     PlatformSelectedMessage,
     SearchMediaCommandData,
+    SearchMediaMessage,
     StateUpdateMessage,
     TextCommandMessage,
     VolumeCommandData,
@@ -43,25 +47,53 @@ from app.schemas.ws import (
 from app.commands.parser import (
     HELP_COMMANDS,
     PLATFORM_LABELS,
+    NeedsPlatformIntent,
+    MediaControlIntent,
+    OpenMediaLinkIntent,
     OpenPlatformIntent,
     SearchMediaIntent,
     ShowHelpIntent,
+    UnknownIntent,
+    VolumeControlIntent,
     parse_command,
 )
 from app.security.device_store import DeviceStore
 from app.security.origins import is_origin_allowed
 from app.security.pairing import PairingService
 from app.platforms.launcher import PlatformLauncher
+from app.platforms.registry import suggested_search_platforms
 from app.platforms.search import MediaSearchLauncher
 from app.media.actions import MEDIA_ACTIONS, MEDIA_ACTION_LABELS
 from app.media.session import WindowsMediaSessionDetector
 from app.media.windows_adapter import WindowsMediaAdapter
 from app.schemas.volume import VOLUME_ACTIONS
 from app.windows.volume import WindowsVolumeAdapter, WindowsVolumeError
+from app.windows.app_volume import (
+    SCOPE_LABELS,
+    AppVolumeUnavailable,
+    WindowsAppVolumeAdapter,
+)
 from app.input.pointer import PointerRateLimiter, WindowsPointerAdapter
 from app.schemas.pointer import POINTER_ACTIONS
 from app.input.keyboard import WindowsKeyboardAdapter
 from app.schemas.keyboard import KEYBOARD_ACTIONS
+from app.schemas.navigation import (
+    NAVIGATION_ACTIONS,
+    NAVIGATION_KEYS,
+    NAVIGATION_LABELS,
+    REPEATABLE_ACTIONS,
+    NavigationMessage,
+)
+from app.intelligence.service import IntentFallbackService, build_intent_service_from_env
+from app.protocol.rate_limits import (
+    MAX_CONNECTIONS,
+    MAX_MESSAGES_PER_SECOND,
+    MAX_NAVIGATION_PER_SECOND,
+    MAX_NON_REPEATABLE_PER_SECOND,
+    message_limiter,
+    navigation_limiter,
+    non_repeatable_navigation_limiter,
+)
 
 
 WS_POLICY_VIOLATION = 1008
@@ -72,17 +104,23 @@ KNOWN_CLIENT_TYPES = {
     "PAIR_DEVICE",
     "PLATFORM_SELECTED",
     "TEXT_COMMAND",
+    "SEARCH_MEDIA",
     *MEDIA_ACTIONS,
     *VOLUME_ACTIONS,
     *POINTER_ACTIONS,
     *KEYBOARD_ACTIONS,
+    *NAVIGATION_ACTIONS,
 }
 
 
 class Dispatcher:
     # Acima do teto do touchpad (60/s), para não atrapalhar o uso legítimo.
-    MAX_MESSAGES_PER_SECOND = 120
-    MAX_CONNECTIONS = 32
+    MAX_MESSAGES_PER_SECOND = MAX_MESSAGES_PER_SECOND
+    MAX_CONNECTIONS = MAX_CONNECTIONS
+    # Auto-repeat confortável ao segurar a seta, sem virar inundação.
+    MAX_NAVIGATION_PER_SECOND = MAX_NAVIGATION_PER_SECOND
+    # Confirmar/voltar: no máximo ~3 por segundo, contra toque duplo acidental.
+    MAX_NON_REPEATABLE_PER_SECOND = MAX_NON_REPEATABLE_PER_SECOND
 
     def __init__(
         self,
@@ -96,7 +134,10 @@ class Dispatcher:
         pointer_adapter: WindowsPointerAdapter | None = None,
         pointer_rate_limiter: PointerRateLimiter | None = None,
         keyboard_adapter: WindowsKeyboardAdapter | None = None,
+        app_volume_adapter: WindowsAppVolumeAdapter | None = None,
         message_rate_limiter: PointerRateLimiter | None = None,
+        navigation_rate_limiter: PointerRateLimiter | None = None,
+        intent_service: IntentFallbackService | None = None,
     ) -> None:
         self.device_store = device_store or DeviceStore()
         self.pairing_service = pairing_service or PairingService(self.device_store)
@@ -108,9 +149,14 @@ class Dispatcher:
         self.pointer_adapter = pointer_adapter or WindowsPointerAdapter()
         self.pointer_rate_limiter = pointer_rate_limiter or PointerRateLimiter()
         self.keyboard_adapter = keyboard_adapter or WindowsKeyboardAdapter()
-        self.message_rate_limiter = message_rate_limiter or PointerRateLimiter(
-            max_updates=self.MAX_MESSAGES_PER_SECOND,
+        self.app_volume_adapter = (
+            app_volume_adapter if app_volume_adapter is not None
+            else WindowsAppVolumeAdapter()
         )
+        self.message_rate_limiter = message_rate_limiter or message_limiter()
+        self.navigation_rate_limiter = navigation_rate_limiter or navigation_limiter()
+        self.navigation_repeat_guard = non_repeatable_navigation_limiter()
+        self.intent_service = intent_service or build_intent_service_from_env()
         self._client_adapter = TypeAdapter(ClientMessage)
         self._authenticated: dict[WebSocket, str] = {}
         self._held_pointer_buttons: set[WebSocket] = set()
@@ -139,11 +185,15 @@ class Dispatcher:
         await self._send_error(websocket, "unknown", "INVALID_PAYLOAD", "Frame não suportado.")
 
     async def disconnect(self, websocket: WebSocket) -> None:
-        if websocket in self._held_pointer_buttons:
-            self.pointer_adapter.pointer_up()
-            self._held_pointer_buttons.discard(websocket)
+        self._release_input(websocket)
+        # Desconectar no meio de um comando podia deixar tecla presa: uma seta
+        # presa repete sozinha até o usuário mexer no teclado físico.
+        self.keyboard_adapter.release_all()
         self.pointer_rate_limiter.clear(websocket)
         self.message_rate_limiter.clear(websocket)
+        self.navigation_rate_limiter.clear(websocket)
+        for action in NAVIGATION_ACTIONS:
+            self.navigation_repeat_guard.clear((websocket, action))
         self._authenticated.pop(websocket, None)
         self._connections.discard(websocket)
 
@@ -247,6 +297,18 @@ class Dispatcher:
             await self._handle_text_command(websocket, message)
             return
 
+        if isinstance(message, SearchMediaMessage):
+            await self._handle_search_media(
+                websocket,
+                message.requestId,
+                SearchMediaIntent(
+                    type="SEARCH_MEDIA",
+                    platform=message.payload.platform,
+                    query=message.payload.query,
+                ),
+            )
+            return
+
         if isinstance(message, MediaControlMessage):
             await self._handle_media_control(websocket, message)
             return
@@ -277,6 +339,10 @@ class Dispatcher:
             await self._handle_keyboard_control(websocket, message)
             return
 
+        if isinstance(message, NavigationMessage):
+            await self._handle_navigation(websocket, message)
+            return
+
         await self._send_error(
             websocket,
             message.requestId,
@@ -292,6 +358,18 @@ class Dispatcher:
         await self._send_state(websocket, "BUSY", "Processando comando...")
         intent = parse_command(message.payload.query)
 
+        if isinstance(intent, UnknownIntent) and self.intent_service is not None:
+            device_id = self._authenticated[websocket]
+            resolved = await self.intent_service.resolve_unknown(
+                device_id,
+                message.payload.query,
+            )
+            if resolved is not None:
+                intent = resolved
+
+        if not isinstance(intent, UnknownIntent) and self.intent_service is not None:
+            self.intent_service.record(self._authenticated[websocket], intent)
+
         if isinstance(intent, OpenPlatformIntent):
             await self._handle_open_platform(
                 websocket,
@@ -304,6 +382,10 @@ class Dispatcher:
                 message.requestId,
                 intent,
             )
+        elif isinstance(intent, OpenMediaLinkIntent):
+            await self._handle_media_link(websocket, message.requestId, intent)
+        elif isinstance(intent, NeedsPlatformIntent):
+            await self._ask_where_to_search(websocket, message.requestId, intent)
         elif isinstance(intent, ShowHelpIntent):
             response = CommandResultMessage(
                 requestId=message.requestId,
@@ -311,6 +393,45 @@ class Dispatcher:
                 data=HelpCommandData(commands=HELP_COMMANDS),
             )
             await websocket.send_json(response.model_dump())
+        elif isinstance(intent, MediaControlIntent):
+            await self._handle_media_control(
+                websocket,
+                MediaControlMessage(
+                    protocolVersion=1,
+                    type=intent.action,
+                    requestId=message.requestId,
+                ),
+            )
+        elif isinstance(intent, VolumeControlIntent):
+            if intent.action == "SYSTEM_VOLUME_SET" and intent.level is not None:
+                volume_message = VolumeSetMessage(
+                    protocolVersion=1,
+                    type="SYSTEM_VOLUME_SET",
+                    requestId=message.requestId,
+                    payload={"level": intent.level},
+                )
+            elif intent.action == "SYSTEM_VOLUME_DELTA" and intent.delta is not None:
+                volume_message = VolumeDeltaMessage(
+                    protocolVersion=1,
+                    type="SYSTEM_VOLUME_DELTA",
+                    requestId=message.requestId,
+                    payload={"delta": intent.delta},
+                )
+            elif intent.action == "SYSTEM_MUTE_TOGGLE":
+                volume_message = VolumeMuteToggleMessage(
+                    protocolVersion=1,
+                    type="SYSTEM_MUTE_TOGGLE",
+                    requestId=message.requestId,
+                )
+            else:
+                await self._send_error(
+                    websocket,
+                    message.requestId,
+                    "UNKNOWN_COMMAND",
+                    "Não entendi esse comando.",
+                )
+                return
+            await self._handle_volume_control(websocket, volume_message)
         else:
             await self._send_error(
                 websocket,
@@ -320,6 +441,80 @@ class Dispatcher:
             )
 
         await self._send_state(websocket, "READY", "Computador pronto.")
+
+    async def _handle_reset_input_state(
+        self,
+        websocket: WebSocket,
+        request_id: str,
+    ) -> None:
+        self._release_input(websocket)
+        if not self.keyboard_adapter.release_all():
+            await self._send_error(
+                websocket,
+                request_id,
+                "NAVIGATION_FAILED",
+                "Não foi possível liberar o teclado.",
+            )
+            return
+
+        response = CommandResultMessage(
+            requestId=request_id,
+            message="Teclado e mouse liberados.",
+            data=NavigationCommandData(action="RESET_INPUT_STATE"),
+        )
+        await websocket.send_json(response.model_dump())
+
+    def _release_input(self, websocket: WebSocket) -> None:
+        """Solta o que possa ter ficado preso nesta conexão."""
+        if websocket in self._held_pointer_buttons:
+            self.pointer_adapter.pointer_up()
+            self._held_pointer_buttons.discard(websocket)
+
+    async def _handle_media_link(
+        self,
+        websocket: WebSocket,
+        request_id: str,
+        intent: OpenMediaLinkIntent,
+    ) -> None:
+        # A URL já foi validada e reconstruída pelo parser de links; aqui ela
+        # ainda passa pela allowlist do launcher, que é quem de fato abre.
+        launch = self.platform_launcher.open_url(intent.url)
+        if not launch.executed or launch.strategy is None:
+            error_message = (
+                "Google Chrome não foi encontrado no computador."
+                if launch.error == "CHROME_NOT_FOUND"
+                else "Não foi possível abrir o link."
+            )
+            await self._send_error(
+                websocket,
+                request_id,
+                "MEDIA_LINK_FAILED",
+                error_message,
+            )
+            return
+
+        response = CommandResultMessage(
+            requestId=request_id,
+            message="Link aberto no YouTube.",
+            data=MediaLinkCommandData(
+                platform=intent.platform,
+                strategy=launch.strategy,
+            ),
+        )
+        await websocket.send_json(response.model_dump())
+
+    async def _ask_where_to_search(
+        self,
+        websocket: WebSocket,
+        request_id: str,
+        intent: NeedsPlatformIntent,
+    ) -> None:
+        response = NeedsPlatformMessage(
+            requestId=request_id,
+            query=intent.query,
+            suggestedPlatforms=suggested_search_platforms(intent.music_hint),
+        )
+        await websocket.send_json(response.model_dump())
 
     async def _handle_open_platform(
         self,
@@ -434,6 +629,14 @@ class Dispatcher:
         | VolumeDeltaMessage
         | VolumeMuteToggleMessage,
     ) -> None:
+        # LOCAL primeiro: mexer só no aplicativo que está tocando. Se não der,
+        # cai para o volume do Windows — e o fallback vai explícito na resposta,
+        # nunca escondido.
+        local = await self._try_local_volume(message)
+        if local is not None:
+            await self._send_volume_result(websocket, message, *local)
+            return
+
         try:
             if isinstance(message, VolumeGetMessage):
                 state = await self.volume_adapter.get_state()
@@ -452,10 +655,44 @@ class Dispatcher:
             )
             return
 
+        await self._send_volume_result(websocket, message, state, "GLOBAL", None)
+
+    async def _try_local_volume(self, message):
+        """Tenta o volume do aplicativo ativo. None quando não é possível."""
+        if self.app_volume_adapter is None:
+            return None
+        session = self.media_session_detector.detect()
+        if session is None:
+            return None
+
+        try:
+            if isinstance(message, VolumeGetMessage):
+                state = self.app_volume_adapter.get_state(session.platform)
+            elif isinstance(message, VolumeSetMessage):
+                state = self.app_volume_adapter.set_level(
+                    session.platform, message.payload.level,
+                )
+            elif isinstance(message, VolumeDeltaMessage):
+                state = self.app_volume_adapter.change_level(
+                    session.platform, message.payload.delta,
+                )
+            else:
+                state = self.app_volume_adapter.toggle_mute(session.platform)
+        except AppVolumeUnavailable:
+            return None
+        except Exception:  # noqa: BLE001 - qualquer falha local cai no global
+            return None
+
+        return state, "LOCAL", SCOPE_LABELS.get(state.process, state.process)
+
+    async def _send_volume_result(self, websocket, message, state, scope, target) -> None:
+        alvo = target or "Windows"
+        prefixo = f"Volume do {alvo}" if scope == "LOCAL" else "Volume do Windows"
+        sufixo = "" if scope == "LOCAL" else " (fallback)"
         response_message = (
-            f"Mudo {'ativado' if state.muted else 'desativado'}. Volume: {state.level}%."
+            f"{prefixo}{sufixo}: mudo {'ativado' if state.muted else 'desativado'}, {state.level}%."
             if isinstance(message, VolumeMuteToggleMessage)
-            else f"Volume: {state.level}%."
+            else f"{prefixo}{sufixo}: {state.level}%."
         )
         response = CommandResultMessage(
             requestId=message.requestId,
@@ -464,6 +701,8 @@ class Dispatcher:
                 action=message.type,
                 level=state.level,
                 muted=state.muted,
+                scope=scope,
+                target=target,
             ),
         )
         await websocket.send_json(response.model_dump())
@@ -548,6 +787,56 @@ class Dispatcher:
             requestId=message.requestId,
             message=response_message,
             data=KeyboardCommandData(action=message.type),
+        )
+        await websocket.send_json(response.model_dump())
+
+    async def _handle_navigation(
+        self,
+        websocket: WebSocket,
+        message: NavigationMessage,
+    ) -> None:
+        # O reset é a saída de emergência para tecla presa: nunca pode ser
+        # barrado por limite nem por guarda de repetição.
+        if message.type == "RESET_INPUT_STATE":
+            await self._handle_reset_input_state(websocket, message.requestId)
+            return
+
+        # Limite próprio, separado do teclado: o direcional repete ao segurar a
+        # seta, e uma repetição acelerada não pode consumir a cota do teclado.
+        if not self.navigation_rate_limiter.allow(websocket):
+            await self._send_error(
+                websocket,
+                message.requestId,
+                "NAVIGATION_RATE_LIMITED",
+                "Navegação rápida demais.",
+            )
+            return
+
+        # Confirmar e voltar não repetem: entrariam em vários itens ou sairiam
+        # de várias telas de uma vez.
+        if message.type not in REPEATABLE_ACTIONS:
+            if not self.navigation_repeat_guard.allow((websocket, message.type)):
+                await self._send_error(
+                    websocket,
+                    message.requestId,
+                    "NAVIGATION_RATE_LIMITED",
+                    "Aguarde antes de repetir esse comando.",
+                )
+                return
+
+        if not self.keyboard_adapter.press_key(NAVIGATION_KEYS[message.type]):
+            await self._send_error(
+                websocket,
+                message.requestId,
+                "NAVIGATION_FAILED",
+                "Navegação indisponível.",
+            )
+            return
+
+        response = CommandResultMessage(
+            requestId=message.requestId,
+            message=f"{NAVIGATION_LABELS[message.type]} enviado.",
+            data=NavigationCommandData(action=message.type),
         )
         await websocket.send_json(response.model_dump())
 

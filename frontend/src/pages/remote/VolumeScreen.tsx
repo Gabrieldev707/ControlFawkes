@@ -2,6 +2,7 @@ import { ArrowLeft, Minus, Plus, Volume2, VolumeX } from 'lucide-react'
 import type { CSSProperties } from 'react'
 
 import { RemoteStatusText } from '../../components/fawkes-remote/RemoteStatusText'
+import type { VolumeScope } from '../../features/fawkes-remote/types'
 
 
 interface VolumeScreenProps {
@@ -9,6 +10,9 @@ interface VolumeScreenProps {
   loading: boolean
   level: number | null
   muted: boolean
+  /** Onde a mudança aconteceu de fato. O fallback nunca é escondido. */
+  scope?: VolumeScope
+  target?: string | null
   statusMessage: string
   statusError: boolean
   onSetLevel: (level: number) => void
@@ -22,6 +26,8 @@ export function VolumeScreen({
   loading,
   level,
   muted,
+  scope = 'GLOBAL',
+  target = null,
   statusMessage,
   statusError,
   onSetLevel,
@@ -44,6 +50,12 @@ export function VolumeScreen({
         <h2 id="volume-screen-title">Volume</h2>
         <p>Controle o áudio principal do computador.</p>
       </div>
+
+      <p className="volume-screen__scope">
+        {scope === 'LOCAL' && target !== null
+          ? `Controlando o volume do ${target}`
+          : 'Controlando o volume do Windows (fallback)'}
+      </p>
 
       <RemoteStatusText message={statusMessage} error={statusError} />
 

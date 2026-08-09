@@ -14,11 +14,12 @@ Antes de qualquer ação funcional, a conexão precisa concluir `PAIR_DEVICE` ou
 | Grupo | Tipos e payloads |
 | --- | --- |
 | Autenticação | `PAIR_DEVICE {pin, deviceName}`, `AUTH {deviceId, token}` |
-| Comandos | `TEXT_COMMAND {query}`, `PLATFORM_SELECTED {platform}` |
+| Comandos | `TEXT_COMMAND {query}`, `PLATFORM_SELECTED {platform}`, `SEARCH_MEDIA {platform, query}` |
 | Mídia | `MEDIA_PLAY_PAUSE`, `MEDIA_PREVIOUS`, `MEDIA_NEXT`, `MEDIA_SEEK_BACK`, `MEDIA_SEEK_FORWARD`, `MEDIA_FULLSCREEN`, `MEDIA_EXIT_FULLSCREEN` |
 | Volume | `SYSTEM_VOLUME_GET`, `SYSTEM_VOLUME_SET {level: 0..100}`, `SYSTEM_VOLUME_DELTA {delta: -5 ou 5}`, `SYSTEM_MUTE_TOGGLE` |
 | Touchpad | `POINTER_MOVE {dx,dy: -160..160}`, `POINTER_CLICK`, `POINTER_DOUBLE_CLICK`, `POINTER_RIGHT_CLICK`, `POINTER_SCROLL {delta: -120 ou 120}`, `POINTER_DOWN`, `POINTER_UP` |
 | Teclado | `KEYBOARD_TEXT {text: 1..256}`, `KEYBOARD_KEY {key}` |
+| Navegação | `NAVIGATE_UP`, `NAVIGATE_DOWN`, `NAVIGATE_LEFT`, `NAVIGATE_RIGHT`, `NAVIGATE_CONFIRM`, `NAVIGATE_BACK` |
 
 Plataformas permitidas: `NETFLIX`, `MAX`, `PRIME_VIDEO`, `DISNEY_PLUS`,
 `YOUTUBE` e `SPOTIFY`.
@@ -34,17 +35,21 @@ Teclas permitidas: `ENTER`, `BACKSPACE`, `ESCAPE`, `ARROW_UP`, `ARROW_DOWN`,
 - `ERROR`: código fechado e mensagem legível.
 
 Intents de resultado: `OPEN_PLATFORM`, `SEARCH_MEDIA`, `SHOW_HELP`, `MEDIA_CONTROL`,
-`SYSTEM_VOLUME`, `POINTER_CONTROL` e `KEYBOARD_CONTROL`. Resultados de teclado
+`SYSTEM_VOLUME`, `POINTER_CONTROL`, `KEYBOARD_CONTROL` e `NAVIGATION`. Resultados de teclado
 não ecoam texto ou tecla.
 
 `OPEN_PLATFORM` executado inclui `strategy`: `CHROME`, `SPOTIFY_APP` ou
 `SPOTIFY_WEB_CHROME`. Ausência do aplicativo e falha do fallback retornam erro,
 nunca um resultado de sucesso presumido.
-`SEARCH_MEDIA` é limitado a YouTube e Spotify, inclui plataforma, execução e
+`SEARCH_MEDIA` é limitado a YouTube, Spotify, Netflix e Prime Video, inclui plataforma, execução e
 estratégia, mas não devolve nem persiste o texto pesquisado.
 `MEDIA_CONTROL` executado inclui `action`, a `platform` identificada e
 `session: WEB | APP`. Sem plataforma ativa conhecida ou sem mapeamento para a
 ação solicitada, o servidor retorna erro e não emite tecla.
+
+O fallback Ollama não adiciona mensagens ao protocolo. Ele roda somente dentro
+do backend após um `TEXT_COMMAND` desconhecido e, se produzir uma intent válida
+e ancorada, reutiliza exatamente estes handlers e resultados fechados.
 
 ## Erros funcionais
 

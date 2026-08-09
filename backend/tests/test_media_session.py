@@ -23,14 +23,20 @@ def test_media_session_detector_identifies_only_known_foreground_players(
     platform,
     kind,
 ):
-    detector = WindowsMediaSessionDetector(foreground_title_reader=lambda: title)
+    detector = WindowsMediaSessionDetector(
+        foreground_title_reader=lambda: title,
+        audio_process_reader=lambda: [],
+    )
 
     assert detector.detect() == MediaSession(platform=platform, kind=kind)
 
 
 @pytest.mark.parametrize("title", [None, "", "Documentos - Google Chrome", "Bloco de Notas"])
 def test_media_session_detector_rejects_unknown_or_missing_foreground_window(title):
-    detector = WindowsMediaSessionDetector(foreground_title_reader=lambda: title)
+    detector = WindowsMediaSessionDetector(
+        foreground_title_reader=lambda: title,
+        audio_process_reader=lambda: [],
+    )
 
     assert detector.detect() is None
 
@@ -77,3 +83,70 @@ def test_media_adapter_rejects_unsupported_platform_action_without_key_event(
     assert adapter.supports(action, platform) is False
     assert adapter.execute(action, platform) is False
     emitter.assert_not_called()
+
+
+class FakeProcess:
+    def __init__(self, name: str):
+        self._name = name
+
+    def name(self) -> str:
+        return self._name
+
+
+def test_spotify_is_detected_while_music_is_playing():
+    """O título do Spotify vira "Artista - Música" enquanto toca.
+
+    Era esse o bug: procurando "spotify" no título, o play/pause falhava
+    exatamente quando havia música tocando.
+    """
+    detector = WindowsMediaSessionDetector(
+        foreground_title_reader=lambda: "Kanye West - Runaway",
+        audio_process_reader=lambda: ["Spotify.exe"],
+    )
+
+    session = detector.detect()
+
+    assert session == MediaSession(platform="SPOTIFY", kind="APP")
+
+
+def test_spotify_wins_over_the_focused_window():
+    # O usuário controla pelo celular: a janela em foco no PC é irrelevante.
+    detector = WindowsMediaSessionDetector(
+        foreground_title_reader=lambda: "Visual Studio Code",
+        audio_process_reader=lambda: ["Spotify.exe"],
+    )
+
+    assert detector.detect().platform == "SPOTIFY"
+
+
+def test_chrome_audio_still_needs_the_title_to_tell_platforms_apart():
+    # O Chrome agrupa todas as abas num processo só.
+    detector = WindowsMediaSessionDetector(
+        foreground_title_reader=lambda: "Stranger Things - Netflix - Google Chrome",
+        audio_process_reader=lambda: ["chrome.exe"],
+    )
+
+    session = detector.detect()
+
+    assert session == MediaSession(platform="NETFLIX", kind="WEB")
+
+
+def test_the_title_still_works_when_audio_is_unavailable():
+    detector = WindowsMediaSessionDetector(
+        foreground_title_reader=lambda: "Spotify Premium",
+        audio_process_reader=lambda: [],
+    )
+
+    assert detector.detect().platform == "SPOTIFY"
+
+
+def test_a_failure_reading_audio_never_breaks_detection():
+    def explode() -> list[str]:
+        raise OSError("COM indisponível")
+
+    detector = WindowsMediaSessionDetector(
+        foreground_title_reader=lambda: "Netflix - Google Chrome",
+        audio_process_reader=explode,
+    )
+
+    assert detector.detect().platform == "NETFLIX"

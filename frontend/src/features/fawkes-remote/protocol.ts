@@ -2,10 +2,15 @@ import {
   ERROR_CODES,
   LAUNCH_STRATEGIES,
   MEDIA_ACTIONS,
+  NAVIGATION_ACTIONS,
   VOLUME_ACTIONS,
+  VOLUME_SCOPES,
   POINTER_ACTIONS,
   isPlatform,
+  isSearchablePlatform,
   type ErrorCode,
+  type NavigationAction,
+  type VolumeScope,
   type ServerMessage,
   type ServerState,
 } from './types'
@@ -53,7 +58,7 @@ function isSearchMediaData(value: unknown): boolean {
   return isRecord(value)
     && hasOnlyKeys(value, ['intent', 'platform', 'executed', 'strategy'])
     && value.intent === 'SEARCH_MEDIA'
-    && (value.platform === 'YOUTUBE' || value.platform === 'SPOTIFY')
+    && isSearchablePlatform(value.platform)
     && value.executed === true
     && typeof value.strategy === 'string'
     && LAUNCH_STRATEGIES.includes(value.strategy as (typeof LAUNCH_STRATEGIES)[number])
@@ -82,8 +87,13 @@ function isMediaData(value: unknown): boolean {
 
 function isVolumeData(value: unknown): boolean {
   return isRecord(value)
-    && hasOnlyKeys(value, ['intent', 'action', 'level', 'muted', 'executed'])
+    && hasOnlyKeys(value, [
+      'intent', 'action', 'level', 'muted', 'scope', 'target', 'executed',
+    ])
     && value.intent === 'SYSTEM_VOLUME'
+    && typeof value.scope === 'string'
+    && VOLUME_SCOPES.includes(value.scope as VolumeScope)
+    && (value.target === null || typeof value.target === 'string')
     && typeof value.action === 'string'
     && VOLUME_ACTIONS.includes(value.action as (typeof VOLUME_ACTIONS)[number])
     && typeof value.level === 'number'
@@ -108,6 +118,25 @@ function isKeyboardData(value: unknown): boolean {
     && hasOnlyKeys(value, ['intent', 'action', 'executed'])
     && value.intent === 'KEYBOARD_CONTROL'
     && (value.action === 'KEYBOARD_TEXT' || value.action === 'KEYBOARD_KEY')
+    && value.executed === true
+}
+
+function isMediaLinkData(value: unknown): boolean {
+  return isRecord(value)
+    && hasOnlyKeys(value, ['intent', 'platform', 'executed', 'strategy'])
+    && value.intent === 'OPEN_ALLOWED_MEDIA_LINK'
+    && value.platform === 'YOUTUBE'
+    && value.executed === true
+    && typeof value.strategy === 'string'
+    && LAUNCH_STRATEGIES.includes(value.strategy as (typeof LAUNCH_STRATEGIES)[number])
+}
+
+function isNavigationData(value: unknown): boolean {
+  return isRecord(value)
+    && hasOnlyKeys(value, ['intent', 'action', 'executed'])
+    && value.intent === 'NAVIGATION'
+    && typeof value.action === 'string'
+    && NAVIGATION_ACTIONS.includes(value.action as NavigationAction)
     && value.executed === true
 }
 
@@ -153,7 +182,20 @@ export function isServerMessage(value: unknown): value is ServerMessage {
           || isVolumeData(value.data)
           || isPointerData(value.data)
           || isKeyboardData(value.data)
+          || isNavigationData(value.data)
+          || isMediaLinkData(value.data)
         )
+    case 'NEEDS_PLATFORM':
+      return hasOnlyKeys(value, [
+        'protocolVersion', 'type', 'requestId', 'query', 'suggestedPlatforms',
+      ])
+        && isRequestId(value.requestId)
+        && typeof value.query === 'string'
+        && value.query.length > 0
+        && value.query.length <= 200
+        && Array.isArray(value.suggestedPlatforms)
+        && value.suggestedPlatforms.length > 0
+        && value.suggestedPlatforms.every(isSearchablePlatform)
     case 'ERROR':
       return hasOnlyKeys(value, ['protocolVersion', 'type', 'requestId', 'code', 'message'])
         && isRequestId(value.requestId)

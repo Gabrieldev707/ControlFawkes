@@ -43,6 +43,23 @@ export const PLATFORMS = [
 
 export type Platform = (typeof PLATFORMS)[number]
 
+// Plataformas com URL de busca estável e verificada. Max e Disney+ ficam de
+// fora: nenhuma das duas expõe URL de busca confiável hoje. Oferecê-las na
+// escolha levaria a um beco sem saída. Ver docs/PHASE2_PROGRESS.md.
+export const SEARCHABLE_PLATFORMS = [
+  'NETFLIX',
+  'PRIME_VIDEO',
+  'YOUTUBE',
+  'SPOTIFY',
+] as const
+
+export type SearchablePlatform = (typeof SEARCHABLE_PLATFORMS)[number]
+
+export function isSearchablePlatform(value: unknown): value is SearchablePlatform {
+  return typeof value === 'string'
+    && SEARCHABLE_PLATFORMS.includes(value as SearchablePlatform)
+}
+
 export const LAUNCH_STRATEGIES = [
   'CHROME',
   'SPOTIFY_APP',
@@ -70,6 +87,7 @@ export const ERROR_CODES = [
   'PROTOCOL_VERSION_MISMATCH',
   'PLATFORM_OPEN_FAILED',
   'MEDIA_SEARCH_FAILED',
+  'MEDIA_LINK_FAILED',
   'MEDIA_CONTROL_FAILED',
   'MEDIA_SESSION_NOT_FOUND',
   'MEDIA_ACTION_UNSUPPORTED',
@@ -78,6 +96,8 @@ export const ERROR_CODES = [
   'POINTER_RATE_LIMITED',
   'RATE_LIMITED',
   'KEYBOARD_CONTROL_FAILED',
+  'NAVIGATION_FAILED',
+  'NAVIGATION_RATE_LIMITED',
   'INTERNAL_ERROR',
 ] as const
 
@@ -204,6 +224,37 @@ export interface KeyboardKeyMessage extends ClientMessageBase {
   payload: { key: SafeKey }
 }
 
+// Direcional: contrato separado do teclado porque repete ao segurar a seta e
+// tem limite de taxa próprio. NAVIGATE_HOME ainda não existe.
+export const NAVIGATION_ACTIONS = [
+  'NAVIGATE_UP',
+  'NAVIGATE_DOWN',
+  'NAVIGATE_LEFT',
+  'NAVIGATE_RIGHT',
+  'NAVIGATE_CONFIRM',
+  'NAVIGATE_BACK',
+] as const
+
+export type NavigationAction = (typeof NAVIGATION_ACTIONS)[number]
+
+// Só as setas repetem: confirmar/voltar repetindo entrariam em vários itens
+// ou sairiam de várias telas.
+export const REPEATABLE_NAVIGATION_ACTIONS: readonly NavigationAction[] = [
+  'NAVIGATE_UP',
+  'NAVIGATE_DOWN',
+  'NAVIGATE_LEFT',
+  'NAVIGATE_RIGHT',
+]
+
+export interface NavigationMessage extends ClientMessageBase {
+  type: NavigationAction
+}
+
+export interface SearchMediaMessage extends ClientMessageBase {
+  type: 'SEARCH_MEDIA'
+  payload: { platform: SearchablePlatform; query: string }
+}
+
 export type ClientMessage =
   | AuthMessage
   | PairDeviceMessage
@@ -219,6 +270,8 @@ export type ClientMessage =
   | PointerButtonMessage
   | KeyboardTextMessage
   | KeyboardKeyMessage
+  | NavigationMessage
+  | SearchMediaMessage
 
 export interface StateUpdateMessage {
   protocolVersion: ProtocolVersion
@@ -254,7 +307,7 @@ export interface PlatformCommandData {
 
 export interface SearchMediaCommandData {
   intent: 'SEARCH_MEDIA'
-  platform: 'YOUTUBE' | 'SPOTIFY'
+  platform: SearchablePlatform
   executed: true
   strategy: LaunchStrategy
 }
@@ -273,12 +326,41 @@ export interface MediaCommandData {
   executed: true
 }
 
+// LOCAL: só o aplicativo que está tocando. GLOBAL: o volume do Windows todo.
+export const VOLUME_SCOPES = ['LOCAL', 'GLOBAL'] as const
+
+export type VolumeScope = (typeof VOLUME_SCOPES)[number]
+
 export interface VolumeCommandData {
   intent: 'SYSTEM_VOLUME'
   action: VolumeAction
   level: number
   muted: boolean
+  // O fallback para o volume do Windows nunca é escondido.
+  scope: VolumeScope
+  target: string | null
   executed: true
+}
+
+export interface MediaLinkCommandData {
+  intent: 'OPEN_ALLOWED_MEDIA_LINK'
+  platform: 'YOUTUBE'
+  executed: true
+  strategy: LaunchStrategy
+}
+
+export interface NavigationCommandData {
+  intent: 'NAVIGATION'
+  action: NavigationAction
+  executed: true
+}
+
+export interface NeedsPlatformMessage {
+  protocolVersion: ProtocolVersion
+  type: 'NEEDS_PLATFORM'
+  requestId: string
+  query: string
+  suggestedPlatforms: SearchablePlatform[]
 }
 
 export interface PointerCommandData {
@@ -306,6 +388,8 @@ export interface CommandResultMessage {
     | VolumeCommandData
     | PointerCommandData
     | KeyboardCommandData
+    | NavigationCommandData
+    | MediaLinkCommandData
 }
 
 export interface ErrorMessage {
@@ -321,4 +405,5 @@ export type ServerMessage =
   | AuthResultMessage
   | PairResultMessage
   | CommandResultMessage
+  | NeedsPlatformMessage
   | ErrorMessage

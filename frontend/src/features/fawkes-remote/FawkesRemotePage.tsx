@@ -2,7 +2,9 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 
 import type {
   AuthState,
-  KeyboardAction,
+  NavigationAction,
+  SearchablePlatform,
+  VolumeScope,
   MediaAction,
   OrbState,
   Platform,
@@ -16,6 +18,8 @@ import type {
 import { PROTOCOL_VERSION } from './types'
 import { useWebSocket } from '../../hooks/useWebSocket'
 import { useRemoteNavigation } from '../../hooks/useRemoteNavigation'
+import { useCommandFeedback } from '../../hooks/useCommandFeedback'
+import { useStoredDevice } from '../../hooks/useStoredDevice'
 import { generateRequestId } from '../../utils/uuid'
 import { HomeShortcuts } from '../../components/navigation/HomeShortcuts'
 import { RemoteNavigation } from '../../components/navigation/RemoteNavigation'
@@ -25,6 +29,10 @@ import { RemoteControlScreen } from '../../pages/remote/RemoteControlScreen'
 import { VolumeScreen } from '../../pages/remote/VolumeScreen'
 import { TouchpadScreen } from '../../pages/remote/TouchpadScreen'
 import { KeyboardScreen } from '../../pages/remote/KeyboardScreen'
+import { PlatformChoice } from '../../components/fawkes-remote/PlatformChoice'
+import { OrbQualityPicker } from '../../components/fawkes-remote/OrbQualityPicker'
+import type { OrbQuality } from '../../components/fawkes-remote/orbQuality'
+import { loadOrbQuality, saveOrbQuality } from './orbPreferences'
 import {
   AuthenticationStatus,
   ConnectionStatus,
@@ -39,16 +47,8 @@ import {
 import '../../styles/fawkes-remote.css'
 
 
-const DEVICE_ID_KEY = 'controlfawkes.deviceId'
-const TOKEN_KEY = 'controlfawkes.token'
-
 function localDeviceName(): string {
   return /iPhone/i.test(navigator.userAgent) ? 'iPhone' : 'Dispositivo local'
-}
-
-function clearStoredCredentials(): void {
-  localStorage.removeItem(DEVICE_ID_KEY)
-  localStorage.removeItem(TOKEN_KEY)
 }
 
 function containsUnsafeKeyboardCharacter(value: string): boolean {
@@ -67,6 +67,8 @@ function containsUnsafeKeyboardCharacter(value: string): boolean {
 }
 
 export const FawkesRemotePage: React.FC = () => {
+  const storedDevice = useStoredDevice()
+  const feedback = useCommandFeedback()
   const [orbState, setOrbState] = useState<OrbState>('idle')
   const [selectedPlatform, setSelectedPlatform] = useState<Platform | null>(null)
   const [serverState, setServerState] = useState<ServerState | null>(null)
@@ -74,30 +76,44 @@ export const FawkesRemotePage: React.FC = () => {
   const [pairingMessage, setPairingMessage] = useState('')
   const [statusMessage, setStatusMessage] = useState('Conectando ao computador...')
   const [statusError, setStatusError] = useState(false)
-  const [currentMediaAction, setCurrentMediaAction] = useState<MediaAction | null>(null)
-  const [currentVolumeAction, setCurrentVolumeAction] = useState<VolumeAction | null>(null)
-  const [currentPointerAction, setCurrentPointerAction] = useState<PointerAction | null>(null)
-  const [currentKeyboardAction, setCurrentKeyboardAction] = useState<KeyboardAction | null>(null)
+  // Escolha de plataforma pendente. Some ao escolher, cancelar ou receber
+  // outra resposta: nunca fica presa na tela.
+  const [volumeScope, setVolumeScope] = useState<VolumeScope>('GLOBAL')
+  const [volumeTarget, setVolumeTarget] = useState<string | null>(null)
+  const [orbQuality, setOrbQuality] = useState<OrbQuality>(
+    () => loadOrbQuality(storedDevice.load()?.deviceId ?? null),
+  )
+  const [pendingChoice, setPendingChoice] = useState<
+    { requestId: string; query: string; platforms: SearchablePlatform[] } | null
+  >(null)
   const [volumeLevel, setVolumeLevel] = useState<number | null>(null)
   const [volumeMuted, setVolumeMuted] = useState(false)
   const { currentScreen, navigate, goBack } = useRemoteNavigation()
 
-  const currentRequestId = useRef<string | null>(null)
-  const successTimeoutRef = useRef<number | null>(null)
+  const {
+    begin: beginFeedback,
+    cancel: cancelFeedback,
+    scheduleReset: scheduleFeedbackReset,
+    isCurrent: isCurrentRequest,
+    hasPending: hasPendingRequest,
+    currentMediaAction,
+    currentVolumeAction,
+    currentPointerAction,
+    currentKeyboardAction,
+    currentNavigationAction,
+  } = feedback
   const hasSentAuthThisConnection = useRef(false)
-  const hasLoadedVolumeScreen = useRef(false)
+  const hasLoadedVolumeForScreen = useRef(false)
 
   const handleMessage = useCallback((message: ServerMessage) => {
     if (message.type === 'STATE_UPDATE') {
       setServerState(message.state)
-      if (message.state !== 'READY' || currentRequestId.current === null) {
+      if (message.state !== 'READY' || !hasPendingRequest()) {
         setStatusMessage(message.message)
         setStatusError(false)
       }
       if (message.state === 'AUTH_REQUIRED') {
-        const hasCredentials = Boolean(
-          localStorage.getItem(DEVICE_ID_KEY) && localStorage.getItem(TOKEN_KEY),
-        )
+        const hasCredentials = storedDevice.load() !== null
         if (!hasCredentials) setAuthState('pairing_required')
       }
       return
@@ -112,8 +128,7 @@ export const FawkesRemotePage: React.FC = () => {
     }
 
     if (message.type === 'PAIR_RESULT') {
-      localStorage.setItem(DEVICE_ID_KEY, message.deviceId)
-      localStorage.setItem(TOKEN_KEY, message.token)
+      storedDevice.save(message.deviceId, message.token)
       setAuthState('authenticated')
       setPairingMessage('')
       setStatusMessage(message.message)
@@ -127,7 +142,7 @@ export const FawkesRemotePage: React.FC = () => {
         || message.code === 'UNAUTHORIZED'
         || message.code === 'PAIRING_REQUIRED'
       ) {
-        clearStoredCredentials()
+        storedDevice.clear()
         setServerState('AUTH_REQUIRED')
         setAuthState('pairing_required')
         setPairingMessage(message.message)
@@ -149,24 +164,49 @@ export const FawkesRemotePage: React.FC = () => {
       }
     }
 
-    if ('requestId' in message && message.requestId !== currentRequestId.current) return
+    if ('requestId' in message && !isCurrentRequest(message.requestId)) return
+
+    if (message.type === 'NEEDS_PLATFORM') {
+      setPendingChoice({
+        requestId: message.requestId,
+        query: message.query,
+        platforms: message.suggestedPlatforms,
+      })
+      setOrbState('needs_selection')
+      setStatusMessage(`Onde procurar “${message.query}”?`)
+      setStatusError(false)
+      return
+    }
+
+    if (message.type === 'COMMAND_RESULT' || message.type === 'ERROR') {
+      setPendingChoice(null)
+    }
 
     if (message.type === 'COMMAND_RESULT') {
       if (message.data.intent === 'SYSTEM_VOLUME') {
         setVolumeLevel(message.data.level)
         setVolumeMuted(message.data.muted)
+        // O que foi realmente afetado: o aplicativo ou o Windows inteiro.
+        // O fallback precisa ficar visível, não implícito.
+        setVolumeScope(message.data.scope)
+        setVolumeTarget(message.data.target)
       }
       if (message.data.intent === 'POINTER_CONTROL') {
-        setCurrentPointerAction(null)
-        currentRequestId.current = null
+        cancelFeedback()
+        setOrbState('idle')
+        setStatusMessage(message.message)
+        setStatusError(false)
+        return
+      }
+      if (message.data.intent === 'NAVIGATION') {
+        cancelFeedback()
         setOrbState('idle')
         setStatusMessage(message.message)
         setStatusError(false)
         return
       }
       if (message.data.intent === 'KEYBOARD_CONTROL') {
-        setCurrentKeyboardAction(null)
-        currentRequestId.current = null
+        cancelFeedback()
         setOrbState('idle')
         setStatusMessage(message.message)
         setStatusError(false)
@@ -175,17 +215,11 @@ export const FawkesRemotePage: React.FC = () => {
       setOrbState('success')
       setStatusMessage(message.message)
       setStatusError(false)
-      if (successTimeoutRef.current) clearTimeout(successTimeoutRef.current)
-      successTimeoutRef.current = window.setTimeout(() => {
+      scheduleFeedbackReset(2000, () => {
         setOrbState('idle')
         setSelectedPlatform(null)
-        setCurrentMediaAction(null)
-        setCurrentVolumeAction(null)
-        setCurrentPointerAction(null)
-        setCurrentKeyboardAction(null)
-        currentRequestId.current = null
         setStatusMessage('Computador pronto.')
-      }, 2000)
+      })
       return
     }
 
@@ -193,27 +227,27 @@ export const FawkesRemotePage: React.FC = () => {
       setOrbState('error')
       setStatusMessage(message.message)
       setStatusError(true)
-      if (successTimeoutRef.current) clearTimeout(successTimeoutRef.current)
-      successTimeoutRef.current = window.setTimeout(() => {
+      scheduleFeedbackReset(3000, () => {
         setOrbState('idle')
         setSelectedPlatform(null)
-        setCurrentMediaAction(null)
-        setCurrentVolumeAction(null)
-        setCurrentPointerAction(null)
-        setCurrentKeyboardAction(null)
-        currentRequestId.current = null
         setStatusMessage('Computador pronto.')
         setStatusError(false)
-      }, 3000)
+      })
     }
-  }, [])
+  }, [
+    cancelFeedback,
+    hasPendingRequest,
+    isCurrentRequest,
+    scheduleFeedbackReset,
+    storedDevice,
+  ])
 
   const { connectionState, sendMessage } = useWebSocket({ onMessage: handleMessage })
 
   useEffect(() => {
     if (connectionState !== 'connected') {
       hasSentAuthThisConnection.current = false
-      hasLoadedVolumeScreen.current = false
+      hasLoadedVolumeForScreen.current = false
       setServerState(null)
       setStatusMessage(
         connectionState === 'connecting'
@@ -225,9 +259,8 @@ export const FawkesRemotePage: React.FC = () => {
     }
     if (hasSentAuthThisConnection.current) return
 
-    const deviceId = localStorage.getItem(DEVICE_ID_KEY)
-    const token = localStorage.getItem(TOKEN_KEY)
-    if (!deviceId || !token) {
+    const credentials = storedDevice.load()
+    if (credentials === null) {
       setAuthState('pairing_required')
       setStatusMessage('Autenticação necessária.')
       return
@@ -240,14 +273,10 @@ export const FawkesRemotePage: React.FC = () => {
       protocolVersion: PROTOCOL_VERSION,
       type: 'AUTH',
       requestId: generateRequestId(),
-      payload: { deviceId, token },
+      payload: credentials,
     })
     if (!accepted) hasSentAuthThisConnection.current = false
-  }, [connectionState, sendMessage])
-
-  useEffect(() => () => {
-    if (successTimeoutRef.current) clearTimeout(successTimeoutRef.current)
-  }, [])
+  }, [connectionState, sendMessage, storedDevice])
 
   const controlsDisabled = connectionState !== 'connected'
     || authState !== 'authenticated'
@@ -258,28 +287,20 @@ export const FawkesRemotePage: React.FC = () => {
     || authState !== 'authenticated'
     || serverState !== 'READY'
 
+  // Só o que torna o teclado realmente indisponível. O comando em voo ficou de
+  // fora: incluí-lo desabilitava o input e o iOS fechava o teclado virtual a
+  // cada envio. O backend já limita a taxa.
   const keyboardDisabled = connectionState !== 'connected'
     || authState !== 'authenticated'
     || serverState !== 'READY'
-    || currentKeyboardAction !== null
 
   const showOrbPreview = import.meta.env.DEV
     && new URLSearchParams(window.location.search).get('orb-preview') === '1'
 
-  useEffect(() => {
-    return () => {
-      if (successTimeoutRef.current) {
-        clearTimeout(successTimeoutRef.current);
-      }
-    };
-  }, []);
-
   const handlePlatformSelect = (platform: Platform) => {
     if (controlsDisabled) return
-    if (successTimeoutRef.current) clearTimeout(successTimeoutRef.current)
 
-    const requestId = generateRequestId()
-    currentRequestId.current = requestId
+    const requestId = beginFeedback()
     setSelectedPlatform(platform)
     setOrbState('executing')
     setStatusMessage('Processando comando...')
@@ -292,7 +313,7 @@ export const FawkesRemotePage: React.FC = () => {
       payload: { platform },
     })
     if (!accepted) {
-      currentRequestId.current = null
+      cancelFeedback()
       setSelectedPlatform(null)
       setOrbState('error')
       setStatusMessage('Conexão indisponível. Tente novamente.')
@@ -307,8 +328,7 @@ export const FawkesRemotePage: React.FC = () => {
       return false
     }
 
-    const requestId = generateRequestId()
-    currentRequestId.current = requestId
+    const requestId = beginFeedback()
     setOrbState('executing')
     setStatusMessage('Processando comando...')
     setStatusError(false)
@@ -320,7 +340,7 @@ export const FawkesRemotePage: React.FC = () => {
       payload: { query },
     })
     if (!accepted) {
-      currentRequestId.current = null
+      cancelFeedback()
       setOrbState('error')
       setStatusMessage('Conexão indisponível. Tente novamente.')
       setStatusError(true)
@@ -330,11 +350,8 @@ export const FawkesRemotePage: React.FC = () => {
 
   const handleMediaAction = (action: MediaAction) => {
     if (controlsDisabled) return
-    if (successTimeoutRef.current) clearTimeout(successTimeoutRef.current)
 
-    const requestId = generateRequestId()
-    currentRequestId.current = requestId
-    setCurrentMediaAction(action)
+    const requestId = beginFeedback({ kind: 'media', action })
     setOrbState('executing')
     setStatusMessage('Executando controle de mídia...')
     setStatusError(false)
@@ -345,8 +362,7 @@ export const FawkesRemotePage: React.FC = () => {
       requestId,
     })
     if (!accepted) {
-      currentRequestId.current = null
-      setCurrentMediaAction(null)
+      cancelFeedback()
       setOrbState('error')
       setStatusMessage('Conexão indisponível. Tente novamente.')
       setStatusError(true)
@@ -356,14 +372,12 @@ export const FawkesRemotePage: React.FC = () => {
   const handleVolumeAction = useCallback((
     action: VolumeAction,
     value?: number | -5 | 5,
+    background = false,
   ) => {
     if (controlsDisabled) return
-    if (successTimeoutRef.current) clearTimeout(successTimeoutRef.current)
 
-    const requestId = generateRequestId()
-    currentRequestId.current = requestId
-    setCurrentVolumeAction(action)
-    setOrbState('executing')
+    const requestId = beginFeedback({ kind: 'volume', action })
+    if (!background) setOrbState('executing')
     setStatusMessage(action === 'SYSTEM_VOLUME_GET' ? 'Carregando volume...' : 'Ajustando volume...')
     setStatusError(false)
 
@@ -389,22 +403,19 @@ export const FawkesRemotePage: React.FC = () => {
 
     const accepted = sendMessage(message)
     if (!accepted) {
-      currentRequestId.current = null
-      setCurrentVolumeAction(null)
+      cancelFeedback()
       setOrbState('error')
       setStatusMessage('Conexão indisponível. Tente novamente.')
       setStatusError(true)
     }
-  }, [controlsDisabled, sendMessage])
+  }, [beginFeedback, cancelFeedback, controlsDisabled, sendMessage])
 
   const handlePointerAction = useCallback((
     action: PointerAction,
     payload?: PointerPayload,
   ) => {
     if (pointerDisabled) return
-    const requestId = generateRequestId()
-    currentRequestId.current = requestId
-    setCurrentPointerAction(action)
+    const requestId = beginFeedback({ kind: 'pointer', action })
     setStatusMessage(action === 'POINTER_MOVE' ? 'Movendo ponteiro...' : 'Enviando comando...')
     setStatusError(false)
 
@@ -431,12 +442,11 @@ export const FawkesRemotePage: React.FC = () => {
       })
     }
     if (!accepted) {
-      currentRequestId.current = null
-      setCurrentPointerAction(null)
+      cancelFeedback()
       setStatusMessage('Touchpad desconectado.')
       setStatusError(true)
     }
-  }, [pointerDisabled, sendMessage])
+  }, [beginFeedback, cancelFeedback, pointerDisabled, sendMessage])
 
   const handleKeyboardText = useCallback((text: string): boolean => {
     if (
@@ -445,9 +455,7 @@ export const FawkesRemotePage: React.FC = () => {
       || text.length > 256
       || containsUnsafeKeyboardCharacter(text)
     ) return false
-    const requestId = generateRequestId()
-    currentRequestId.current = requestId
-    setCurrentKeyboardAction('KEYBOARD_TEXT')
+    const requestId = beginFeedback({ kind: 'keyboard', action: 'KEYBOARD_TEXT' })
     setStatusMessage('Enviando texto...')
     setStatusError(false)
     const accepted = sendMessage({
@@ -457,19 +465,16 @@ export const FawkesRemotePage: React.FC = () => {
       payload: { text },
     })
     if (!accepted) {
-      currentRequestId.current = null
-      setCurrentKeyboardAction(null)
+      cancelFeedback()
       setStatusMessage('Teclado remoto desconectado.')
       setStatusError(true)
     }
     return accepted
-  }, [keyboardDisabled, sendMessage])
+  }, [beginFeedback, cancelFeedback, keyboardDisabled, sendMessage])
 
   const handleKeyboardKey = useCallback((key: SafeKey) => {
     if (keyboardDisabled) return
-    const requestId = generateRequestId()
-    currentRequestId.current = requestId
-    setCurrentKeyboardAction('KEYBOARD_KEY')
+    const requestId = beginFeedback({ kind: 'keyboard', action: 'KEYBOARD_KEY' })
     setStatusMessage('Enviando tecla...')
     setStatusError(false)
     const accepted = sendMessage({
@@ -479,27 +484,79 @@ export const FawkesRemotePage: React.FC = () => {
       payload: { key },
     })
     if (!accepted) {
-      currentRequestId.current = null
-      setCurrentKeyboardAction(null)
+      cancelFeedback()
       setStatusMessage('Teclado remoto desconectado.')
       setStatusError(true)
     }
-  }, [keyboardDisabled, sendMessage])
+  }, [beginFeedback, cancelFeedback, keyboardDisabled, sendMessage])
+
+  // O direcional é o único controle que não espera a resposta anterior: sem
+  // isso, segurar a seta enviaria um único comando.
+  const navigationDisabled = connectionState !== 'connected'
+    || authState !== 'authenticated'
+    || serverState !== 'READY'
+
+  const handleChoosePlatform = useCallback((platform: SearchablePlatform) => {
+    if (pendingChoice === null || controlsDisabled) return
+    const query = pendingChoice.query
+    const requestId = beginFeedback()
+    setPendingChoice(null)
+    setOrbState('executing')
+    setStatusMessage('Processando comando...')
+    setStatusError(false)
+
+    // Só plataforma e consulta: a URL é montada no backend.
+    const accepted = sendMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: 'SEARCH_MEDIA',
+      requestId,
+      payload: { platform, query },
+    })
+    if (!accepted) {
+      cancelFeedback()
+      setOrbState('error')
+      setStatusMessage('Conexão indisponível. Tente novamente.')
+      setStatusError(true)
+    }
+  }, [beginFeedback, cancelFeedback, controlsDisabled, pendingChoice, sendMessage])
+
+  const handleCancelChoice = useCallback(() => {
+    setPendingChoice(null)
+    cancelFeedback()
+    setOrbState('idle')
+    setStatusMessage('Computador pronto.')
+    setStatusError(false)
+  }, [cancelFeedback])
+
+  const handleNavigationAction = useCallback((action: NavigationAction) => {
+    if (navigationDisabled) return
+    const requestId = beginFeedback({ kind: 'navigation', action })
+    const accepted = sendMessage({
+      protocolVersion: PROTOCOL_VERSION,
+      type: action,
+      requestId,
+    })
+    if (!accepted) {
+      cancelFeedback()
+      setStatusMessage('Navegação indisponível.')
+      setStatusError(true)
+    }
+  }, [beginFeedback, cancelFeedback, navigationDisabled, sendMessage])
 
   useEffect(() => {
-    if (currentScreen !== 'VOLUME') {
-      hasLoadedVolumeScreen.current = false
+    if (currentScreen !== 'VOLUME' && currentScreen !== 'REMOTE_CONTROL') {
+      hasLoadedVolumeForScreen.current = false
       return
     }
     if (
-      hasLoadedVolumeScreen.current
+      hasLoadedVolumeForScreen.current
       || connectionState !== 'connected'
       || authState !== 'authenticated'
       || serverState !== 'READY'
     ) return
 
-    hasLoadedVolumeScreen.current = true
-    handleVolumeAction('SYSTEM_VOLUME_GET')
+    hasLoadedVolumeForScreen.current = true
+    handleVolumeAction('SYSTEM_VOLUME_GET', undefined, true)
   }, [currentScreen, connectionState, authState, serverState, handleVolumeAction])
 
   const attemptPairing = (pin: string) => {
@@ -542,9 +599,18 @@ export const FawkesRemotePage: React.FC = () => {
           {currentScreen === 'HOME' ? (
             <main className="remote-home">
               <div className="orb-container">
-                <RemoteOrb state={orbState} />
+                <RemoteOrb state={orbState} quality={orbQuality} />
                 {showOrbPreview ? (
-                  <OrbStatePreview state={orbState} onChange={setOrbState} />
+                  <>
+                    <OrbStatePreview state={orbState} onChange={setOrbState} />
+                    <OrbQualityPicker
+                      quality={orbQuality}
+                      onChange={(next) => {
+                        setOrbQuality(next)
+                        saveOrbQuality(storedDevice.load()?.deviceId ?? null, next)
+                      }}
+                    />
+                  </>
                 ) : null}
               </div>
 
@@ -555,6 +621,16 @@ export const FawkesRemotePage: React.FC = () => {
               />
 
               <div className="input-area">
+                {pendingChoice !== null ? (
+                  <PlatformChoice
+                    query={pendingChoice.query}
+                    platforms={pendingChoice.platforms}
+                    disabled={controlsDisabled}
+                    onChoose={handleChoosePlatform}
+                    onCancel={handleCancelChoice}
+                  />
+                ) : null}
+
                 <PlatformGrid
                   selectedPlatform={selectedPlatform}
                   disabled={controlsDisabled}
@@ -576,12 +652,18 @@ export const FawkesRemotePage: React.FC = () => {
           ) : currentScreen === 'REMOTE_CONTROL' ? (
             <RemoteControlScreen
               disabled={controlsDisabled}
+              connected={connectionState === 'connected' && authState === 'authenticated'}
+              navigationDisabled={navigationDisabled}
               currentAction={currentMediaAction}
+              currentNavigationAction={currentNavigationAction}
               currentVolumeAction={currentVolumeAction}
               muted={volumeMuted}
+              volumeLevel={volumeLevel}
               statusMessage={statusMessage}
               statusError={statusError}
               onAction={handleMediaAction}
+              onNavigationAction={handleNavigationAction}
+              onVolumeDelta={(delta) => handleVolumeAction('SYSTEM_VOLUME_DELTA', delta)}
               onToggleMute={() => handleVolumeAction('SYSTEM_MUTE_TOGGLE')}
               onNavigate={navigate}
               onBack={goBack}
@@ -601,6 +683,8 @@ export const FawkesRemotePage: React.FC = () => {
               loading={currentVolumeAction !== null && orbState === 'executing'}
               level={volumeLevel}
               muted={volumeMuted}
+              scope={volumeScope}
+              target={volumeTarget}
               statusMessage={statusMessage}
               statusError={statusError}
               onSetLevel={(level) => handleVolumeAction('SYSTEM_VOLUME_SET', level)}
