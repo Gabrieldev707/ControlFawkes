@@ -1,10 +1,12 @@
 import pytest
 
 from app.commands.parser import (
+    MediaControlIntent,
     NeedsPlatformIntent,
     OpenPlatformIntent,
     SearchMediaIntent,
     ShowHelpIntent,
+    VolumeControlIntent,
     UnknownIntent,
     normalize_command,
     parse_command,
@@ -183,3 +185,47 @@ def test_a_bare_platform_name_opens_the_platform(command):
     result = parse_command(command)
 
     assert isinstance(result, OpenPlatformIntent)
+
+
+@pytest.mark.parametrize(
+    ("command", "action"),
+    [
+        ("play", "MEDIA_PLAY_PAUSE"),
+        ("pausa", "MEDIA_PLAY_PAUSE"),
+        ("próxima", "MEDIA_NEXT"),
+        ("faixa anterior", "MEDIA_PREVIOUS"),
+        ("volta 10 segundos", "MEDIA_SEEK_BACK"),
+        ("avança 10 segundos", "MEDIA_SEEK_FORWARD"),
+        ("tela cheia", "MEDIA_FULLSCREEN"),
+        ("sair da tela cheia", "MEDIA_EXIT_FULLSCREEN"),
+    ],
+)
+def test_common_media_phrases_use_closed_actions(command, action):
+    assert parse_command(command) == MediaControlIntent(action=action)
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [
+        ("volume +", VolumeControlIntent(action="SYSTEM_VOLUME_DELTA", delta=5)),
+        ("abaixa o volume", VolumeControlIntent(action="SYSTEM_VOLUME_DELTA", delta=-5)),
+        ("mudo", VolumeControlIntent(action="SYSTEM_MUTE_TOGGLE")),
+        ("volume 42", VolumeControlIntent(action="SYSTEM_VOLUME_SET", level=42)),
+        ("coloca o volume em 100", VolumeControlIntent(action="SYSTEM_VOLUME_SET", level=100)),
+    ],
+)
+def test_common_volume_phrases_are_bounded(command, expected):
+    assert parse_command(command) == expected
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "volume 101",
+        "volume -1",
+        "play; powershell shutdown",
+        "abre javascript:alert(1)",
+    ],
+)
+def test_common_controls_never_create_open_ended_actions(command):
+    assert isinstance(parse_command(command), UnknownIntent)

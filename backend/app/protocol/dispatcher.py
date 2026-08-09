@@ -48,10 +48,13 @@ from app.commands.parser import (
     HELP_COMMANDS,
     PLATFORM_LABELS,
     NeedsPlatformIntent,
+    MediaControlIntent,
     OpenMediaLinkIntent,
     OpenPlatformIntent,
     SearchMediaIntent,
     ShowHelpIntent,
+    UnknownIntent,
+    VolumeControlIntent,
     parse_command,
 )
 from app.security.device_store import DeviceStore
@@ -81,6 +84,16 @@ from app.schemas.navigation import (
     REPEATABLE_ACTIONS,
     NavigationMessage,
 )
+from app.intelligence.service import IntentFallbackService, build_intent_service_from_env
+from app.protocol.rate_limits import (
+    MAX_CONNECTIONS,
+    MAX_MESSAGES_PER_SECOND,
+    MAX_NAVIGATION_PER_SECOND,
+    MAX_NON_REPEATABLE_PER_SECOND,
+    message_limiter,
+    navigation_limiter,
+    non_repeatable_navigation_limiter,
+)
 
 
 WS_POLICY_VIOLATION = 1008
@@ -102,12 +115,12 @@ KNOWN_CLIENT_TYPES = {
 
 class Dispatcher:
     # Acima do teto do touchpad (60/s), para não atrapalhar o uso legítimo.
-    MAX_MESSAGES_PER_SECOND = 120
-    MAX_CONNECTIONS = 32
+    MAX_MESSAGES_PER_SECOND = MAX_MESSAGES_PER_SECOND
+    MAX_CONNECTIONS = MAX_CONNECTIONS
     # Auto-repeat confortável ao segurar a seta, sem virar inundação.
-    MAX_NAVIGATION_PER_SECOND = 20
+    MAX_NAVIGATION_PER_SECOND = MAX_NAVIGATION_PER_SECOND
     # Confirmar/voltar: no máximo ~3 por segundo, contra toque duplo acidental.
-    MAX_NON_REPEATABLE_PER_SECOND = 3
+    MAX_NON_REPEATABLE_PER_SECOND = MAX_NON_REPEATABLE_PER_SECOND
 
     def __init__(
         self,
@@ -124,6 +137,7 @@ class Dispatcher:
         app_volume_adapter: WindowsAppVolumeAdapter | None = None,
         message_rate_limiter: PointerRateLimiter | None = None,
         navigation_rate_limiter: PointerRateLimiter | None = None,
+        intent_service: IntentFallbackService | None = None,
     ) -> None:
         self.device_store = device_store or DeviceStore()
         self.pairing_service = pairing_service or PairingService(self.device_store)
@@ -139,15 +153,10 @@ class Dispatcher:
             app_volume_adapter if app_volume_adapter is not None
             else WindowsAppVolumeAdapter()
         )
-        self.message_rate_limiter = message_rate_limiter or PointerRateLimiter(
-            max_updates=self.MAX_MESSAGES_PER_SECOND,
-        )
-        self.navigation_rate_limiter = navigation_rate_limiter or PointerRateLimiter(
-            max_updates=self.MAX_NAVIGATION_PER_SECOND,
-        )
-        self.navigation_repeat_guard = PointerRateLimiter(
-            max_updates=self.MAX_NON_REPEATABLE_PER_SECOND,
-        )
+        self.message_rate_limiter = message_rate_limiter or message_limiter()
+        self.navigation_rate_limiter = navigation_rate_limiter or navigation_limiter()
+        self.navigation_repeat_guard = non_repeatable_navigation_limiter()
+        self.intent_service = intent_service or build_intent_service_from_env()
         self._client_adapter = TypeAdapter(ClientMessage)
         self._authenticated: dict[WebSocket, str] = {}
         self._held_pointer_buttons: set[WebSocket] = set()
@@ -349,6 +358,18 @@ class Dispatcher:
         await self._send_state(websocket, "BUSY", "Processando comando...")
         intent = parse_command(message.payload.query)
 
+        if isinstance(intent, UnknownIntent) and self.intent_service is not None:
+            device_id = self._authenticated[websocket]
+            resolved = await self.intent_service.resolve_unknown(
+                device_id,
+                message.payload.query,
+            )
+            if resolved is not None:
+                intent = resolved
+
+        if not isinstance(intent, UnknownIntent) and self.intent_service is not None:
+            self.intent_service.record(self._authenticated[websocket], intent)
+
         if isinstance(intent, OpenPlatformIntent):
             await self._handle_open_platform(
                 websocket,
@@ -372,6 +393,45 @@ class Dispatcher:
                 data=HelpCommandData(commands=HELP_COMMANDS),
             )
             await websocket.send_json(response.model_dump())
+        elif isinstance(intent, MediaControlIntent):
+            await self._handle_media_control(
+                websocket,
+                MediaControlMessage(
+                    protocolVersion=1,
+                    type=intent.action,
+                    requestId=message.requestId,
+                ),
+            )
+        elif isinstance(intent, VolumeControlIntent):
+            if intent.action == "SYSTEM_VOLUME_SET" and intent.level is not None:
+                volume_message = VolumeSetMessage(
+                    protocolVersion=1,
+                    type="SYSTEM_VOLUME_SET",
+                    requestId=message.requestId,
+                    payload={"level": intent.level},
+                )
+            elif intent.action == "SYSTEM_VOLUME_DELTA" and intent.delta is not None:
+                volume_message = VolumeDeltaMessage(
+                    protocolVersion=1,
+                    type="SYSTEM_VOLUME_DELTA",
+                    requestId=message.requestId,
+                    payload={"delta": intent.delta},
+                )
+            elif intent.action == "SYSTEM_MUTE_TOGGLE":
+                volume_message = VolumeMuteToggleMessage(
+                    protocolVersion=1,
+                    type="SYSTEM_MUTE_TOGGLE",
+                    requestId=message.requestId,
+                )
+            else:
+                await self._send_error(
+                    websocket,
+                    message.requestId,
+                    "UNKNOWN_COMMAND",
+                    "Não entendi esse comando.",
+                )
+                return
+            await self._handle_volume_control(websocket, volume_message)
         else:
             await self._send_error(
                 websocket,

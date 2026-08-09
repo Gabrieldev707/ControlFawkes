@@ -4,7 +4,9 @@ from typing import Literal, TypeAlias
 import unicodedata
 
 from app.platforms.links import parse_media_link
+from app.media.actions import MediaAction
 from app.schemas.ws import Platform
+from app.schemas.volume import VolumeAction
 
 
 PLATFORM_ALIASES: dict[Platform, tuple[str, ...]] = {
@@ -233,11 +235,27 @@ class NeedsPlatformIntent:
     type: Literal["NEEDS_PLATFORM"] = "NEEDS_PLATFORM"
 
 
+@dataclass(frozen=True)
+class MediaControlIntent:
+    action: MediaAction
+    type: Literal["MEDIA_CONTROL"] = "MEDIA_CONTROL"
+
+
+@dataclass(frozen=True)
+class VolumeControlIntent:
+    action: VolumeAction
+    level: int | None = None
+    delta: Literal[-5, 5] | None = None
+    type: Literal["VOLUME_CONTROL"] = "VOLUME_CONTROL"
+
+
 ParsedIntent: TypeAlias = (
     OpenPlatformIntent
     | OpenMediaLinkIntent
     | SearchMediaIntent
     | NeedsPlatformIntent
+    | MediaControlIntent
+    | VolumeControlIntent
     | ShowHelpIntent
     | UnknownIntent
 )
@@ -298,6 +316,64 @@ def _clean_query(raw_query: str | None) -> str | None:
     if any(fragment in normalized for fragment in _UNSAFE_SEARCH_FRAGMENTS):
         return None
     return query
+
+
+_MEDIA_CONTROL_PHRASES: dict[str, MediaAction] = {
+    "play": "MEDIA_PLAY_PAUSE",
+    "tocar": "MEDIA_PLAY_PAUSE",
+    "pausa": "MEDIA_PLAY_PAUSE",
+    "pausar": "MEDIA_PLAY_PAUSE",
+    "play pause": "MEDIA_PLAY_PAUSE",
+    "proxima": "MEDIA_NEXT",
+    "proxima faixa": "MEDIA_NEXT",
+    "faixa seguinte": "MEDIA_NEXT",
+    "anterior": "MEDIA_PREVIOUS",
+    "faixa anterior": "MEDIA_PREVIOUS",
+    "volta 10 segundos": "MEDIA_SEEK_BACK",
+    "voltar 10 segundos": "MEDIA_SEEK_BACK",
+    "retrocede 10 segundos": "MEDIA_SEEK_BACK",
+    "avanca 10 segundos": "MEDIA_SEEK_FORWARD",
+    "avancar 10 segundos": "MEDIA_SEEK_FORWARD",
+    "tela cheia": "MEDIA_FULLSCREEN",
+    "fullscreen": "MEDIA_FULLSCREEN",
+    "sair da tela cheia": "MEDIA_EXIT_FULLSCREEN",
+    "sair do fullscreen": "MEDIA_EXIT_FULLSCREEN",
+}
+
+_VOLUME_CONTROL_PHRASES: dict[str, tuple[VolumeAction, Literal[-5, 5] | None]] = {
+    "volume plus": ("SYSTEM_VOLUME_DELTA", 5),
+    "aumenta o volume": ("SYSTEM_VOLUME_DELTA", 5),
+    "aumentar o volume": ("SYSTEM_VOLUME_DELTA", 5),
+    "volume mais": ("SYSTEM_VOLUME_DELTA", 5),
+    "abaixa o volume": ("SYSTEM_VOLUME_DELTA", -5),
+    "baixar o volume": ("SYSTEM_VOLUME_DELTA", -5),
+    "diminui o volume": ("SYSTEM_VOLUME_DELTA", -5),
+    "volume menos": ("SYSTEM_VOLUME_DELTA", -5),
+    "mudo": ("SYSTEM_MUTE_TOGGLE", None),
+    "mute": ("SYSTEM_MUTE_TOGGLE", None),
+    "ativar mudo": ("SYSTEM_MUTE_TOGGLE", None),
+    "desativar mudo": ("SYSTEM_MUTE_TOGGLE", None),
+}
+
+_VOLUME_LEVEL = re.compile(r"^(?:coloca(?:r)? )?(?:o )?volume(?: em)? (?P<level>\d{1,3})$")
+
+
+def _parse_common_control(normalized: str) -> MediaControlIntent | VolumeControlIntent | None:
+    media_action = _MEDIA_CONTROL_PHRASES.get(normalized)
+    if media_action is not None:
+        return MediaControlIntent(action=media_action)
+
+    volume_action = _VOLUME_CONTROL_PHRASES.get(normalized)
+    if volume_action is not None:
+        action, delta = volume_action
+        return VolumeControlIntent(action=action, delta=delta)
+
+    level_match = _VOLUME_LEVEL.fullmatch(normalized)
+    if level_match is not None:
+        level = int(level_match.group("level"))
+        if 0 <= level <= 100:
+            return VolumeControlIntent(action="SYSTEM_VOLUME_SET", level=level)
+    return None
 
 
 def _parse_search_media(
@@ -389,6 +465,27 @@ def parse_command(command_text: str) -> ParsedIntent:
     link = parse_media_link(command_text)
     if link is not None:
         return OpenMediaLinkIntent(url=link.url)
+
+    negative_volume = re.match(
+        r"^\s*(?:coloca(?:r)?\s+)?(?:o\s+)?volume(?:\s+em)?\s+-\s*\d+\s*$",
+        command_text,
+        re.IGNORECASE,
+    )
+    if negative_volume is not None:
+        return UnknownIntent(original_text=command_text)
+
+    common_control = _parse_common_control(normalized)
+    if common_control is not None:
+        return common_control
+
+    # Frases que se parecem com ajuste numérico, mas estão fora do contrato,
+    # não viram busca de mídia por acidente (por exemplo, "volume -1").
+    if normalized.startswith("volume ") or re.match(
+        r"^\s*(?:coloca(?:r)?\s+)?(?:o\s+)?volume\b",
+        command_text,
+        re.IGNORECASE,
+    ):
+        return UnknownIntent(original_text=command_text)
 
     search_intent = _parse_search_media(command_text)
     if search_intent is not None:

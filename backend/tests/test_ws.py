@@ -28,6 +28,8 @@ from app.platforms.browser import BrowserLaunchResult, BrowserLauncher
 from app.platforms.launcher import PlatformLauncher
 from app.platforms.spotify import SpotifyLauncher
 from app.platforms.search import MediaSearchLauncher
+from app.intelligence.intents import LocalSearchMediaIntent
+from app.intelligence.service import IntentFallbackService
 
 
 @pytest.fixture
@@ -1240,6 +1242,54 @@ def test_authenticated_help_command_returns_supported_examples(client, dispatche
         assert "abre netflix" in result["data"]["commands"]
 
 
+def test_deterministic_media_text_uses_the_existing_media_handler(
+    client,
+    dispatcher,
+    windows_key_event_mock,
+):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "TEXT_COMMAND",
+            "requestId": "text-media",
+            "payload": {"query": "play"},
+        })
+
+        assert websocket.receive_json()["state"] == "BUSY"
+        result = websocket.receive_json()
+        assert websocket.receive_json()["state"] == "READY"
+
+    assert result["data"]["intent"] == "MEDIA_CONTROL"
+    assert result["data"]["action"] == "MEDIA_PLAY_PAUSE"
+    assert windows_key_event_mock.call_count == 2
+
+
+def test_deterministic_volume_text_uses_the_existing_volume_handler(
+    client,
+    dispatcher,
+    volume_adapter_mock,
+):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "TEXT_COMMAND",
+            "requestId": "text-volume",
+            "payload": {"query": "volume 42"},
+        })
+
+        assert websocket.receive_json()["state"] == "BUSY"
+        result = websocket.receive_json()
+        assert websocket.receive_json()["state"] == "READY"
+
+    assert result["data"]["intent"] == "SYSTEM_VOLUME"
+    assert result["data"]["action"] == "SYSTEM_VOLUME_SET"
+    volume_adapter_mock.set_level.assert_awaited_once_with(42)
+
+
 def test_authenticated_unknown_text_command_returns_clear_error(client, dispatcher):
     with client.websocket_connect("/ws") as websocket:
         receive_auth_required(websocket)
@@ -1261,6 +1311,91 @@ def test_authenticated_unknown_text_command_returns_clear_error(client, dispatch
         assert error["code"] == "UNKNOWN_COMMAND"
         assert error["message"] == "Não entendi esse comando."
         assert ready["state"] == "READY"
+
+
+def test_known_text_command_bypasses_the_local_resolver(client, dispatcher):
+    resolver = AsyncMock()
+    dispatcher.intent_service = IntentFallbackService(resolver)
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "TEXT_COMMAND",
+            "requestId": "known-bypass",
+            "payload": {"query": "play"},
+        })
+        assert websocket.receive_json()["state"] == "BUSY"
+        assert websocket.receive_json()["type"] == "COMMAND_RESULT"
+        assert websocket.receive_json()["state"] == "READY"
+
+    resolver.resolve.assert_not_awaited()
+
+
+def test_unknown_text_may_resolve_once_through_local_intent_and_existing_adapter(
+    client,
+    dispatcher,
+    media_search_launcher_mock,
+):
+    resolver = AsyncMock()
+    resolver.resolve.return_value = LocalSearchMediaIntent(
+        intent="SEARCH_MEDIA",
+        platform="YOUTUBE",
+        query="Interestelar trailer",
+    )
+    dispatcher.intent_service = IntentFallbackService(resolver)
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        credentials = pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "TEXT_COMMAND",
+            "requestId": "seed-context",
+            "payload": {"query": "abre YouTube"},
+        })
+        assert websocket.receive_json()["state"] == "BUSY"
+        assert websocket.receive_json()["type"] == "COMMAND_RESULT"
+        assert websocket.receive_json()["state"] == "READY"
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "TEXT_COMMAND",
+            "requestId": "unknown-local",
+            "payload": {"query": "escolhe um filme"},
+        })
+        assert websocket.receive_json()["state"] == "BUSY"
+        result = websocket.receive_json()
+        assert websocket.receive_json()["state"] == "READY"
+
+    assert result["data"]["intent"] == "SEARCH_MEDIA"
+    resolver.resolve.assert_awaited_once()
+    assert resolver.resolve.await_args.args[0] == "escolhe um filme"
+    media_search_launcher_mock.search.assert_called_once_with("YOUTUBE", "Interestelar trailer")
+    context = dispatcher.intent_service.context_store.get(credentials["deviceId"])
+    assert context.query == "Interestelar trailer"
+
+
+def test_invalid_local_output_preserves_unknown_command_fallback(client, dispatcher):
+    resolver = AsyncMock()
+    resolver.resolve.return_value = None
+    dispatcher.intent_service = IntentFallbackService(resolver)
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "TEXT_COMMAND",
+            "requestId": "unknown-safe",
+            "payload": {"query": "escolhe um filme"},
+        })
+        assert websocket.receive_json()["state"] == "BUSY"
+        error = websocket.receive_json()
+        assert websocket.receive_json()["state"] == "READY"
+
+    assert error["code"] == "UNKNOWN_COMMAND"
+    resolver.resolve.assert_awaited_once()
 
 
 def test_websocket_rejects_non_object_payloads(client):
