@@ -153,9 +153,14 @@ def servir(entrada, saida, sonda: Callable[[], dict] | None = None) -> None:
         except PonteFechada:
             return
         except MensagemInvalida as erro:
+            anotar("MENSAGEM_INVALIDA", erro)
             escrever_mensagem(saida, _erro("INVALID_MESSAGE", str(erro)))
             continue
 
+        # Só o TIPO, nunca o payload. O payload carrega `href` e `origem`, e
+        # gravar isso em arquivo transformaria um log de diagnóstico num
+        # histórico de navegação — que o ControlFawkes não coleta e não quer.
+        anotar("RECEBIDA", mensagem.get("messageType"))
         escrever_mensagem(saida, responder(mensagem, sonda))
 
 

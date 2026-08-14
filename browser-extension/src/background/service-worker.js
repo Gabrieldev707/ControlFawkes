@@ -103,6 +103,13 @@ chrome.runtime.onMessage.addListener((mensagem, sender, responder) => {
     },
   }
 
+  // Só o TIPO e a aba. O payload traz `href`, e registrá-lo transformaria o
+  // diário de diagnóstico num histórico de navegação.
+  void registrar('DA_ABA', {
+    messageType: mensagem.messageType,
+    tabId: sender.tab?.id ?? null,
+  })
+
   responder({ ok: enviarAoHost(enriquecida) })
   return false
 })

@@ -451,46 +451,70 @@ Native Messaging) nem stderr (o Chrome captura e descarta). Sem isso, a falha
 mais comum do transporte é silenciosa dos dois lados.
 
 ## Gate
-- [ ] **Extensão carrega.** — BLOQUEADO, ver abaixo
-- [ ] **Content script roda.** — BLOQUEADO, depende do item acima
+- [x] **Extensão carrega.** — provado no Chrome real, ver evidência abaixo
+- [ ] **Content script roda.** — falta uma aba carregada DEPOIS da extensão
 - [x] Worker pode reiniciar sem quebrar estado essencial. — o diário vive em
       `chrome.storage`; o worker não guarda estado em memória
 - [x] Nenhum timer crítico depende do worker. — o relógio está no content
       script, por construção
-- [ ] **FASE 4 NÃO CONCLUÍDA**
+- [ ] **FASE 4 QUASE CONCLUÍDA** — 3 de 4
 
-### BLOQUEIO — precisa de ação humana
+### Evidência: a ponte funcionou ponta a ponta
 
-Carregar a extensão exige clique em `chrome://extensions`, e nenhuma automação
-alcança essa página. Tentei a saída por linha de comando e ela não existe mais:
-
-```text
-Chrome instalado: 151.0.7922.138
---load-extension: removido por segurança a partir da v137
-```
-
-Subi um Chrome isolado (`--user-data-dir` temporário, perfil descartável, sem
-tocar no seu) com `--load-extension` + `--disable-extensions-except`. A extensão
-**não** apareceu no perfil — o `Preferences` não a registrou e não há
-`Local Extension Settings`. Os 8 processos foram encerrados; nada ficou.
-
-**O que falta você fazer, uma vez:**
-
-1. `chrome://extensions`
-2. ligar **Modo do desenvolvedor**
-3. **Carregar sem compactação** → `C:\Dev\Fawkes-Control\browser-extension`
-4. conferir que o ID é `bbnnlajckbgplcfoeabclhkoilboccaf`
-
-Se o ID for outro, o `allowed_origins` não casa e o Chrome recusa em silêncio —
-rode `scripts/instalar_native_host.py` de novo.
-
-**Como saber que funcionou, sem depender de interpretação:**
+Cadeia de processos, com o Chrome do usuário:
 
 ```text
-data/bridge/host.log   deve ganhar uma linha HOST_INICIADO
-chrome://extensions    "Erros" da extensão deve estar vazio
-service worker         console deve mostrar TRANSPORT_CONNECTED
+chrome.exe (25268)  ->  cmd.exe (62552)  ->  python.exe (60020)
 ```
+
+Diário da extensão, lido do `Local Extension Settings` do perfil real:
+
+```text
+21:48:41.268  WORKER_STARTED
+21:48:41.272  INSTALLED
+21:48:41.273  TRANSPORT_CONNECTED
+21:48:41.902  HOST_MESSAGE
+              {"messageType":"PONG","ok":true,
+               "controlfawkes":{"service":"fawkes-remote","status":"ok"}}
+```
+
+Extensão → service worker → Native Messaging → host fino → HTTP → ControlFawkes
+em execução → e a resposta de volta. O transporte escolhido na Fase 1 está
+provado no mundo real.
+
+### Medição do MV3 (o documento mandava medir, não assumir)
+
+**Uma porta de Native Messaging aberta mantém o service worker vivo.** Medido:
+porta aberta às 18:48:41, worker ainda vivo às 19:05:50 — **17 minutos** sem
+nenhuma outra atividade, muito além dos ~30s de inatividade que suspenderiam um
+worker sem porta.
+
+Consequência de projeto: o worker **não** vai reiniciar sozinho enquanto a ponte
+estiver conectada. Isso é conveniente e é uma armadilha — o cenário "worker
+morre no meio da reprodução" fica RARO, não impossível, e código que dependa de
+ele estar vivo passa em teste e falha em produção. O relógio continua no content
+script.
+
+### O que falta, e por quê
+
+Content script declarado no manifesto **só injeta em abas carregadas depois** da
+extensão. A extensão foi carregada com as abas já abertas, então nenhuma delas
+tem o script.
+
+**Ação:** abrir qualquer aba `http`/`https` nova (não `chrome://`, onde content
+script não roda por política do Chrome).
+
+**Verificação, sem interpretação:**
+
+```text
+data/bridge/host.log                    ganha  RECEBIDA PORT_CONNECTED
+                                        e depois RECEBIDA POSITION_SYNC a cada 10s
+diário da extensão (chrome.storage)     ganha  DA_ABA
+```
+
+Os dois registros gravam **só o tipo da mensagem**, nunca o payload: ele carrega
+`href` e `origem`, e gravar isso transformaria um log de diagnóstico num
+histórico de navegação — que o ControlFawkes não coleta e não quer.
 
 ---
 
