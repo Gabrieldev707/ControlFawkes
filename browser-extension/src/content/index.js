@@ -7,19 +7,40 @@
  * onde um relógio é honesto. Master Loop, critério de implementação incorreta
  * nº 4.
  *
- * O que ele faz na Fase 4: prova que roda, e prova que o relógio dele sobrevive
- * ao worker reiniciar. A observação do `<video>` entra na Fase 5.
+ * Medido nesta máquina: uma porta de Native Messaging aberta MANTÉM o worker
+ * vivo (17 minutos sem outra atividade). Isso torna a morte do worker RARA, não
+ * impossível — e é exatamente o tipo de coisa que passa em teste e falha em
+ * produção. O relógio continua aqui.
  *
  * SEM `import`, de propósito: um content script declarado no manifesto NÃO é
  * módulo, e `import` ali é erro de sintaxe — a aba fica sem script e nada
- * acusa. As três constantes abaixo são a duplicação mínima de
- * `../messaging/messages.js`, e a decisão de introduzir um passo de build (que
- * acabaria com a duplicação) está adiada de propósito: um bundler na Fase 4
- * seria complexidade antes de necessidade.
+ * acusa. `video-observer.js` é carregado antes no manifesto e deixa
+ * `criarObservador` visível neste escopo (mundo isolado, não vaza para a
+ * página). A decisão de introduzir um bundler segue adiada.
  */
 
 const PROTOCOL_VERSION = 1
+
+/**
+ * Batimento esparso, e não um por segundo.
+ *
+ * A posição real é observada continuamente aqui dentro; o que é caro é
+ * ATRAVESSAR as fronteiras — `sendMessage` até o worker, stdio até o host. Com
+ * `currentTime` de verdade disponível, o consumidor extrapola entre um
+ * batimento e outro e corrige quando o próximo chega. Um por segundo por aba
+ * seria gastar tráfego constante para dizer o que o relógio já sabe.
+ */
 const SEGUNDOS_ENTRE_BATIMENTOS = 10
+
+/** Eventos do elemento que merecem envio IMEDIATO, sem esperar o batimento. */
+const IMEDIATOS = {
+  play: 'PLAY',
+  pause: 'PAUSE',
+  ended: 'ENDED',
+  seeked: 'SEEK',
+  bound: 'SESSION_STARTED',
+  detached: 'MEDIA_CHANGED',
+}
 
 let sequencia = 0
 
@@ -42,20 +63,34 @@ async function enviar(messageType, payload) {
   }
 }
 
-void enviar('PORT_CONNECTED', { href: location.href, origem: location.origin })
+/** O que a aba sempre sabe de si. Sem `href`: não coletamos navegação. */
+function contexto() {
+  return { provider: location.hostname }
+}
+
+const observador = criarObservador((tipo, leitura) => {
+  const messageType = IMEDIATOS[tipo]
+  // Eventos sem envio imediato (`loadedmetadata`, `durationchange`,
+  // `ratechange`, `seeking`, `emptied`) não somem: o próximo batimento leva o
+  // estado já atualizado. Mandar um por evento encheria o cano com o que o
+  // batimento diria de qualquer jeito.
+  if (messageType === undefined) return
+  void enviar(messageType, { ...contexto(), ...(leitura ?? {}) })
+})
 
 // O relógio. Sobrevive ao worker reiniciar porque não é o worker que o mantém.
 const relogio = setInterval(() => {
-  void enviar('POSITION_SYNC', {
-    // A Fase 5 troca isto pela leitura real do elemento. Aqui só prova que o
-    // batimento continua saindo com o worker indo e voltando.
-    observadoEm: Date.now(),
-  })
+  const leitura = observador.ler()
+  // Sem elemento não há o que sincronizar. Mandar um batimento vazio faria o
+  // backend achar que a aba tem mídia parada, em vez de mídia nenhuma.
+  if (leitura === null) return
+  void enviar('POSITION_SYNC', { ...contexto(), ...leitura })
 }, SEGUNDOS_ENTRE_BATIMENTOS * 1000)
 
 // A aba indo embora encerra a sessão de forma explícita, em vez de deixar o
 // backend adivinhar por silêncio.
 addEventListener('pagehide', () => {
   clearInterval(relogio)
-  void enviar('SESSION_ENDED', { motivo: 'pagehide' })
+  observador.parar()
+  void enviar('SESSION_ENDED', { ...contexto(), motivo: 'pagehide' })
 }, { once: true })

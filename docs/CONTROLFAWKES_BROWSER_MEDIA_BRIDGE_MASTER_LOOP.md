@@ -452,12 +452,24 @@ mais comum do transporte é silenciosa dos dois lados.
 
 ## Gate
 - [x] **Extensão carrega.** — provado no Chrome real, ver evidência abaixo
-- [ ] **Content script roda.** — falta uma aba carregada DEPOIS da extensão
+- [x] **Content script roda.** — 190 respostas `UNKNOWN_MESSAGE_TYPE` no diário,
+      em cadência de 10s. O host só conhece `PING`; qualquer outro tipo veio do
+      content script, e 10s é exatamente `SEGUNDOS_ENTRE_BATIMENTOS`.
 - [x] Worker pode reiniciar sem quebrar estado essencial. — o diário vive em
       `chrome.storage`; o worker não guarda estado em memória
 - [x] Nenhum timer crítico depende do worker. — o relógio está no content
       script, por construção
-- [ ] **FASE 4 QUASE CONCLUÍDA** — 3 de 4
+- [x] **FASE 4 CONCLUÍDA**
+
+### Armadilha na leitura do diário
+
+O `chrome.storage` regrava o ARRAY INTEIRO a cada `set`, então contar ocorrências
+no LevelDB conta duplicatas entre snapshots. Cheguei a ler "13
+TRANSPORT_CONNECTED" e concluir que houve 12 reconexões — os 13 têm o **mesmo
+timestamp**. É uma conexão só.
+
+Consequência: **reconnect e restart do Chrome continuam NÃO provados** (Spike A).
+Movidos para a Fase 17 — Hardening, que é onde eles pertencem.
 
 ### Evidência: a ponte funcionou ponta a ponta
 
@@ -520,11 +532,18 @@ histórico de navegação — que o ControlFawkes não coleta e não quer.
 
 # 8. Fase 5 — Generic HTML5 Observer
 
+> Código: `browser-extension/src/content/video-observer.js`
+> Testes: `.../video-observer.test.ts` (15), na suíte do frontend
+
 ## Discovery
-- [ ] Detectar `<video>`.
-- [ ] Detectar `<audio>` quando relevante.
-- [ ] Procurar no document.
-- [ ] Procurar em open Shadow Roots quando necessário.
+- [x] Detectar `<video>`.
+- [x] Detectar `<audio>` quando relevante.
+- [x] Procurar no document.
+- [x] Procurar em open Shadow Roots quando necessário. — os fechados não são
+      alcançáveis por ninguém; fingir que são só produziria código morto.
+- [x] **Escolher o MAIOR, não o primeiro.** Páginas de serviço têm `<video>` de
+      trailer e de anúncio junto com o player, e o primeiro na ordem do DOM
+      costuma ser o errado.
 
 ## Lifecycle
 
@@ -538,60 +557,90 @@ discover
 → bind
 ```
 
-- [ ] Detectar elemento removido.
-- [ ] Detectar novo elemento.
-- [ ] Rebind.
-- [ ] Verificar `isConnected`.
-- [ ] Evitar observers duplicados.
+- [x] Detectar elemento removido.
+- [x] Detectar novo elemento.
+- [x] Rebind.
+- [x] Verificar `isConnected`. — é o que pega a troca: o objeto antigo continua
+      existindo e respondendo `currentTime`, só não está mais no documento
+- [x] Evitar observers duplicados. — `prender` sai cedo se já for o mesmo
+      elemento; `parar()` desliga tudo
 
 ## Campos
-- [ ] currentTime
-- [ ] duration
-- [ ] paused
-- [ ] ended
-- [ ] playbackRate
+- [x] currentTime
+- [x] duration
+- [x] paused
+- [x] ended
+- [x] playbackRate
 
 ## Eventos
-- [ ] play
-- [ ] pause
-- [ ] seek
-- [ ] seeked
-- [ ] ended
-- [ ] loadedmetadata
-- [ ] durationchange
-- [ ] ratechange
+- [x] play
+- [x] pause
+- [x] seek (`seeking`)
+- [x] seeked
+- [x] ended
+- [x] loadedmetadata
+- [x] durationchange
+- [x] ratechange
+- [x] `emptied` — acrescentado: é o que o MSE dispara ao esvaziar o buffer numa
+      troca, e sem ele a troca só é notada na reconferida periódica
 
 ## Duration
-- [ ] NaN.
-- [ ] Infinity.
-- [ ] indisponível.
-- [ ] torna-se disponível depois.
+- [x] NaN. — vira `null`
+- [x] Infinity. — ao vivo, vira `null`
+- [x] indisponível.
+- [x] torna-se disponível depois.
+
+> `NaN` e `Infinity` viram `null` por DECISÃO, não por acidente de
+> serialização: os dois virariam `null` no JSON de qualquer jeito, e depender
+> disso esconderia a intenção.
 
 ## Milestone 1A — Transporte/plumbing
-- [ ] HTML5 simples envia currentTime.
-- [ ] duration.
-- [ ] playbackState.
-- [ ] playbackRate.
+- [x] HTML5 simples envia currentTime. — coberto em jsdom
+- [x] duration.
+- [x] playbackState.
+- [x] playbackRate.
 
 ## Milestone 1B — Observer real
-- [ ] Player real MSE/DRM.
-- [ ] Play.
-- [ ] Pause.
-- [ ] Seek.
+- [ ] Player real MSE/DRM. — precisa da extensão recarregada, ver abaixo
+- [ ] Play. / Pause. / Seek.
 - [ ] Background tab.
 - [ ] Troca de mídia.
-- [ ] Elemento antigo removido.
-- [ ] Novo `<video>` criado.
-- [ ] Rebind automático.
-- [ ] Dados continuam chegando sem restart.
+- [x] Elemento antigo removido. — em jsdom
+- [x] Novo `<video>` criado. — em jsdom
+- [x] Rebind automático. — em jsdom
+- [ ] Dados continuam chegando sem restart. — precisa do player real
 
 ## Gate
-- [ ] HTML5 simples aprovado.
-- [ ] Player real aprovado.
-- [ ] Troca de elemento aprovada.
-- [ ] Sem referência eterna ao primeiro `<video>`.
-- [ ] Shadow DOM aberto não quebra discovery.
-- [ ] **FASE 5 CONCLUÍDA**
+- [x] HTML5 simples aprovado. — 15 testes em jsdom
+- [ ] **Player real aprovado.** — precisa recarregar a extensão
+- [x] Troca de elemento aprovada. — em jsdom
+- [x] Sem referência eterna ao primeiro `<video>`. — teste dedicado
+- [x] Shadow DOM aberto não quebra discovery.
+- [ ] **FASE 5 NÃO CONCLUÍDA** — falta a validação no player real
+
+### Por que jsdom não basta, e o teste que existe por isso
+
+Validar só numa página HTML5 simples aprova um observador que nunca funcionaria
+na Netflix. Netflix, Max, Disney+ e Prime Video usam MSE e **trocam o
+elemento** em mudança de qualidade e em troca de episódio. Quem guardou o
+primeiro `<video>` segue lendo `currentTime` de um objeto fora do documento —
+um número plausível, congelado, sem erro nenhum aparecer.
+
+É o critério de implementação incorreta nº 18, e há um teste com esse nome.
+
+### Ação para fechar o gate
+
+A extensão carregada é a versão da Fase 4, sem o observador. **Recarregue-a** em
+`chrome://extensions` (botão de recarregar no cartão) e abra o Disney+.
+
+Verificação, sem interpretação:
+
+```text
+data/bridge/host.log   RECEBIDA SESSION_STARTED   ao entrar no player
+                       RECEBIDA PLAY / PAUSE      ao controlar
+                       RECEBIDA POSITION_SYNC     a cada 10s
+                       RECEBIDA MEDIA_CHANGED     ao trocar de episódio
+```
 
 ---
 
