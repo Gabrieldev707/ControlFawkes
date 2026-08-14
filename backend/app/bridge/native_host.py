@@ -111,6 +111,17 @@ def _erro(codigo: str, detalhe: str) -> dict:
     }
 
 
+# Desliga o log de diagnóstico. Existe para a suíte: os testes exercitam
+# `servir()` de verdade, e sem isto cada execução despeja linhas no log da
+# máquina — poluindo justamente o arquivo que serve para saber se o Chrome
+# conectou. Medido: uma rodada de testes gravou cinco "RECEBIDA PING" que
+# pareciam vir do navegador.
+#
+# Mesma forma da trava de instância: variável de ambiente, e não detecção de
+# pytest dentro do código de produção. Quem desliga diz isso em voz alta.
+VARIAVEL_SEM_LOG = "CONTROLFAWKES_BRIDGE_SEM_LOG"
+
+
 def anotar(evento: str, detalhe: object = None) -> None:
     """Registra em ARQUIVO, nunca em stdout.
 
@@ -123,8 +134,12 @@ def anotar(evento: str, detalhe: object = None) -> None:
     extensão vê "porta desconectada" e o host, quando chega a subir, morre sem
     deixar rastro. Com o arquivo, "não funcionou" vira uma linha com hora.
     """
+    import os
     from datetime import datetime
     from pathlib import Path
+
+    if os.environ.get(VARIAVEL_SEM_LOG, "").strip() not in ("", "0"):
+        return
 
     caminho = Path(__file__).resolve().parent.parent.parent / "data" / "bridge" / "host.log"
     try:
