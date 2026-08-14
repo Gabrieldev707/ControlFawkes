@@ -29,6 +29,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 import json
+import time
 
 from app.bridge.framing import (
     MensagemInvalida,
@@ -81,9 +82,21 @@ def responder(mensagem: dict, sonda: Callable[[], dict] | None = None) -> dict:
 
     tipo = mensagem.get("messageType")
     if tipo != "PING":
-        # A Fase 1 conhece uma mensagem só. Recusar o resto explicitamente é o
-        # que impede o spike de virar protocolo por acidente.
-        return _erro("UNKNOWN_MESSAGE_TYPE", f"Tipo desconhecido: {tipo!r}.")
+        # Fase 6: os eventos de mídia passam pela validação e viram ACK. O host
+        # continua sendo relay — ele não interpreta o que o evento SIGNIFICA,
+        # só confere que é utilizável antes de deixar entrar.
+        from app.bridge.eventos import Recusa, validar
+
+        resultado = validar(mensagem, time.time())
+        if isinstance(resultado, Recusa):
+            anotar("RECUSADA", f"{resultado.code} {resultado.detail}")
+            return _erro(resultado.code, resultado.detail)
+        return {
+            "protocolVersion": PROTOCOL_VERSION,
+            "messageType": "ACK",
+            "ok": True,
+            "accepted": resultado.messageType,
+        }
 
     try:
         saude = sonda()

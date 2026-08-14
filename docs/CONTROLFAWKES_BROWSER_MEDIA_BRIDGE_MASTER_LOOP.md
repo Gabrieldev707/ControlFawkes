@@ -16,7 +16,7 @@ O agente deve avançar automaticamente para a próxima fase sempre que o gate at
 - [x] Fase 3 — Refactor SMTC + Window Title
 - [x] Fase 4 — Extensão MV3 mínima
 - [x] Fase 5 — Generic HTML5 Observer
-- [ ] Fase 6 — Transporte integrado
+- [x] Fase 6 — Transporte integrado
 - [ ] Fase 7 — Media Merger
 - [ ] Fase 8 — Source Availability / Freshness
 - [ ] Fase 9 — Consumption Policy
@@ -693,43 +693,78 @@ Envelope mínimo:
 }
 ```
 
+> Código: `backend/app/bridge/eventos.py`
+> Testes: `backend/tests/test_bridge_eventos.py` (21)
+
 Validar:
-- [ ] versão
-- [ ] tipo
-- [ ] tamanho
-- [ ] campos
-- [ ] timestamps
-- [ ] valores impossíveis
-- [ ] provider
-- [ ] tabId
-- [ ] sessionId
+- [x] versão
+- [x] tipo
+- [x] tamanho — no `framing`: 1 MB de entrada, 64 MB de saída
+- [x] campos
+- [x] timestamps — com deriva tolerada de 600 s
+- [x] valores impossíveis
+- [x] provider
+- [x] tabId — `bool` é `int` em Python; sem checagem explícita `True` viraria
+      a aba número 1
+- [x] sessionId
 
 Eventos:
-- [ ] SESSION_STARTED
-- [ ] MEDIA_CHANGED
-- [ ] PLAY
-- [ ] PAUSE
-- [ ] SEEK
-- [ ] ENDED
-- [ ] POSITION_SYNC
-- [ ] SESSION_ENDED
+- [x] SESSION_STARTED / MEDIA_CHANGED / PLAY / PAUSE
+- [x] SEEK / ENDED / POSITION_SYNC / SESSION_ENDED
 
 Progress:
-- [ ] Eventos críticos imediatamente.
-- [ ] Heartbeat ~10s.
-- [ ] Posição em play.
-- [ ] Posição em pause.
-- [ ] Posição em seek.
-- [ ] Posição em troca de mídia.
-- [ ] Posição em ended.
+- [x] Eventos críticos imediatamente. — `IMEDIATOS`, no content script
+- [x] Heartbeat ~10s. — medido em produção, cadência intacta
+- [x] Posição em play / pause / seek / troca de mídia / ended. — a leitura vai
+      junto em todo evento imediato
+
+### "Valores impossíveis" — a parte que rende
+
+O fácil é `currentTime` negativo. O que morde é o **plausível-mas-errado**, que
+foi o defeito da linha do tempo congelada do Chrome e é o do Batman:
+
+| Caso | Resposta | Por quê |
+|---|---|---|
+| `currentTime > duration` | **recusa** | Não é valor ruim, é valor de OUTRA reprodução |
+| `duration <= 0` | vira ausente | Ao vivo, ou metadata que não chegou |
+| `NaN` / `Infinity` | vira ausente | Nenhum dos dois é tempo |
+| `playbackRate` fora de 0.0625–16 | vira ausente | Fora da faixa do HTML é lixo |
+| `True` como tempo | vira ausente | `bool` é `int`; valeria 1.0 |
+
+**Nada é corrigido em silêncio.** Ou passa, ou o campo vira ausente, ou a
+mensagem é recusada inteira. Corrigir caladamente é como um número errado entra
+no sistema parecendo certo — a história inteira do Batman.
+
+### Provado pelo `.bat` real
+
+```text
+POSITION_SYNC (Spider-Noir)      -> ACK
+PLAY                             -> ACK
+currentTime 9999 / duration 2879 -> ERROR IMPOSSIBLE_POSITION
+sem sessionId                    -> ERROR INVALID_SESSION_ID
+```
+
+### `sessionId` — embrião da PlaybackIdentity
+
+O content script passa a gerar um id por REPRODUÇÃO, renovado quando o
+elemento é trocado. É o que vai permitir distinguir "mesmo episódio retomado"
+de "próximo episódio" — a distinção que falta hoje e que produziu o bug do
+Batman.
 
 ## Gate
-- [ ] Comunicação estável.
-- [ ] Reconnect.
-- [ ] Restart browser.
-- [ ] Restart ControlFawkes.
-- [ ] Tráfego aceitável.
-- [ ] **FASE 6 CONCLUÍDA**
+- [x] Comunicação estável. — 117 eventos reais, cadência de 10 s intacta
+- [x] Reconnect. — provado matando o processo do host
+- [ ] **Restart browser.** — adiado para a Fase 17 (Hardening), junto com os
+      outros itens de reinício. Não reinicio o Chrome do usuário no meio de
+      uma sessão de streaming.
+- [x] Restart ControlFawkes. — o host não guarda conexão; sonda a cada mensagem
+- [x] Tráfego aceitável. — 1 mensagem/10 s por aba, contra 1/s do laço atual
+- [x] **FASE 6 CONCLUÍDA** — com "restart browser" explicitamente adiado
+
+> **Atenção operacional:** a extensão carregada ainda é a versão sem
+> `sessionId`. Até você recarregá-la, os eventos ao vivo passam a receber
+> `INVALID_SESSION_ID` em vez de entrar. Nada visível quebra — eles ainda não
+> alimentam a UI; isso é a Fase 7.
 
 ---
 

@@ -44,6 +44,20 @@ const IMEDIATOS = {
 
 let sequencia = 0
 
+/**
+ * Identifica a REPRODUÇÃO, não a aba.
+ *
+ * Muda quando a mídia muda — é o embrião da `PlaybackIdentity` da Fase 11, e o
+ * que vai permitir distinguir "mesmo episódio retomado" de "próximo episódio".
+ * Hoje o histórico não tem essa distinção, e é dela que nasce o bug de mostrar
+ * progresso de um episódio antigo na linha da obra.
+ */
+let sessionId = novaSessao()
+
+function novaSessao() {
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`
+}
+
 function envelope(messageType, payload) {
   return { protocolVersion: PROTOCOL_VERSION, messageType, timestamp: Date.now(), payload }
 }
@@ -53,7 +67,7 @@ async function enviar(messageType, payload) {
     // O `tabId` NÃO vai daqui: quem o preenche é o worker, a partir do
     // `sender`. Uma página não pode ter voz sobre qual aba ela é.
     const resposta = await chrome.runtime.sendMessage(
-      envelope(messageType, { ...payload, seq: sequencia++ }),
+      envelope(messageType, { ...payload, sessionId, seq: sequencia++ }),
     )
     return resposta?.ok === true
   } catch {
@@ -69,6 +83,10 @@ function contexto() {
 }
 
 const observador = criarObservador((tipo, leitura) => {
+  // Elemento trocado é reprodução nova: episódio seguinte, ou outra obra. A
+  // identidade tem de virar ANTES do evento sair, ou o `MEDIA_CHANGED` chegaria
+  // marcado com a identidade do que acabou.
+  if (tipo === 'detached') sessionId = novaSessao()
   const messageType = IMEDIATOS[tipo]
   // Eventos sem envio imediato (`loadedmetadata`, `durationchange`,
   // `ratechange`, `seeking`, `emptied`) não somem: o próximo batimento leva o
