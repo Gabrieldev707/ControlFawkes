@@ -14,8 +14,8 @@ O agente deve avançar automaticamente para a próxima fase sempre que o gate at
 - [x] Fase 1 — Decisão de transporte → **Native Messaging**
 - [x] Fase 2 — Contratos e modelos
 - [x] Fase 3 — Refactor SMTC + Window Title
-- [ ] Fase 4 — Extensão MV3 mínima
-- [ ] Fase 5 — Generic HTML5 Observer
+- [x] Fase 4 — Extensão MV3 mínima
+- [x] Fase 5 — Generic HTML5 Observer
 - [ ] Fase 6 — Transporte integrado
 - [ ] Fase 7 — Media Merger
 - [ ] Fase 8 — Source Availability / Freshness
@@ -601,22 +601,58 @@ discover
 - [x] playbackRate.
 
 ## Milestone 1B — Observer real
-- [ ] Player real MSE/DRM. — precisa da extensão recarregada, ver abaixo
-- [ ] Play. / Pause. / Seek.
-- [ ] Background tab.
-- [ ] Troca de mídia.
-- [x] Elemento antigo removido. — em jsdom
-- [x] Novo `<video>` criado. — em jsdom
-- [x] Rebind automático. — em jsdom
-- [ ] Dados continuam chegando sem restart. — precisa do player real
+- [x] Player real MSE/DRM. — Prime Video, Spider-Noir, medido ao vivo
+- [x] Play. / Pause. / Seek. — 6 PLAY, 5 PAUSE, 6 SEEK no `host.log`
+- [x] Background tab.
+- [x] Troca de mídia. — 6 `MEDIA_CHANGED`, cada um um `detached` + rebind
+- [x] Elemento antigo removido. — jsdom + player real
+- [x] Novo `<video>` criado.
+- [x] Rebind automático. — os `POSITION_SYNC` continuam depois de cada troca
+- [x] Dados continuam chegando sem restart.
+
+### Medição ao vivo — Prime Video, Spider-Noir
+
+```text
+20:07:31  POSITION_SYNC  playing  currentTime=1389.945105  duration=2879.606  rate=1
+20:07:41  POSITION_SYNC  playing  currentTime=1399.936140  duration=2879.606  rate=1
+20:07:51  POSITION_SYNC  playing  currentTime=1409.935132  duration=2879.606  rate=1
+```
+
+`currentTime` avança **+9,99 s a cada batimento de 10 s**. `duration` estável e
+coerente (48 min). `playbackRate` correto. 117 eventos recebidos no total, com
+a cadência de 10 s intacta.
+
+### Bônus: "host morto" do Spike A, fechado
+
+Matei o processo do host à força para carregar o código novo. A extensão
+**reconectou sozinha em menos de 10 s** — o `enviarAoHost` reabre a porta no
+próximo batimento. Isso fecha um dos itens que a Fase 1 tinha deixado para a
+Fase 17.
+
+### Decisão revista: o que é "navegação" no log
+
+O log gravava só o TIPO da mensagem, para não virar histórico de navegação. Mas
+sem os valores a Fase 5 não tinha como ser provada — o log dizia que uma
+mensagem chegou, não o que ela dizia.
+
+A regra continua; o que mudou é a leitura de quais campos **são** navegação:
+`href` e `provider` dizem onde a pessoa esteve; `currentTime` e `duration`
+dizem quanto tempo tem um vídeo, e isso não identifica nada. Só os quatro
+campos temporais entram (`_CAMPOS_TEMPORAIS`).
 
 ## Gate
 - [x] HTML5 simples aprovado. — 15 testes em jsdom
-- [ ] **Player real aprovado.** — precisa recarregar a extensão
-- [x] Troca de elemento aprovada. — em jsdom
+- [x] **Player real aprovado.** — Prime Video, com valores medidos
+- [x] Troca de elemento aprovada. — jsdom e player real
 - [x] Sem referência eterna ao primeiro `<video>`. — teste dedicado
 - [x] Shadow DOM aberto não quebra discovery.
-- [ ] **FASE 5 NÃO CONCLUÍDA** — falta a validação no player real
+- [x] **FASE 5 CONCLUÍDA**
+
+### O bug do Batman NÃO bloqueia esta fase
+
+A investigação separou as três camadas, e a origem **não é o observador** —
+que acabou de provar medir o player real corretamente. Ver o registro completo
+na seção de bugs.
 
 ### Por que jsdom não basta, e o teste que existe por isso
 
@@ -1207,6 +1243,66 @@ o gate da Fase 4 e os 4 itens do Spike A que dependiam disso, e seguir para a
 Fase 5 (Generic HTML5 Observer).`
 
 ## Bugs encontrados
+
+### Fase 5 — o bug do Batman (aberto, correção nas Fases 11/12)
+
+Sintoma: o Perfil mostrava **`faltam 20 min`** para `Batman: Caped Crusader`,
+uma série já assistida até o fim.
+
+Rastreamento completo, com os números reais de 14/08/2026:
+
+```text
+UI            "faltam 20 min"
+              calculado NO FRONTEND, em `restanteDe` (ProfileScreen.tsx)
+              a partir de posicao/duracao cruas que /profile entrega
+
+persistido    posicao  484.9      duracao  1680.0 (28 min)
+              segundos 7850       (131 min assistidos)
+              vistoEm  14/08 04:38
+
+proporcao     484.9 / 1680.0 = 0,289  ->  terminado = False
+restante      1680.0 - 484.9 = 1195 s = 20 min   <- o texto da tela
+```
+
+**Duas causas somadas, nenhuma delas no observador:**
+
+1. **Identidade.** A linha é chaveada pela OBRA e carrega posição e duração de
+   um EPISÓDIO. O sinal está à vista: **7850 s assistidos contra 1680 s de
+   duração — 4,7 vezes**. Nenhuma reprodução de 28 minutos foi vista por 131.
+   É a mistura WorkIdentity × PlaybackIdentity que a **Fase 11** desfaz.
+
+2. **Fóssil.** `registrar` preserva a posição anterior quando a nova é `None` —
+   e isso é CORRETO para o caso que originou a regra (uma leitura em que a
+   janela não respondeu não pode apagar o que outra já achou). Só que com a
+   SMTC pendurada, que é o estado medido desta máquina, a posição é **sempre**
+   `None`. O valor de 04:38 nunca mais é atualizado nem alcança os 94% que o
+   marcariam como terminado. Fica lá, plausível e errado.
+
+**Respostas às 10 perguntas:**
+
+| # | Pergunta | Resposta |
+|---|---|---|
+| 1 | `currentTime` persistido | 484.943334 |
+| 2 | `duration` persistida | 1680.008 (um episódio) |
+| 3 | De qual episódio | **Indeterminável** — o registro não tem campo de episódio |
+| 4 | Estado de conclusão | Não existe; `terminado` é derivado de posição/duração |
+| 5 | `ENDED` registrado | **Não.** O histórico não tem o conceito |
+| 6 | Concluir episódio atualiza a posição | **Não**, com a SMTC pendurada |
+| 7 | Concluir a série altera algo | **Não** |
+| 8 | Usa progresso de episódio anterior | **Sim** — é exatamente isso |
+| 9 | Mistura Work × Playback | **Sim** |
+| 10 | Onde "faltam 20 min" é calculado | **No frontend**, de dados crus do backend |
+
+**Camada responsável:** persistência/identidade. **Não** o observador, que
+acabou de provar medir o player real corretamente.
+
+**Testes:** `test_o_estado_atual_do_bug_do_batman` fixa o defeito como fato com
+os números reais; `test_serie_terminada_nao_pode_exibir_progresso_de_episodio_antigo`
+é `xfail(strict=True)` — quando a correção entrar, ele passa a falhar por
+passar, e alguém tem de vir tirar o marcador em vez de deixá-lo apodrecendo.
+
+Não escondi o `faltam X min` na UI: a tela só revelou a inconsistência, e
+apagar o sintoma deixaria o dado errado no arquivo.
 
 ### Fase 1
 

@@ -185,6 +185,107 @@ def test_pruning_a_clean_history_changes_nothing(store: HistoryStore):
     assert store._caminho.read_text(encoding="utf-8") == antes
 
 
+# ── O bug do Batman: progresso de EPISÓDIO numa linha de OBRA ─────────────
+#
+# Medido no histórico real em 14/08/2026, com a série já assistida até o fim:
+#
+#     titulo    Batman: Caped Crusader
+#     segundos  7850   (131 min assistidos)
+#     posicao   484.9
+#     duracao   1680.0 (28 min — UM EPISÓDIO)
+#     vistoEm   14/08 04:38
+#
+# A tela do Perfil mostrava "faltam 20 min" para uma série terminada.
+#
+# São dois defeitos somados, e nenhum deles é do observador:
+#
+#   1. IDENTIDADE. A linha é chaveada pela OBRA (`PRIME_VIDEO::batman: caped
+#      crusader`) e carrega posição e duração de um EPISÓDIO. É a mistura entre
+#      WorkIdentity e PlaybackIdentity que a Fase 11 do Master Loop existe para
+#      desfazer. O sinal está à vista: 7850s assistidos contra 1680s de duração
+#      — 4,7 vezes. Nenhuma reprodução de 28 minutos foi vista por 131.
+#
+#   2. FÓSSIL. `registrar` preserva a posição anterior quando a nova é `None`.
+#      Com a SMTC pendurada — que é o estado medido desta máquina — a posição é
+#      SEMPRE `None`, então o valor de 04:38 nunca mais é atualizado nem chega
+#      a 94% para virar "terminado". Ele fica lá para sempre, plausível e
+#      errado.
+#
+# A UI apenas revelou a inconsistência: `faltam 20 min` é calculado no
+# frontend (`restanteDe`, em ProfileScreen.tsx) a partir de `posicao` e
+# `duracao` cruas que o `/profile` entrega. Esconder o texto não corrigiria
+# nada — só apagaria o sintoma.
+
+
+def test_o_estado_atual_do_bug_do_batman(store: HistoryStore):
+    """Fixa o defeito como FATO, com os números reais.
+
+    Não descreve o comportamento desejado — descreve o que acontece hoje, para
+    que a correção da Fase 11/12 tenha contra o que ser medida.
+    """
+    store.registrar(
+        "Batman: Caped Crusader", "PRIME_VIDEO",
+        segundos=7850, posicao=484.943334, duracao=1680.008, agora=1,
+    )
+
+    item = store.continuar()[0]
+
+    # 131 minutos assistidos de uma "obra" que dura 28.
+    assert item.segundos / item.duracao > 4
+    # E ainda assim ela conta como pela metade, porque 484/1680 = 0,29.
+    assert item.terminado is False
+    assert round(item.duracao - item.posicao) == 1195  # os "20 min" da tela
+
+
+def test_uma_leitura_sem_posicao_nao_apaga_o_fossil(store: HistoryStore):
+    """O mecanismo que congela o número: `None` preserva o valor anterior.
+
+    Existe para a Fase 12 não "consertar" isso por engano. A preservação é
+    CORRETA no caso para o qual foi escrita — uma leitura em que a janela não
+    respondeu não pode apagar a posição que outra já tinha achado. O defeito é
+    a posição pertencer à obra em vez de à reprodução.
+    """
+    store.registrar("Duna", "MAX", 600, posicao=100.0, duracao=9000.0, agora=1)
+    store.registrar("Duna", "MAX", 600, posicao=None, duracao=None, agora=2)
+
+    assert store.listar()[0].posicao == 100.0
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "Bug do Batman, ainda não corrigido. A correção pertence à Fase 11 "
+        "(PlaybackIdentity != WorkIdentity) e à Fase 12 (histórico) do Master "
+        "Loop. `strict=True` de propósito: quando a correção entrar, este "
+        "teste passa a FALHAR por passar, e alguém tem de vir aqui tirar o "
+        "marcador em vez de deixá-lo apodrecendo."
+    ),
+)
+def test_serie_terminada_nao_pode_exibir_progresso_de_episodio_antigo(
+    store: HistoryStore,
+):
+    """O comportamento que se quer, escrito antes de existir.
+
+    Quando o tempo assistido supera a duração persistida, essa duração não
+    descreve a obra — descreve um episódio. Nesse caso não há progresso que se
+    possa afirmar, e a tela não pode anunciar quanto falta.
+
+    A correção pode tomar mais de uma forma (marcar a linha como terminada,
+    zerar a posição, guardar posição por reprodução). Este teste exige apenas
+    que a tela pare de mentir.
+    """
+    store.registrar(
+        "Batman: Caped Crusader", "PRIME_VIDEO",
+        segundos=7850, posicao=484.943334, duracao=1680.008, agora=1,
+    )
+
+    pendentes = {item.titulo: item for item in store.continuar()}
+    batman = pendentes.get("Batman: Caped Crusader")
+
+    # Ou some de "continuar assistindo", ou fica sem posição para exibir.
+    assert batman is None or batman.posicao is None
+
+
 def test_the_same_name_on_another_service_is_another_line(store: HistoryStore):
     store.registrar("O Justiceiro", "MAX", 600, None, None, agora=1)
     store.registrar("O Justiceiro", "DISNEY_PLUS", 600, None, None, agora=2)

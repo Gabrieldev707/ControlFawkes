@@ -151,6 +151,28 @@ def anotar(evento: str, detalhe: object = None) -> None:
         pass
 
 
+# Os únicos campos do payload que vão para o log.
+#
+# A regra continua a mesma — não gravar navegação. O que mudou é a leitura de
+# quais campos SÃO navegação: `href` e `provider` dizem onde a pessoa esteve;
+# `currentTime` e `duration` dizem quanto tempo tem um vídeo, e isso não
+# identifica nada. Sem eles a Fase 5 não tem como provar que o observador mede
+# certo — o log diria que uma mensagem chegou, e não o que ela dizia.
+_CAMPOS_TEMPORAIS = ("playbackState", "currentTime", "duration", "playbackRate")
+
+
+def _temporais(mensagem: dict) -> str:
+    payload = mensagem.get("payload")
+    if not isinstance(payload, dict):
+        return ""
+    partes = [
+        f"{campo}={payload[campo]}"
+        for campo in _CAMPOS_TEMPORAIS
+        if campo in payload
+    ]
+    return " ".join(partes)
+
+
 def servir(entrada, saida, sonda: Callable[[], dict] | None = None) -> None:
     """O laço do host: uma mensagem entra, uma resposta sai.
 
@@ -172,10 +194,7 @@ def servir(entrada, saida, sonda: Callable[[], dict] | None = None) -> None:
             escrever_mensagem(saida, _erro("INVALID_MESSAGE", str(erro)))
             continue
 
-        # Só o TIPO, nunca o payload. O payload carrega `href` e `origem`, e
-        # gravar isso em arquivo transformaria um log de diagnóstico num
-        # histórico de navegação — que o ControlFawkes não coleta e não quer.
-        anotar("RECEBIDA", mensagem.get("messageType"))
+        anotar("RECEBIDA", f"{mensagem.get('messageType')} {_temporais(mensagem)}")
         escrever_mensagem(saida, responder(mensagem, sonda))
 
 
