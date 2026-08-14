@@ -1,0 +1,409 @@
+"""O que este computador andou assistindo.
+
+O laço de "tocando agora" já lê título, plataforma e posição de segundo em
+segundo — e jogava tudo fora. Guardar o mínimo disso é o que permite o controle
+responder "continuar de onde parou" e "com base no que você assistiu", em vez de
+recomeçar do zero toda vez.
+
+O que fica registrado é o que dá para ver na tela: nome do título, serviço,
+quanto tempo ficou tocando e onde parou. Sem identificador de conta, sem quem
+estava assistindo — o controle não sabe e não precisa saber.
+
+Fica em `backend/data/`, a pasta que o Git ignora, junto do pareamento e da
+chave do catálogo. Some inteiro com um toque em Ajustes.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, replace
+import json
+import os
+import time
+import unicodedata
+from pathlib import Path
+
+from app.catalog.tmdb import PLATAFORMAS_COM_CATALOGO
+from app.media.now_playing import _titulo_generico
+from app.schemas.platform import Platform
+
+
+ARQUIVO_PADRAO = Path(__file__).resolve().parent.parent.parent / "data" / "historico.json"
+
+# Abaixo disso não foi assistido, foi passado. Sem um piso, passar por três
+# títulos encheria o histórico de coisas que ninguém viu.
+SEGUNDOS_PARA_CONTAR = 90.0
+
+# Teto de itens guardados. O histórico serve para "o que eu estava vendo" e
+# "do que eu gosto"; nenhuma das duas melhora com dois anos de registro.
+MAXIMO_DE_ITENS = 120
+
+
+def _chave(titulo: str, platform: Platform | None) -> str:
+    """Mesma obra no mesmo serviço é a mesma linha, escrita como for."""
+    limpo = unicodedata.normalize("NFKD", titulo.strip().lower())
+    sem_acento = "".join(c for c in limpo if not unicodedata.combining(c))
+    return f"{platform or SEM_SERVICO}::{' '.join(sem_acento.split())}"
+
+
+# O serviço que não foi reconhecido. Não é um serviço: é a ausência de um, e a
+# diferença importa na hora de decidir se duas linhas são a mesma obra.
+SEM_SERVICO = "-"
+
+
+def _mesma_obra(uma: str, outra: str) -> bool:
+    """Duas chaves da mesma obra, quando pelo menos uma não sabe o serviço.
+
+    Existe porque o serviço nem sempre é reconhecido na mesma leitura em que o
+    título é: quando a API de mídia responde e a janela não, sobra o nome sem o
+    serviço. Medido no histórico real, A Casa do Dragão ocupava duas linhas —
+    "MAX::a casa do dragao" e "-::a casa do dragao" — com o tempo dividido
+    entre as duas e a mesma capa repetida nas duas. A pessoa viu uma série; a
+    tela contava dois títulos.
+
+    Serviços diferentes e ambos conhecidos continuam sendo obras diferentes, e
+    isso não é detalhe: "O Justiceiro" é um filme de 2004 no Max e uma série da
+    Marvel no Disney+. Só o desconhecido é coringa.
+    """
+    servico_de_uma, _, nome_de_uma = uma.partition("::")
+    servico_de_outra, _, nome_de_outra = outra.partition("::")
+    if nome_de_uma != nome_de_outra:
+        return False
+    return SEM_SERVICO in (servico_de_uma, servico_de_outra)
+
+
+@dataclass(frozen=True)
+class Assistido:
+    chave: str
+    titulo: str
+    platform: Platform | None
+    segundos: float
+    posicao: float | None
+    duracao: float | None
+    visto_em: float
+    poster_url: str | None = None
+    generos: tuple[str, ...] = ()
+
+    @property
+    def terminado(self) -> bool:
+        """Perto do fim já conta como visto: não entra em "continuar"."""
+        if self.duracao is None or self.posicao is None or self.duracao <= 0:
+            return False
+        return self.posicao / self.duracao >= 0.94
+
+    def como_dicionario(self) -> dict:
+        return {
+            "titulo": self.titulo,
+            "platform": self.platform,
+            "segundos": round(self.segundos, 1),
+            "posicao": self.posicao,
+            "duracao": self.duracao,
+            "vistoEm": self.visto_em,
+            "posterUrl": self.poster_url,
+            "generos": list(self.generos),
+            "terminado": self.terminado,
+        }
+
+
+class HistoryStore:
+    def __init__(self, caminho: Path | None = None) -> None:
+        self._caminho = caminho or ARQUIVO_PADRAO
+
+    def _ler(self) -> dict[str, dict]:
+        try:
+            dados = json.loads(self._caminho.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return {}
+        return dados if isinstance(dados, dict) else {}
+
+    def _gravar(self, dados: dict[str, dict]) -> bool:
+        try:
+            self._caminho.parent.mkdir(parents=True, exist_ok=True)
+            temporario = self._caminho.with_suffix(".tmp")
+            temporario.write_text(json.dumps(dados, ensure_ascii=False), encoding="utf-8")
+            # Troca atômica: um desligamento no meio da escrita apagaria tudo.
+            os.replace(temporario, self._caminho)
+        except OSError:
+            return False
+        return True
+
+    @staticmethod
+    def _do_dicionario(chave: str, bruto: object) -> Assistido | None:
+        if not isinstance(bruto, dict):
+            return None
+        titulo = bruto.get("titulo")
+        if not isinstance(titulo, str) or not titulo:
+            return None
+
+        def numero(nome: str) -> float | None:
+            valor = bruto.get(nome)
+            return float(valor) if isinstance(valor, (int, float)) else None
+
+        generos = bruto.get("generos")
+        return Assistido(
+            chave=chave,
+            titulo=titulo,
+            platform=bruto.get("platform"),
+            segundos=numero("segundos") or 0.0,
+            posicao=numero("posicao"),
+            duracao=numero("duracao"),
+            visto_em=numero("vistoEm") or 0.0,
+            poster_url=bruto.get("posterUrl") if isinstance(bruto.get("posterUrl"), str) else None,
+            generos=tuple(g for g in generos if isinstance(g, str)) if isinstance(generos, list) else (),
+        )
+
+    def _linha_da_obra(
+        self, dados: dict[str, dict], titulo: str, platform: Platform | None,
+    ) -> tuple[str, list[Assistido]]:
+        """Sob que chave esta obra fica, e o que já existe dela no arquivo.
+
+        A lista vem da mais recente para a mais antiga, que é a ordem em que a
+        fusão deve olhar: quem viu por último é quem sabe onde a pessoa parou.
+
+        A chave escolhida é sempre a que conhece o serviço. Sem isso, uma
+        leitura sem serviço arrastaria a linha inteira de volta para
+        "-::a casa do dragao" e o Max deixaria de contar como serviço usado.
+        """
+        chave = _chave(titulo, platform)
+        candidatas = [c for c in dados if c == chave or _mesma_obra(c, chave)]
+        anteriores = sorted(
+            (
+                item for item in (self._do_dicionario(c, dados[c]) for c in candidatas)
+                if item is not None
+            ),
+            key=lambda item: item.visto_em,
+            reverse=True,
+        )
+        if platform is not None:
+            return chave, anteriores
+        # Sem serviço nesta leitura: entra na linha que já tem um, se houver.
+        com_servico = next((a for a in anteriores if a.platform is not None), None)
+        return (com_servico.chave if com_servico else chave), anteriores
+
+    def registrar(
+        self,
+        titulo: str,
+        platform: Platform | None,
+        segundos: float,
+        posicao: float | None,
+        duracao: float | None,
+        poster_url: str | None = None,
+        generos: tuple[str, ...] = (),
+        agora: float | None = None,
+    ) -> Assistido | None:
+        """Soma este trecho ao que já havia deste título.
+
+        Soma em vez de sobrescrever porque assistir é interrompido: meia hora
+        hoje e meia hora amanhã são uma hora do mesmo filme, e é o total que diz
+        se aquilo importou.
+        """
+        if not titulo.strip():
+            return None
+
+        dados = self._ler()
+        chave, anteriores = self._linha_da_obra(dados, titulo, platform)
+        # Tudo o que era a mesma obra sai do arquivo e volta como uma linha só.
+        for antiga in anteriores:
+            dados.pop(antiga.chave, None)
+
+        acumulado = sum(a.segundos for a in anteriores) + max(0.0, segundos)
+        anterior = anteriores[0] if anteriores else None
+
+        item = Assistido(
+            chave=chave,
+            titulo=titulo.strip(),
+            # O serviço conhecido vence o desconhecido, seja qual dos dois for o
+            # mais recente: uma leitura em que a janela não respondeu não apaga
+            # o serviço que outra já tinha identificado.
+            platform=platform or next(
+                (a.platform for a in anteriores if a.platform is not None), None,
+            ),
+            segundos=acumulado,
+            posicao=posicao if posicao is not None else (anterior.posicao if anterior else None),
+            duracao=duracao if duracao is not None else (anterior.duracao if anterior else None),
+            visto_em=agora if agora is not None else time.time(),
+            # O pôster e os gêneros chegam depois, pelo catálogo: uma vez
+            # descobertos, não se perdem numa atualização sem eles — nem quando
+            # quem os tinha era a outra linha da fusão.
+            poster_url=poster_url or next(
+                (a.poster_url for a in anteriores if a.poster_url), None,
+            ),
+            generos=generos or next(
+                (a.generos for a in anteriores if a.generos), (),
+            ),
+        )
+        dados[chave] = item.como_dicionario()
+
+        if len(dados) > MAXIMO_DE_ITENS:
+            ordenados = sorted(
+                dados.items(),
+                key=lambda par: par[1].get("vistoEm", 0) if isinstance(par[1], dict) else 0,
+                reverse=True,
+            )
+            dados = dict(ordenados[:MAXIMO_DE_ITENS])
+
+        return item if self._gravar(dados) else None
+
+    def enriquecer(self, chave: str, poster_url: str | None, generos: tuple[str, ...]) -> bool:
+        """Guarda o que o catálogo descobriu sobre um título já registrado."""
+        dados = self._ler()
+        item = self._do_dicionario(chave, dados.get(chave))
+        if item is None:
+            return False
+        atualizado = replace(
+            item,
+            poster_url=poster_url or item.poster_url,
+            generos=generos or item.generos,
+        )
+        dados[chave] = atualizado.como_dicionario()
+        return self._gravar(dados)
+
+    def listar(self) -> list[Assistido]:
+        """Tudo o que foi assistido, do mais recente para o mais antigo.
+
+        Sem o que nunca foi uma obra. Barrar isso na gravação não basta: o que
+        entrou antes do filtro continua no arquivo, e uma correção que só vale
+        para o futuro deixa a tela errada até alguém apagar o histórico.
+
+        Medido no histórico real: uma linha "Netflix" de 120 segundos — a
+        página de catálogo, não um filme — era a única com plataforma
+        preenchida, e fazia a tela de perfil anunciar a Netflix como serviço
+        mais usado com base em nada, enquanto 58 minutos de filme de verdade
+        não contavam para nada.
+
+        E sem as capas que o catálogo nunca teve como acertar. Todo pôster
+        guardado aqui veio do TMDB, que é catálogo de filme e série: para um
+        vídeo do YouTube ele devolve a capa de outra coisa. Medido — um vlog de
+        viagem à Síria aparecia em "continuar assistindo" com pôster de filme.
+        Descartar na leitura tira da tela também o que já está no arquivo.
+        """
+        itens = (self._do_dicionario(chave, bruto) for chave, bruto in self._ler().items())
+        validos = []
+        for item in itens:
+            if item is None or _titulo_generico(item.titulo, None, item.platform):
+                continue
+            if (
+                item.poster_url
+                and item.platform is not None
+                and item.platform not in PLATAFORMAS_COM_CATALOGO
+            ):
+                item = replace(item, poster_url=None)
+            validos.append(item)
+        return sorted(validos, key=lambda item: item.visto_em, reverse=True)
+
+    def continuar(self, limite: int = 10) -> list[Assistido]:
+        """O que ficou pela metade, do mais recente para o mais antigo."""
+        return [item for item in self.listar() if not item.terminado][:limite]
+
+    def consolidar(self, limpar_titulo) -> int:
+        """Reaplica a limpeza de título ao que já está guardado.
+
+        Quando a limpeza melhora, o passado não melhora junto: "Prime Video:
+        Batman" e "Batman" ficam como duas linhas do mesmo filme, cada uma com
+        um pedaço do tempo. Isto passa a régua nova sobre os registros antigos e
+        soma os que viraram a mesma coisa.
+
+        Devolve quantas linhas desapareceram na fusão.
+        """
+        dados = self._ler()
+        if not dados:
+            return 0
+
+        refeito: dict[str, dict] = {}
+        for chave, bruto in dados.items():
+            item = self._do_dicionario(chave, bruto)
+            if item is None:
+                continue
+            titulo = limpar_titulo(item.titulo).strip() or item.titulo
+            nova_chave = _chave(titulo, item.platform)
+            # A linha sem serviço entra na que tem serviço, e vice-versa: são a
+            # mesma obra lida em passagens diferentes, e é esta fusão que junta
+            # os dois pedaços de A Casa do Dragão que já estão no arquivo.
+            nova_chave = next(
+                (c for c in refeito if _mesma_obra(c, nova_chave) and not c.startswith(
+                    f"{SEM_SERVICO}::",
+                )),
+                nova_chave,
+            )
+            existente = refeito.get(nova_chave)
+            if existente is None and item.platform is not None:
+                # O contrário: já havia uma linha sem serviço desta obra.
+                sem_servico = _chave(titulo, None)
+                if sem_servico in refeito:
+                    existente = refeito.pop(sem_servico)
+            if existente is None:
+                refeito[nova_chave] = {**item.como_dicionario(), "titulo": titulo}
+                continue
+            # Duas linhas do mesmo título: o tempo soma, e o resto vem da
+            # leitura mais recente, que é a que descreve onde a pessoa parou.
+            recente = existente if existente["vistoEm"] >= item.visto_em else item.como_dicionario()
+            refeito[nova_chave] = {
+                **recente,
+                "titulo": titulo,
+                "segundos": round(existente["segundos"] + item.segundos, 1),
+                "posterUrl": existente.get("posterUrl") or item.poster_url,
+                "generos": existente.get("generos") or list(item.generos),
+                # O serviço conhecido vence: a linha sem plataforma e a linha
+                # com plataforma são a mesma obra, e é a fusão delas que devolve
+                # A Casa do Dragão ao Max em vez de deixá-la sem serviço.
+                "platform": recente.get("platform") or existente.get("platform") or item.platform,
+            }
+
+        removidas = len(dados) - len(refeito)
+        if removidas <= 0 and len(refeito) == len(dados):
+            # Nada mudou de nome: não vale reescrever o arquivo.
+            if all(chave in dados for chave in refeito):
+                return 0
+        self._gravar(refeito)
+        return removidas
+
+    def podar_capas(self) -> int:
+        """Apaga do arquivo as capas que o catálogo não tinha como acertar.
+
+        `listar()` já descarta essas capas na leitura, e isso basta para a tela.
+        Mas o arquivo continua guardando a URL errada, e guardar é o que a faz
+        voltar: `_descobrir_capas` pula quem já tem pôster, então uma capa
+        errada nunca é substituída pela certa — ela só fica lá, escondida,
+        ocupando o lugar da resposta boa.
+
+        Medido no histórico real deste computador: o vlog "CHEGUEI NA SÍRIA,
+        PAÍS DE CONFLITO E RELIGIÃO" carregava o pôster de um filme qualquer, e
+        a linha "Netflix" — a página de catálogo, não uma obra — carregava o de
+        outro. Nenhum dos dois veio de erro do TMDB: veio de perguntar a um
+        catálogo de filme por um nome que não é de filme.
+
+        Só a capa é apagada. O tempo assistido continua inteiro, porque ele foi
+        medido de verdade e não tem nada de errado.
+
+        Devolve quantas capas saíram.
+        """
+        dados = self._ler()
+        if not dados:
+            return 0
+
+        podadas = 0
+        for chave, bruto in dados.items():
+            item = self._do_dicionario(chave, bruto)
+            if item is None or not item.poster_url:
+                continue
+            # O nome não é de uma obra: é a home do serviço, ou o próprio nome
+            # dele. Qualquer capa aqui é a de um título que ninguém pediu.
+            suspeita = _titulo_generico(item.titulo, None, item.platform)
+            # Ou o serviço não é catálogo de filme — YouTube e Spotify — e o
+            # TMDB respondeu com a obra mais parecida que encontrou.
+            if item.platform is not None and item.platform not in PLATAFORMAS_COM_CATALOGO:
+                suspeita = True
+            if suspeita:
+                dados[chave] = replace(item, poster_url=None).como_dicionario()
+                podadas += 1
+
+        # Nada suspeito: não vale reescrever o arquivo.
+        if podadas == 0:
+            return 0
+        return podadas if self._gravar(dados) else 0
+
+    def limpar(self) -> bool:
+        try:
+            self._caminho.unlink(missing_ok=True)
+        except OSError:
+            return False
+        return True

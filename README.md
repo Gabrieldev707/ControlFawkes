@@ -171,6 +171,109 @@ também são reconhecidas. Pesquisas determinísticas aceitam YouTube, Spotify,
 Netflix e Prime Video e apenas abrem a página de resultados, sem escolher ou
 reproduzir algo ambíguo.
 
+Max e Disney+ não têm URL de busca estável, então não recebem a consulta. Em
+vez de sumirem da escolha — o que deixava um título exclusivo delas sem caminho
+nenhum —, aparecem separadas, em "Abrir e procurar por lá": o controle abre a
+plataforma e oferece mandar o título pelo teclado remoto.
+
+### Navegar e apontar na mesma superfície
+
+A tela de Controle tem uma superfície só, que faz as duas coisas sem modo:
+
+| gesto | efeito |
+| --- | --- |
+| deslizar rápido ↑↓←→ | seta do direcional |
+| arrastar devagar | move o cursor |
+| tocar | clique / OK |
+| dois dedos | voltar |
+| segurar parado e arrastar | arrasta com o botão pressionado |
+
+A distinção entre flick e mira é decidida no fim do gesto, pela duração e pela
+distância. Decidir no começo exigiria segurar o cursor alguns quadros esperando
+para saber o que o dedo ia fazer, e esse atraso é o que torna um touchpad ruim.
+O preço é o cursor andar junto com o flick — inofensivo, porque mover o cursor
+num menu não aciona nada.
+
+As setas continuam nas bordas como botões de verdade: gesto sozinho seria
+inacessível para leitor de tela e para quem tem limitação motora.
+
+### Onde o título está (catálogo opcional)
+
+Sem catálogo, a busca só sabe abrir uma URL de resultados: "harry potter" vira
+uma lista de plataformas para o usuário adivinhar. Com uma chave do TMDB, o
+controle passa a responder em vez de perguntar — "Harry Potter e a Pedra
+Filosofal (2001), está no Max" — e leva direto para lá.
+
+```powershell
+# Chave gratuita em https://www.themoviedb.org/settings/api
+$env:CONTROLFAWKES_TMDB_KEY = "sua-chave"
+$env:CONTROLFAWKES_TMDB_REGION = "BR"      # opcional
+$env:CONTROLFAWKES_TMDB_LANGUAGE = "pt-BR" # opcional
+```
+
+Só entram serviços por assinatura na região configurada: aluguel e compra ficam
+de fora, porque quem pediu para assistir não pediu uma tela de pagamento. A
+escolha manual continua embaixo do resultado — o catálogo acrescenta, nunca
+substitui o caminho manual, e qualquer falha de rede cai nele em silêncio.
+
+Duas coisas a saber: é a única parte do ControlFawkes que fala com um serviço
+externo (a consulta e o endereço do pôster saem da máquina), e sem a chave o
+comportamento é exatamente o de antes.
+
+### Comando por voz
+
+O botão de microfone grava, manda o áudio para o computador pareado e o
+transcreve com o Whisper da OpenAI rodando local, pelo faster-whisper. O áudio
+não sai da máquina e o arquivo temporário é apagado assim que a transcrição
+termina. O texto resultante passa pelo mesmo parser do campo digitado.
+
+```powershell
+# Modelo. `small` acerta nomes próprios ("Harry Potter"); `base` é mais rápido,
+# mas erra bastante em português.
+$env:CONTROLFAWKES_WHISPER_MODEL = "small"
+$env:CONTROLFAWKES_WHISPER_LANGUAGE = "pt"
+$env:CONTROLFAWKES_WHISPER_COMPUTE = "int8"
+$env:CONTROLFAWKES_VOICE = "on"    # "off" desliga o endpoint
+```
+
+O modelo é baixado na primeira execução (~460 MB para o `small`) e carregado no
+startup, para o primeiro comando não pagar a espera. Sem o faster-whisper
+instalado o resto do controle continua funcionando: só a voz responde que está
+indisponível.
+
+Duas coisas valem saber antes de contar com a voz numa demonstração:
+
+- **Latência acompanha a CPU livre.** Num Ryzen 5 5625U com a máquina ocupada
+  (llama-server rodando), um comando de 4 s levou de 7 s a 9 s. Com a CPU livre
+  cai bastante. `CONTROLFAWKES_WHISPER_THREADS` limita as threads quando a
+  máquina está dividida com outra coisa pesada.
+- **O microfone exige HTTPS.** `getUserMedia` só existe em contexto seguro, e
+  `http://IP-DA-REDE:5173` não é um. No computador (`localhost`) a voz funciona
+  direto; para usar no celular, suba o controle por HTTPS (abaixo).
+
+### Voz no celular: HTTPS na rede local
+
+Um comando gera o certificado e outro sobe os dois lados por HTTPS:
+
+```powershell
+npm run certificado   # uma vez
+npm run dev:https     # no lugar de npm run dev
+```
+
+O certificado é assinado pela própria máquina e inclui o IP da rede local — sem
+esse endereço dentro dele, o iOS recusa a conexão mesmo depois de confiar no
+certificado. Ele fica em `backend/data/certs/`, pasta ignorada pelo Git: a
+chave privada não vai para o repositório.
+
+No iPhone, abra o endereço `https://` que o Vite imprime. O Safari vai avisar
+do certificado: toque em **Mostrar detalhes** e depois em **Visitar este site**.
+Se o microfone continuar bloqueado, instale o certificado — abra o arquivo
+`.crt` pelo Safari, aceite o perfil e ligue-o em **Ajustes › Geral › Sobre ›
+Certificados confiáveis**.
+
+O `npm run dev` continua existindo sem HTTPS, para quando a voz não for
+necessária.
+
 ### IA local opcional
 
 Ollama é apenas um fallback para texto que o parser devolveu como desconhecido.

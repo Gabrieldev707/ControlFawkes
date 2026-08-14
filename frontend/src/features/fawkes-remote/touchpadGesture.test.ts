@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 
-import { DEFAULT_GESTURE_LIMITS, TouchpadGesture } from './touchpadGesture'
+import {
+  DEFAULT_GESTURE_LIMITS,
+  GESTURE_SENSITIVITIES,
+  TouchpadGesture,
+  gestureLimitsFor,
+  type GestureLimits,
+} from './touchpadGesture'
 
 
 const { tapDistancePx, tapDurationMs } = DEFAULT_GESTURE_LIMITS
@@ -92,11 +98,11 @@ describe('TouchpadGesture', () => {
   })
 
   it('cancels the tap when a second finger touches', () => {
+    // O que importa é o efeito: dois dedos nunca podem virar um clique.
     const g = gesture()
     g.down(1, 100, 100, 0)
     g.down(2, 150, 150, 10)
 
-    expect(g.phase).toBe('CANCELLED')
     expect(g.up(1, 100, 100, 50)).toEqual([])
   })
 
@@ -131,5 +137,131 @@ describe('TouchpadGesture', () => {
     g.reset()
 
     expect(g.phase).toBe('IDLE')
+  })
+})
+
+describe('TouchpadGesture flick', () => {
+  const rapido = 120
+
+  function deslizar(g: TouchpadGesture, dx: number, dy: number, ms = rapido) {
+    g.down(1, 200, 200, 0)
+    g.move(1, 200 + dx / 2, 200 + dy / 2)
+    g.move(1, 200 + dx, 200 + dy)
+    return g.up(1, 200 + dx, 200 + dy, ms)
+  }
+
+  it.each([
+    ['RIGHT', 90, 0],
+    ['LEFT', -90, 0],
+    ['DOWN', 0, 90],
+    ['UP', 0, -90],
+  ])('reconhece o flick para %s', (direcao, dx, dy) => {
+    expect(deslizar(new TouchpadGesture(), dx, dy)).toEqual([
+      { type: 'FLICK', direction: direcao },
+    ])
+  })
+
+  it('não vira seta quando o dedo foi devagar', () => {
+    // Movimento lento é mira de cursor. Transformá-lo em seta tiraria a
+    // possibilidade de apontar com precisão.
+    expect(deslizar(new TouchpadGesture(), 90, 0, 900)).toEqual([])
+  })
+
+  it('não vira seta quando o deslocamento foi curto', () => {
+    expect(deslizar(new TouchpadGesture(), 30, 0)).toEqual([])
+  })
+
+  it('não chuta direção num gesto diagonal', () => {
+    // Sem eixo dominante, qualquer seta seria adivinhação.
+    expect(deslizar(new TouchpadGesture(), 80, 75)).toEqual([])
+  })
+
+  it('o cursor acompanha o dedo mesmo no gesto que vira flick', () => {
+    // O cursor andar junto é o preço de decidir no fim do gesto — e é
+    // inofensivo, porque mover o cursor num menu não aciona nada.
+    const g = new TouchpadGesture()
+    g.down(1, 200, 200, 0)
+    const efeitos = g.move(1, 260, 200)
+
+    expect(efeitos).toEqual([{ type: 'MOVE', dx: 60, dy: 0 }])
+  })
+
+  it('um toque continuado ainda arrasta, sem virar flick', () => {
+    const g = new TouchpadGesture()
+    g.down(1, 200, 200, 0)
+    expect(g.holdElapsed()).toEqual([{ type: 'PRESS' }])
+    g.move(1, 300, 200)
+
+    expect(g.up(1, 300, 200, 100)).toEqual([{ type: 'RELEASE' }])
+  })
+})
+
+describe('TouchpadGesture voltar com dois dedos', () => {
+  it('dois dedos que encostam e saem rápido viram voltar', () => {
+    const g = new TouchpadGesture()
+    g.down(1, 100, 100, 0)
+    g.down(2, 150, 150, 20)
+    g.up(1, 100, 100, 120)
+
+    expect(g.twoFingerTap(130)).toEqual([{ type: 'TWO_FINGER_TAP' }])
+  })
+
+  it('dois dedos parados na tela não viram voltar', () => {
+    // Pinça e rolagem começam assim; disparar voltar sairia da tela do usuário.
+    const g = new TouchpadGesture()
+    g.down(1, 100, 100, 0)
+    g.down(2, 150, 150, 20)
+
+    expect(g.twoFingerTap(3000)).toEqual([])
+  })
+
+  it('um dedo só nunca dispara voltar', () => {
+    const g = new TouchpadGesture()
+    g.down(1, 100, 100, 0)
+    g.up(1, 100, 100, 50)
+
+    expect(g.twoFingerTap(60)).toEqual([])
+  })
+})
+
+describe('sensibilidade do gesto', () => {
+  it('alta exige menos deslize e aceita gesto mais lento', () => {
+    const alta = gestureLimitsFor('ALTA')
+    const padrao = gestureLimitsFor('PADRAO')
+
+    expect(alta.flickDistancePx).toBeLessThan(padrao.flickDistancePx)
+    expect(alta.flickDurationMs).toBeGreaterThan(padrao.flickDurationMs)
+  })
+
+  it('baixa exige mais deslize e mais pressa, liberando o cursor', () => {
+    const baixa = gestureLimitsFor('BAIXA')
+    const padrao = gestureLimitsFor('PADRAO')
+
+    expect(baixa.flickDistancePx).toBeGreaterThan(padrao.flickDistancePx)
+    expect(baixa.flickDurationMs).toBeLessThan(padrao.flickDurationMs)
+  })
+
+  it('só mexe no flick: toque e arraste continuam iguais em todos os níveis', () => {
+    // Mudar o toque junto faria o ajuste de navegação alterar o clique, que é
+    // outra coisa e não foi o que a pessoa pediu.
+    for (const nivel of GESTURE_SENSITIVITIES) {
+      const limites = gestureLimitsFor(nivel)
+      expect(limites.tapDistancePx).toBe(DEFAULT_GESTURE_LIMITS.tapDistancePx)
+      expect(limites.tapDurationMs).toBe(DEFAULT_GESTURE_LIMITS.tapDurationMs)
+      expect(limites.dragHoldMs).toBe(DEFAULT_GESTURE_LIMITS.dragHoldMs)
+    }
+  })
+
+  it('um deslize de 45px vira seta na alta e não na baixa', () => {
+    function deslizar(limites: GestureLimits) {
+      const g = new TouchpadGesture(limites)
+      g.down(1, 200, 200, 0)
+      g.move(1, 225, 200)
+      g.move(1, 245, 200)
+      return g.up(1, 245, 200, 150)
+    }
+
+    expect(deslizar(gestureLimitsFor('ALTA'))).toEqual([{ type: 'FLICK', direction: 'RIGHT' }])
+    expect(deslizar(gestureLimitsFor('BAIXA'))).toEqual([])
   })
 })

@@ -6,10 +6,12 @@ import {
   VOLUME_ACTIONS,
   VOLUME_SCOPES,
   POINTER_ACTIONS,
+  SCREEN_ACTIONS,
   isPlatform,
   isSearchablePlatform,
   type ErrorCode,
   type NavigationAction,
+  type ScreenAction,
   type VolumeScope,
   type ServerMessage,
   type ServerState,
@@ -27,8 +29,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-function hasOnlyKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  const allowed = new Set(keys)
+function hasOnlyKeys(
+  value: Record<string, unknown>,
+  keys: readonly string[],
+  optional: readonly string[] = [],
+): boolean {
+  const allowed = new Set([...keys, ...optional])
   return Object.keys(value).every((key) => allowed.has(key)) && keys.every((key) => key in value)
 }
 
@@ -76,7 +82,12 @@ function isHelpData(value: unknown): boolean {
 
 function isMediaData(value: unknown): boolean {
   return isRecord(value)
-    && hasOnlyKeys(value, ['intent', 'action', 'platform', 'session', 'executed'])
+    && hasOnlyKeys(
+      value,
+      ['intent', 'action', 'platform', 'session', 'executed'],
+      ['focused'],
+    )
+    && (value.focused === undefined || typeof value.focused === 'boolean')
     && value.intent === 'MEDIA_CONTROL'
     && typeof value.action === 'string'
     && MEDIA_ACTIONS.includes(value.action as (typeof MEDIA_ACTIONS)[number])
@@ -131,6 +142,16 @@ function isMediaLinkData(value: unknown): boolean {
     && LAUNCH_STRATEGIES.includes(value.strategy as (typeof LAUNCH_STRATEGIES)[number])
 }
 
+function isScreenData(value: unknown): boolean {
+  return isRecord(value)
+    && hasOnlyKeys(value, ['intent', 'action', 'platform', 'executed'])
+    && value.intent === 'SCREEN_CONTROL'
+    && typeof value.action === 'string'
+    && SCREEN_ACTIONS.includes(value.action as ScreenAction)
+    && isPlatform(value.platform)
+    && value.executed === true
+}
+
 function isNavigationData(value: unknown): boolean {
   return isRecord(value)
     && hasOnlyKeys(value, ['intent', 'action', 'executed'])
@@ -138,6 +159,74 @@ function isNavigationData(value: unknown): boolean {
     && typeof value.action === 'string'
     && NAVIGATION_ACTIONS.includes(value.action as NavigationAction)
     && value.executed === true
+}
+
+function isNowPlayingSession(value: unknown): boolean {
+  // Nulo é o estado "nada tocando", e precisa chegar: sem ele o cartão
+  // anterior ficaria congelado na tela depois de o filme acabar.
+  if (value === null) return true
+  return isRecord(value)
+    && hasOnlyKeys(
+      value,
+      [
+        'title', 'artist', 'app', 'platform', 'playing',
+        'positionSeconds', 'durationSeconds', 'thumbnailId',
+      ],
+      // Opcionais: campos que o servidor pode não mandar. `hasOnlyKeys` fecha a
+      // lista, então um campo novo no backend que não passe por aqui derruba a
+      // mensagem INTEIRA — e o cartão fica em "nada tocando" para sempre, sem
+      // erro nenhum na tela nem no log. Foi o que aconteceu com `episode`.
+      ['posterUrl', 'episode', 'positionStale'],
+    )
+    && (
+      value.positionStale === undefined
+      || typeof value.positionStale === 'boolean'
+    )
+    // O pôster vira o `src` de uma imagem: aceitar qualquer texto deixaria um
+    // `javascript:` entrar na página.
+    && (
+      value.posterUrl === undefined
+      || value.posterUrl === null
+      || (typeof value.posterUrl === 'string' && value.posterUrl.startsWith('https://'))
+    )
+    && typeof value.title === 'string'
+    && value.title.length > 0
+    && (
+      value.episode === undefined
+      || value.episode === null
+      || typeof value.episode === 'string'
+    )
+    && (value.artist === null || typeof value.artist === 'string')
+    && (value.app === null || typeof value.app === 'string')
+    && (value.platform === null || isPlatform(value.platform))
+    && typeof value.playing === 'boolean'
+    && isOptionalSeconds(value.positionSeconds)
+    && isOptionalSeconds(value.durationSeconds)
+    && (value.thumbnailId === null || typeof value.thumbnailId === 'string')
+}
+
+function isOptionalSeconds(value: unknown): boolean {
+  return value === null
+    || (typeof value === 'number' && Number.isFinite(value) && value >= 0)
+}
+
+function isAvailability(value: unknown): boolean {
+  // Ausente é o caso normal: catálogo desligado, sem chave ou sem resultado.
+  if (value === undefined || value === null) return true
+  return isRecord(value)
+    && hasOnlyKeys(value, ['title', 'year', 'posterUrl', 'platforms'], ['kind'])
+    && (value.kind === undefined || value.kind === 'MOVIE' || value.kind === 'TV')
+    && typeof value.title === 'string'
+    && value.title.length > 0
+    && (value.year === null || (typeof value.year === 'number' && Number.isInteger(value.year)))
+    // A URL do pôster vem do servidor, mas ela vira o `src` de uma imagem:
+    // aceitar qualquer texto deixaria um `javascript:` entrar na página.
+    && (
+      value.posterUrl === null
+      || (typeof value.posterUrl === 'string' && value.posterUrl.startsWith('https://'))
+    )
+    && Array.isArray(value.platforms)
+    && value.platforms.every(isPlatform)
 }
 
 export function isServerMessage(value: unknown): value is ServerMessage {
@@ -184,11 +273,20 @@ export function isServerMessage(value: unknown): value is ServerMessage {
           || isKeyboardData(value.data)
           || isNavigationData(value.data)
           || isMediaLinkData(value.data)
+          || isScreenData(value.data)
         )
     case 'NEEDS_PLATFORM':
-      return hasOnlyKeys(value, [
-        'protocolVersion', 'type', 'requestId', 'query', 'suggestedPlatforms',
-      ])
+      // `openOnlyPlatforms` é opcional: a validação rejeita a mensagem inteira
+      // quando encontra uma chave que não conhece, então exigi-la quebraria o
+      // controle contra um backend anterior — e foi assim que a tela travou em
+      // "Processando comando..." quando o campo apareceu só de um lado.
+      return hasOnlyKeys(
+        value,
+        ['protocolVersion', 'type', 'requestId', 'query', 'suggestedPlatforms'],
+        ['openOnlyPlatforms', 'availability', 'availabilityAlternative'],
+      )
+        && isAvailability(value.availability)
+        && isAvailability(value.availabilityAlternative)
         && isRequestId(value.requestId)
         && typeof value.query === 'string'
         && value.query.length > 0
@@ -196,6 +294,15 @@ export function isServerMessage(value: unknown): value is ServerMessage {
         && Array.isArray(value.suggestedPlatforms)
         && value.suggestedPlatforms.length > 0
         && value.suggestedPlatforms.every(isSearchablePlatform)
+        && (
+          value.openOnlyPlatforms === undefined
+          || (Array.isArray(value.openOnlyPlatforms) && value.openOnlyPlatforms.every(isPlatform))
+        )
+    case 'HEARTBEAT':
+      return hasOnlyKeys(value, ['protocolVersion', 'type'])
+    case 'NOW_PLAYING':
+      return hasOnlyKeys(value, ['protocolVersion', 'type', 'session'])
+        && isNowPlayingSession(value.session)
     case 'ERROR':
       return hasOnlyKeys(value, ['protocolVersion', 'type', 'requestId', 'code', 'message'])
         && isRequestId(value.requestId)

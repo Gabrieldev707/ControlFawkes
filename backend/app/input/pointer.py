@@ -15,14 +15,40 @@ MOUSEEVENTF_RIGHTUP = 0x0010
 MOUSEEVENTF_WHEEL = 0x0800
 
 
+CursorSetter = Callable[[int, int], bool]
+
+
+def _set_cursor_position(x: int, y: int) -> bool:
+    if sys.platform != "win32":
+        return False
+    return bool(ctypes.windll.user32.SetCursorPos(int(x), int(y)))
+
+
 class WindowsPointerAdapter:
-    def __init__(self, mouse_event: MouseEvent | None = None) -> None:
+    def __init__(
+        self,
+        mouse_event: MouseEvent | None = None,
+        cursor_setter: CursorSetter | None = None,
+    ) -> None:
         if mouse_event is not None:
             self._mouse_event: MouseEvent | None = mouse_event
         elif sys.platform == "win32":
             self._mouse_event = ctypes.windll.user32.mouse_event
         else:
             self._mouse_event = None
+        self._cursor_setter = cursor_setter or _set_cursor_position
+
+    def move_to(self, x: int, y: int) -> bool:
+        """Posição absoluta na tela.
+
+        O touchpad manda deslocamento relativo, que serve para mirar mas nunca
+        chega a um ponto conhecido. Para clicar no meio de uma janela é preciso
+        saber onde o cursor foi parar.
+        """
+        try:
+            return bool(self._cursor_setter(x, y))
+        except OSError:
+            return False
 
     def _emit(self, *events: tuple[int, int, int, int, int]) -> bool:
         if self._mouse_event is None:

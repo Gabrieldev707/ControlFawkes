@@ -37,6 +37,35 @@ def _is_local_hostname(hostname: str) -> bool:
     return address.is_private or address.is_loopback or address.is_link_local
 
 
+# Mesma política do WebSocket, no formato que o CORSMiddleware entende: só
+# localhost, IPs privados e nomes .local. Sem isto o navegador do celular era
+# barrado no POST de áudio, porque a origem dele é o IP da LAN, não localhost.
+LOCAL_ORIGIN_REGEX = (
+    r"^https?://("
+    r"localhost"
+    r"|127(?:\.\d{1,3}){3}"
+    r"|\[::1\]"
+    r"|10(?:\.\d{1,3}){3}"
+    r"|192\.168(?:\.\d{1,3}){2}"
+    r"|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}"
+    r"|169\.254(?:\.\d{1,3}){2}"
+    r"|[A-Za-z0-9-]+\.local"
+    r")(?::\d{1,5})?$"
+)
+
+
+def cors_origin_settings() -> tuple[list[str], str | None]:
+    """(origens fixas, regex) para o CORSMiddleware.
+
+    Com `FAWKES_ALLOWED_ORIGINS` definido, vale só a lista — igual ao
+    WebSocket, para não existirem duas políticas divergentes.
+    """
+    configured = _configured_origins()
+    if configured:
+        return sorted(configured), None
+    return [], LOCAL_ORIGIN_REGEX
+
+
 def is_origin_allowed(origin: str | None) -> bool:
     # Clientes não-navegador não enviam Origin; ver docstring do módulo.
     if origin is None:

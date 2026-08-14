@@ -84,12 +84,79 @@ describe('VolumeScreen scope feedback', () => {
   it('names the application when only it was changed', () => {
     renderScope('LOCAL', 'Spotify')
 
-    expect(screen.getByText('Controlando o volume do Spotify')).toBeTruthy()
+    expect(screen.getByText('Spotify')).toBeTruthy()
+    expect(screen.getByText(/Só o áudio do Spotify muda/)).toBeTruthy()
   })
 
   it('never hides the fallback to the whole system', () => {
     renderScope('GLOBAL', null)
 
-    expect(screen.getByText(/Windows \(fallback\)/)).toBeTruthy()
+    expect(screen.getByText('Sistema Windows')).toBeTruthy()
+    expect(screen.getByText(/vale para o computador inteiro/)).toBeTruthy()
+  })
+})
+
+describe('VolumeScreen slider otimista', () => {
+  function renderVolume(level: number | null, onSetLevel = vi.fn()) {
+    const utils = render(
+      <VolumeScreen
+        disabled={false}
+        loading={false}
+        level={level}
+        muted={false}
+        statusMessage=""
+        statusError={false}
+        onSetLevel={onSetLevel}
+        onDelta={vi.fn()}
+        onToggleMute={vi.fn()}
+        onBack={vi.fn()}
+      />,
+    )
+    return { ...utils, onSetLevel }
+  }
+
+  it('mostra o valor do dedo enquanto o servidor não confirma', () => {
+    // Sem isto o slider voltava ao valor antigo a cada movimento e o arrasto
+    // parecia emperrado.
+    const { onSetLevel } = renderVolume(40)
+    const slider = screen.getByRole('slider', { name: 'Volume do computador' })
+
+    fireEvent.change(slider, { target: { value: '75' } })
+
+    expect(onSetLevel).toHaveBeenCalledWith(75)
+    expect((slider as HTMLInputElement).value).toBe('75')
+    expect(screen.getByText('75%')).toBeTruthy()
+  })
+
+  it('volta a seguir o servidor quando ele alcança o arrasto', () => {
+    const { rerender } = renderVolume(40)
+    const slider = screen.getByRole('slider', { name: 'Volume do computador' })
+
+    fireEvent.change(slider, { target: { value: '75' } })
+    rerender(
+      <VolumeScreen
+        disabled={false}
+        loading={false}
+        level={75}
+        muted={false}
+        statusMessage=""
+        statusError={false}
+        onSetLevel={vi.fn()}
+        onDelta={vi.fn()}
+        onToggleMute={vi.fn()}
+        onBack={vi.fn()}
+      />,
+    )
+
+    expect((slider as HTMLInputElement).value).toBe('75')
+  })
+
+  it('continua utilizável com um comando em voo', () => {
+    // O ciclo "executando por 2s" travava o controle a cada ajuste.
+    renderVolume(40)
+
+    expect(
+      (screen.getByRole('slider', { name: 'Volume do computador' }) as HTMLInputElement).disabled,
+    ).toBe(false)
   })
 })

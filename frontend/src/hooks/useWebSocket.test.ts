@@ -223,3 +223,103 @@ describe('useWebSocket lifecycle', () => {
     expect(FakeWebSocket.instances[0].send).toHaveBeenCalledWith(JSON.stringify(message))
   })
 })
+
+describe('useWebSocket sinal de vida', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    FakeWebSocket.instances = []
+    vi.stubGlobal('WebSocket', FakeWebSocket as unknown as typeof WebSocket)
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      value: 'visible',
+    })
+  })
+
+  afterEach(() => {
+    vi.clearAllTimers()
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  function conectar(onMessage = vi.fn()) {
+    const hook = renderHook(() => useWebSocket({ onMessage }))
+    const socket = FakeWebSocket.instances[0]
+    act(() => socket.open())
+    return { hook, socket, onMessage }
+  }
+
+  function receber(socket: FakeWebSocket, payload: object) {
+    act(() => {
+      socket.onmessage?.(new MessageEvent('message', { data: JSON.stringify(payload) }))
+    })
+  }
+
+  it('não repassa o batimento para a aplicação', () => {
+    // Ele existe só para provar que a conexão está viva; repassá-lo obrigaria
+    // o resto do app a saber que ele existe.
+    const { socket, onMessage } = conectar()
+
+    receber(socket, { protocolVersion: PROTOCOL_VERSION, type: 'HEARTBEAT' })
+
+    expect(onMessage).not.toHaveBeenCalled()
+  })
+
+  it('derruba a conexão que ficou muda tempo demais', () => {
+    // Wi-Fi que troca de rede deixa o socket meio aberto: o `onclose` nunca
+    // chega e o controle seguiria dizendo "conectado" com tudo falhando calado.
+    const { hook, socket } = conectar()
+    expect(hook.result.current.connectionState).toBe('connected')
+
+    act(() => { vi.advanceTimersByTime(26000) })
+
+    expect(socket.readyState).toBe(FakeWebSocket.CLOSED)
+  })
+
+  it('o batimento renova a confiança na conexão', () => {
+    const { hook, socket } = conectar()
+
+    act(() => { vi.advanceTimersByTime(20000) })
+    receber(socket, { protocolVersion: PROTOCOL_VERSION, type: 'HEARTBEAT' })
+    act(() => { vi.advanceTimersByTime(20000) })
+
+    expect(socket.readyState).toBe(FakeWebSocket.OPEN)
+    expect(hook.result.current.connectionState).toBe('connected')
+  })
+
+  it('qualquer mensagem serve de sinal de vida, não só o batimento', () => {
+    const { socket } = conectar()
+
+    act(() => { vi.advanceTimersByTime(20000) })
+    receber(socket, {
+      protocolVersion: PROTOCOL_VERSION,
+      type: 'STATE_UPDATE',
+      state: 'READY',
+      message: 'Computador pronto.',
+    })
+    act(() => { vi.advanceTimersByTime(20000) })
+
+    expect(socket.readyState).toBe(FakeWebSocket.OPEN)
+  })
+
+  it('distingue reconectar de conectar pela primeira vez', () => {
+    // Na abertura do app o que acontece é uma conexão; depois de uma queda, é
+    // recuperação — e a interface tem o que dizer sobre isso.
+    const { hook, socket } = conectar()
+
+    act(() => { socket.serverClose() })
+    expect(hook.result.current.connectionState).toBe('disconnected')
+
+    act(() => { vi.advanceTimersByTime(1100) })
+    expect(hook.result.current.connectionState).toBe('reconnecting')
+  })
+
+  it('anuncia quando vem a próxima tentativa', () => {
+    const { hook, socket } = conectar()
+
+    act(() => { socket.serverClose() })
+
+    // "Sem conexão" sozinho não diz se algo ainda vai acontecer.
+    expect(hook.result.current.nextRetryAt).toBeGreaterThan(Date.now())
+  })
+})

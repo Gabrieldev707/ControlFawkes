@@ -5,6 +5,7 @@ export const CURRENT_SCREENS = [
   'KEYBOARD',
   'VOLUME',
   'PLATFORMS',
+  'PROFILE',
   'SETTINGS',
   'PAIRING',
 ] as const

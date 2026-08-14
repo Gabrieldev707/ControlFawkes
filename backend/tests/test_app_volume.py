@@ -104,3 +104,50 @@ def test_every_platform_maps_to_a_process_with_a_readable_label():
         assert processes, platform
         for process in processes:
             assert process in SCOPE_LABELS, f"{platform} -> {process} sem rótulo"
+
+
+def test_a_service_installed_as_an_app_is_found_in_edge():
+    """Serviço "instalado" é um PWA do Edge, não um programa próprio: medido,
+    a Netflix instalada aparece como `msedge.exe`. Sem o Edge na lista, mexer
+    no volume da Netflix não achava sessão e caía no volume global — abaixava
+    o sistema inteiro em vez do filme."""
+    from app.windows.app_volume import WindowsAppVolumeAdapter
+
+    class Sessao:
+        def __init__(self, nome):
+            self.Process = type("P", (), {"name": lambda _self: nome})()
+            self.SimpleAudioVolume = type(
+                "V", (), {
+                    "GetMasterVolume": lambda _self: 0.4,
+                    "GetMute": lambda _self: 0,
+                },
+            )()
+
+    adaptador = WindowsAppVolumeAdapter(session_reader=lambda: [Sessao("msedge.exe")])
+    estado = adaptador.get_state("NETFLIX")
+
+    assert estado.process == "msedge.exe"
+    assert estado.level == 40
+    assert SCOPE_LABELS[estado.process] == "Edge"
+
+
+def test_chrome_still_wins_when_both_are_playing():
+    """A ordem da lista é a preferência: o Chrome é onde as plataformas abrem
+    por padrão, então ele vem primeiro."""
+    from app.windows.app_volume import WindowsAppVolumeAdapter
+
+    class Sessao:
+        def __init__(self, nome):
+            self.Process = type("P", (), {"name": lambda _self: nome})()
+            self.SimpleAudioVolume = type(
+                "V", (), {
+                    "GetMasterVolume": lambda _self: 0.5,
+                    "GetMute": lambda _self: 0,
+                },
+            )()
+
+    adaptador = WindowsAppVolumeAdapter(
+        session_reader=lambda: [Sessao("msedge.exe"), Sessao("chrome.exe")],
+    )
+
+    assert adaptador.get_state("NETFLIX").process == "chrome.exe"

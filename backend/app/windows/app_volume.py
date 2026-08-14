@@ -22,19 +22,29 @@ VolumeScope: TypeAlias = Literal["LOCAL", "GLOBAL"]
 
 # Processo que toca o áudio de cada plataforma. As plataformas de navegador
 # compartilham o processo do Chrome — ver a nota do módulo.
+#
+# O Edge entra na lista porque um serviço instalado como aplicativo é um PWA do
+# Edge, não um programa próprio: medido nesta máquina, a Netflix "instalada"
+# aparece como `msedge.exe` com a janela "Netflix", sem sufixo de navegador.
+# Sem ele aqui, mexer no volume da Netflix pelo controle não achava sessão
+# nenhuma e caía no volume global — abaixava o sistema inteiro em vez do filme.
+#
+# Ordem importa: o primeiro que tiver sessão de áudio vence, e o Chrome vem
+# primeiro por ser onde as plataformas são abertas por padrão.
 PLATFORM_PROCESSES: dict[Platform, tuple[str, ...]] = {
     "SPOTIFY": ("spotify.exe",),
-    "YOUTUBE": ("chrome.exe",),
-    "NETFLIX": ("chrome.exe",),
-    "PRIME_VIDEO": ("chrome.exe",),
-    "MAX": ("chrome.exe",),
-    "DISNEY_PLUS": ("chrome.exe",),
+    "YOUTUBE": ("chrome.exe", "msedge.exe"),
+    "NETFLIX": ("chrome.exe", "msedge.exe"),
+    "PRIME_VIDEO": ("chrome.exe", "msedge.exe"),
+    "MAX": ("chrome.exe", "msedge.exe"),
+    "DISNEY_PLUS": ("chrome.exe", "msedge.exe"),
 }
 
 # Nome amigável do que foi realmente afetado, para o feedback não mentir.
 SCOPE_LABELS: dict[str, str] = {
     "spotify.exe": "Spotify",
     "chrome.exe": "Chrome",
+    "msedge.exe": "Edge",
 }
 
 
@@ -73,17 +83,26 @@ class WindowsAppVolumeAdapter:
         self._session_reader = session_reader or _read_sessions
 
     def _session_for(self, process_names: tuple[str, ...]):
-        wanted = {name.lower() for name in process_names}
-        for session in self._session_reader():
-            process = getattr(session, "Process", None)
-            if process is None:
-                continue
-            try:
-                name = process.name().lower()
-            except Exception:  # noqa: BLE001 - processo pode morrer no meio
-                continue
-            if name in wanted:
-                return session, name
+        """A sessão de áudio do primeiro processo da lista que tiver uma.
+
+        Por processo e não por sessão: a lista é uma ordem de preferência, e
+        percorrer as sessões deixava quem decide ser a ordem em que o Windows
+        devolveu — com Chrome e Edge tocando ao mesmo tempo, o volume ia parar
+        num dos dois sem critério nenhum.
+        """
+        sessoes = list(self._session_reader())
+        for procurado in process_names:
+            alvo = procurado.lower()
+            for session in sessoes:
+                process = getattr(session, "Process", None)
+                if process is None:
+                    continue
+                try:
+                    name = process.name().lower()
+                except Exception:  # noqa: BLE001 - processo pode morrer no meio
+                    continue
+                if name == alvo:
+                    return session, name
         raise AppVolumeUnavailable("Nenhuma sessão de áudio para o aplicativo")
 
     def get_state(self, platform: Platform) -> AppVolumeState:

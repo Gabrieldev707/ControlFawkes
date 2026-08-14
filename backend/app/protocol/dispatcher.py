@@ -1,3 +1,4 @@
+import asyncio
 import json
 
 from fastapi import WebSocket
@@ -14,6 +15,10 @@ from app.schemas.ws import (
     CommandResultMessage,
     NeedsPlatformMessage,
     NavigationCommandData,
+    HeartbeatMessage,
+    NowPlayingMessage,
+    NowPlayingSession,
+    TitleAvailabilityData,
     MediaLinkCommandData,
     ErrorCode,
     ErrorMessage,
@@ -61,9 +66,16 @@ from app.security.device_store import DeviceStore
 from app.security.origins import is_origin_allowed
 from app.security.pairing import PairingService
 from app.platforms.launcher import PlatformLauncher
-from app.platforms.registry import suggested_search_platforms
+from app.platforms.registry import open_only_platforms, suggested_search_platforms
 from app.platforms.search import MediaSearchLauncher
 from app.media.actions import MEDIA_ACTIONS, MEDIA_ACTION_LABELS
+from app.media.now_playing import (
+    LeituraEmVoo,
+    WindowsNowPlayingReader,
+    _titulo_generico,
+    da_janela,
+    limpar_titulo_de_janela,
+)
 from app.media.session import WindowsMediaSessionDetector
 from app.media.windows_adapter import WindowsMediaAdapter
 from app.schemas.volume import VOLUME_ACTIONS
@@ -73,8 +85,20 @@ from app.windows.app_volume import (
     AppVolumeUnavailable,
     WindowsAppVolumeAdapter,
 )
+from app.windows.audio_activity import processo_esta_tocando
+from app.windows.focus import WindowFocuser, platform_of
+from app.windows.screen import WindowCapture, ponto_na_tela
+from app.profiles.store import ProfileStore
+from app.history.recorder import HistoryRecorder
+from app.catalog.tmdb import PLATAFORMAS_COM_CATALOGO, TmdbCatalog
 from app.input.pointer import PointerRateLimiter, WindowsPointerAdapter
 from app.schemas.pointer import POINTER_ACTIONS
+from app.schemas.screen import (
+    SCREEN_ACTIONS,
+    ProfileSelectMessage,
+    ScreenCommandData,
+    ScreenTapMessage,
+)
 from app.input.keyboard import WindowsKeyboardAdapter
 from app.schemas.keyboard import KEYBOARD_ACTIONS
 from app.schemas.navigation import (
@@ -96,6 +120,18 @@ from app.protocol.rate_limits import (
 )
 
 
+# Um segundo dá reação imediata ao pausar sem custar nada: a leitura é local
+# e só vira mensagem quando algo muda.
+NOW_PLAYING_INTERVAL_SECONDS = 1.0
+
+# Bem abaixo do tempo que um roteador leva para descartar conexão ociosa, e
+# raro o bastante para não pesar: são poucos bytes a cada dez segundos.
+HEARTBEAT_INTERVAL_SECONDS = 10.0
+
+# A contagem local do celular acumula erro; a cada 15s ela é ancorada de
+# novo no valor real, sem virar um envio por segundo.
+POSITION_RESYNC_SECONDS = 15.0
+
 WS_POLICY_VIOLATION = 1008
 WS_TRY_AGAIN_LATER = 1013
 
@@ -110,7 +146,18 @@ KNOWN_CLIENT_TYPES = {
     *POINTER_ACTIONS,
     *KEYBOARD_ACTIONS,
     *NAVIGATION_ACTIONS,
+    *SCREEN_ACTIONS,
 }
+
+
+def _sem_posicao(mensagem: dict | None) -> dict | None:
+    """A mensagem sem o campo que muda sozinho a cada segundo."""
+    if mensagem is None:
+        return None
+    sessao = mensagem.get("session")
+    if not isinstance(sessao, dict):
+        return mensagem
+    return {**mensagem, "session": {k: v for k, v in sessao.items() if k != "positionSeconds"}}
 
 
 class Dispatcher:
@@ -135,6 +182,12 @@ class Dispatcher:
         pointer_rate_limiter: PointerRateLimiter | None = None,
         keyboard_adapter: WindowsKeyboardAdapter | None = None,
         app_volume_adapter: WindowsAppVolumeAdapter | None = None,
+        window_focuser: WindowFocuser | None = None,
+        window_capture: WindowCapture | None = None,
+        profile_store: ProfileStore | None = None,
+        history_recorder: HistoryRecorder | None = None,
+        catalog: TmdbCatalog | None = None,
+        now_playing_reader: WindowsNowPlayingReader | None = None,
         message_rate_limiter: PointerRateLimiter | None = None,
         navigation_rate_limiter: PointerRateLimiter | None = None,
         intent_service: IntentFallbackService | None = None,
@@ -153,6 +206,21 @@ class Dispatcher:
             app_volume_adapter if app_volume_adapter is not None
             else WindowsAppVolumeAdapter()
         )
+        self.window_focuser = window_focuser or WindowFocuser()
+        self.window_capture = window_capture or WindowCapture()
+        self.profile_store = profile_store or ProfileStore()
+        self.history_recorder = history_recorder or HistoryRecorder()
+        self.catalog = catalog if catalog is not None else TmdbCatalog()
+        self.now_playing_reader = now_playing_reader or WindowsNowPlayingReader(
+            window_title_reader=self.window_focuser.media_window_title,
+        )
+        # Capa da mídia atual, por id. Fica em memória e some com o processo:
+        # é enfeite de tela, não dado que mereça disco.
+        self.thumbnails: dict[str, bytes] = {}
+        self._leitura = LeituraEmVoo(self.now_playing_reader)
+        # Pôster por título, incluindo o "não achei". Some com o processo.
+        self._posters: dict[tuple[str, Platform | None], str | None] = {}
+        self._posters_em_busca: set[tuple[str, Platform | None]] = set()
         self.message_rate_limiter = message_rate_limiter or message_limiter()
         self.navigation_rate_limiter = navigation_rate_limiter or navigation_limiter()
         self.navigation_repeat_guard = non_repeatable_navigation_limiter()
@@ -161,9 +229,241 @@ class Dispatcher:
         self._authenticated: dict[WebSocket, str] = {}
         self._held_pointer_buttons: set[WebSocket] = set()
         self._connections: set[WebSocket] = set()
+        self._now_playing_task: asyncio.Task | None = None
+        self._last_now_playing: dict | None = None
 
     async def startup(self) -> None:
         self.pairing_service.initialize()
+        if self._now_playing_task is None:
+            # Passa a régua de limpeza atual sobre o histórico antigo: sem
+            # isto, uma melhoria na limpeza de título deixa para sempre duas
+            # linhas do mesmo filme, cada uma com um pedaço do tempo.
+            try:
+                self.history_recorder.store.consolidar(limpar_titulo_de_janela)
+                # E tira as capas que o catálogo não tinha como acertar. Filtrar
+                # na leitura escondia a capa errada da tela, mas ela continuava
+                # no arquivo — e enquanto estiver lá, a busca de capa considera
+                # o título já resolvido e nunca tenta de novo.
+                self.history_recorder.store.podar_capas()
+            except Exception:  # noqa: BLE001 - nunca impede o servidor de subir
+                pass
+            self._now_playing_task = asyncio.create_task(self._watch_now_playing())
+
+    async def shutdown(self) -> None:
+        # Fecha a conta do que estava tocando: sem isto, o último trecho de uma
+        # sessão longa se perderia no desligamento.
+        try:
+            self.history_recorder.encerrar()
+        except Exception:  # noqa: BLE001
+            pass
+        if self._now_playing_task is not None:
+            self._now_playing_task.cancel()
+            self._now_playing_task = None
+
+    async def _watch_now_playing(self) -> None:
+        """Empurra o que está tocando para quem já se autenticou.
+
+        Só quando muda: reenviar o mesmo estado a cada segundo gastaria uma
+        mensagem por segundo por dispositivo para não dizer nada. A posição
+        segue no celular, que conta sozinho a partir do último valor.
+        """
+        desde_o_ultimo_sinal = 0.0
+        desde_a_ultima_posicao = 0.0
+        while True:
+            try:
+                await asyncio.sleep(NOW_PLAYING_INTERVAL_SECONDS)
+
+                # Sem ninguém conectado o laço continua lendo, só não fala.
+                # Antes ele pulava tudo, e o histórico só existia enquanto o
+                # celular estivesse com a página aberta — ou seja, justamente
+                # quando ninguém estava assistindo de verdade.
+                if not self._authenticated:
+                    try:
+                        await self._read_now_playing(contar=True)
+                    except Exception:  # noqa: BLE001
+                        pass
+                    continue
+
+                desde_o_ultimo_sinal += NOW_PLAYING_INTERVAL_SECONDS
+                if desde_o_ultimo_sinal >= HEARTBEAT_INTERVAL_SECONDS:
+                    desde_o_ultimo_sinal = 0.0
+                    await self._broadcast(HeartbeatMessage().model_dump())
+
+                # O que está tocando vem depois e num try próprio: uma falha
+                # de mídia não pode calar o batimento, que é justamente o que
+                # prova ao celular que a conexão está viva.
+                try:
+                    mensagem = await self._read_now_playing(contar=True)
+                except Exception:  # noqa: BLE001
+                    continue
+
+                desde_a_ultima_posicao += NOW_PLAYING_INTERVAL_SECONDS
+                if not self._vale_enviar(mensagem, desde_a_ultima_posicao):
+                    continue
+                desde_a_ultima_posicao = 0.0
+                self._last_now_playing = mensagem
+                await self._broadcast(mensagem)
+            except asyncio.CancelledError:
+                raise
+            except Exception:  # noqa: BLE001 - o laço não pode morrer
+                continue
+
+    def _vale_enviar(self, mensagem: dict, desde_a_ultima_posicao: float) -> bool:
+        """Manda quando algo muda de verdade, não quando o relógio anda.
+
+        A posição avança a cada segundo, então comparar a mensagem inteira
+        fazia disparar um envio por segundo por dispositivo — exatamente o que
+        este laço dizia evitar. Quem conta os segundos é o celular, a partir do
+        último valor recebido.
+
+        A ressincronização periódica existe porque a contagem local acumula
+        erro: sem ela, uma sessão de duas horas termina com a barra em outro
+        lugar do filme.
+        """
+        if _sem_posicao(mensagem) != _sem_posicao(self._last_now_playing):
+            return True
+        return desde_a_ultima_posicao >= POSITION_RESYNC_SECONDS
+
+    async def _read_now_playing(self, contar: bool = False) -> dict:
+        """A leitura atual. Com `contar`, esta passagem entra no histórico.
+
+        A contagem fica presa à volta do laço, e não a toda chamada: o cartão
+        também é lido quando um celular se conecta, e cada conexão somaria
+        segundos que ninguém assistiu.
+        """
+        atual = await self._leitura.ler()
+        if atual is None and self._leitura.travada:
+            # A SMTC parou de responder. Em vez de dizer "nada tocando" e
+            # desligar os controles junto, diz o que a janela aberta mostra.
+            janela = self.window_focuser.media_window()
+            if janela is not None:
+                atual = da_janela(
+                    janela.title,
+                    platform_of(janela),
+                    # Do processo da janela, e não da plataforma: a Netflix
+                    # instalada como aplicativo toca no Edge, e as abertas no
+                    # navegador tocam no Chrome. Quem sabe qual é a janela.
+                    tocando=processo_esta_tocando(janela.process),
+                )
+
+        if contar:
+            try:
+                self.history_recorder.observar(atual, NOW_PLAYING_INTERVAL_SECONDS)
+            except Exception:  # noqa: BLE001 - histórico nunca cala o cartão
+                pass
+
+        if atual is None:
+            return NowPlayingMessage(session=None).model_dump()
+
+        if atual.thumbnail and atual.thumbnail_id:
+            self.thumbnails[atual.thumbnail_id] = atual.thumbnail
+            # Duas capas bastam: a atual e a anterior, para o celular que ainda
+            # está baixando a de antes não receber 404.
+            for antigo in list(self.thumbnails)[:-2]:
+                self.thumbnails.pop(antigo, None)
+
+        return NowPlayingMessage(session=NowPlayingSession(
+            title=atual.title,
+            episode=atual.episode,
+            artist=atual.artist,
+            app=atual.app,
+            platform=atual.platform,
+            playing=atual.playing,
+            positionSeconds=atual.position_seconds,
+            durationSeconds=atual.duration_seconds,
+            positionStale=atual.position_stale,
+            thumbnailId=atual.thumbnail_id,
+            posterUrl=self._poster_para(atual),
+        )).model_dump()
+
+    def _poster_para(self, atual) -> str | None:
+        """Pôster do catálogo, quando o aplicativo não publica capa.
+
+        O Spotify manda a capa do álbum pela própria API do Windows; o
+        navegador não manda nada, então todo filme ficava com o disco cinza.
+        O catálogo já sabe achar o título — falta só usar o pôster que ele
+        devolve junto.
+
+        A busca acontece fora do laço, num pedido só por título: consultar a
+        cada segundo seria uma chamada de rede por segundo para uma imagem que
+        não muda.
+        """
+        if atual.thumbnail_id is not None:
+            return None
+        if self.catalog is None or not self.catalog.enabled:
+            return None
+
+        titulo = atual.title.strip()
+        if not titulo:
+            return None
+        # "Netflix" não é uma obra. É a página de catálogo — ou, o que dá no
+        # mesmo aqui, a SMTC pendurada e a janela dizendo só o nome do serviço.
+        # Perguntar ao catálogo por esse nome devolve um título qualquer: o
+        # histórico chegou a guardar a capa que o TMDB deu para a busca
+        # "Netflix". Sem capa é honesto; com a capa de outro filme, não.
+        if _titulo_generico(titulo, atual.app, atual.platform):
+            return None
+        # Nem de um título que a API de mídia não confirmou. Numa série, o que
+        # a janela mostra é o episódio, e pedir a capa dele ao catálogo devolve
+        # a capa de outra obra com muita confiança: "Campo dos Sonhos", episódio
+        # de Rick and Morty, recebeu o pôster do filme de 1989. Sem capa é
+        # honesto — e o logo do serviço, que o cartão já usa nesse caso, diz o
+        # que dá para dizer.
+        if not atual.trustworthy:
+            return None
+        # O YouTube não é catálogo de filme, e o Spotify toca música: procurar
+        # esses títulos no TMDB devolve a capa de outra coisa. Medido no cartão
+        # que chega ao celular — o vídeo "CHEGUEI NA SÍRIA, PAÍS DE CONFLITO E
+        # RELIGIÃO" recebeu o pôster de um filme qualquer.
+        #
+        # Plataforma desconhecida ainda tenta: é o caso de quem foi identificado
+        # só pela SMTC, onde o título costuma ser de obra mesmo.
+        if atual.platform is not None and atual.platform not in PLATAFORMAS_COM_CATALOGO:
+            return None
+        chave = (titulo, atual.platform)
+        if chave in self._posters:
+            return self._posters[chave]
+
+        if chave not in self._posters_em_busca:
+            self._posters_em_busca.add(chave)
+            asyncio.create_task(self._buscar_poster(titulo, atual.platform))
+        return None
+
+    async def _buscar_poster(self, titulo: str, plataforma: Platform | None) -> None:
+        chave = (titulo, plataforma)
+        try:
+            opcoes = await self.catalog.lookup_options(titulo)
+            escolhida = self._opcao_da_plataforma(opcoes, plataforma)
+            # Guarda inclusive o "não achei": sem isso, um título que o catálogo
+            # não conhece seria consultado de novo a cada leitura.
+            self._posters[chave] = escolhida.poster_url if escolhida else None
+        except Exception:  # noqa: BLE001 - pôster é enfeite, nunca motivo de erro
+            self._posters[chave] = None
+        finally:
+            self._posters_em_busca.discard(chave)
+
+    @staticmethod
+    def _opcao_da_plataforma(opcoes: list, plataforma: Platform | None):
+        """Entre filme e série de mesmo nome, a que está no serviço aberto.
+
+        "O Justiceiro" é filme de 2004 no Max e série da Marvel no Disney+.
+        Assistindo no Disney+, a capa certa é a da série — e essa informação
+        está bem ali, na janela que já sabemos qual é.
+        """
+        if not opcoes:
+            return None
+        if plataforma is not None:
+            for opcao in opcoes:
+                if plataforma in opcao.platforms:
+                    return opcao
+        return opcoes[0]
+
+    async def _broadcast(self, payload: dict) -> None:
+        for websocket in list(self._authenticated):
+            try:
+                await websocket.send_json(payload)
+            except Exception:  # noqa: BLE001 - conexão caindo não é erro aqui
+                continue
 
     async def connect(self, websocket: WebSocket) -> bool:
         """Aceita a conexão. Retorna False quando ela foi recusada."""
@@ -186,9 +486,11 @@ class Dispatcher:
 
     async def disconnect(self, websocket: WebSocket) -> None:
         self._release_input(websocket)
-        # Desconectar no meio de um comando podia deixar tecla presa: uma seta
-        # presa repete sozinha até o usuário mexer no teclado físico.
-        self.keyboard_adapter.release_all()
+        # Só o que ficou preso de verdade, e não a lista inteira de teclas.
+        # O celular desconecta o tempo todo — tela apagada, troca de app,
+        # oscilação de rede —, e cada desconexão mandava um Escape para a
+        # janela em foco, tirando o filme da tela cheia sozinho.
+        self.keyboard_adapter.release_stuck()
         self.pointer_rate_limiter.clear(websocket)
         self.message_rate_limiter.clear(websocket)
         self.navigation_rate_limiter.clear(websocket)
@@ -290,6 +592,7 @@ class Dispatcher:
                 websocket,
                 message.requestId,
                 message.payload.platform,
+                na_busca=message.payload.openSearch,
             )
             return
 
@@ -341,6 +644,10 @@ class Dispatcher:
 
         if isinstance(message, NavigationMessage):
             await self._handle_navigation(websocket, message)
+            return
+
+        if isinstance(message, (ScreenTapMessage, ProfileSelectMessage)):
+            await self._handle_screen_control(websocket, message)
             return
 
         await self._send_error(
@@ -509,21 +816,56 @@ class Dispatcher:
         request_id: str,
         intent: NeedsPlatformIntent,
     ) -> None:
+        # Música não passa pelo catálogo de filmes e séries.
+        opcoes = [] if intent.music_hint else await self._availability_options(intent.query)
+        availability = opcoes[0] if opcoes else None
+        alternativa = opcoes[1] if len(opcoes) > 1 else None
+
         response = NeedsPlatformMessage(
             requestId=request_id,
             query=intent.query,
             suggestedPlatforms=suggested_search_platforms(intent.music_hint),
+            # Música não se procura no Max nem no Disney+: oferecer abrir os
+            # dois só polui a escolha quando o pedido foi "toca alguma coisa".
+            openOnlyPlatforms=[] if intent.music_hint else open_only_platforms(),
+            availability=availability,
+            availabilityAlternative=alternativa,
         )
         await websocket.send_json(response.model_dump())
+
+    async def _availability_options(self, query: str) -> list[TitleAvailabilityData]:
+        """O que o catálogo achou, com a alternativa quando existe.
+
+        Qualquer falha vira lista vazia e a escolha manual continua igual: o
+        catálogo é um atalho, e um atalho indisponível não pode virar um erro na
+        cara do usuário.
+        """
+        if self.catalog is None or not self.catalog.enabled:
+            return []
+        try:
+            achados = await self.catalog.lookup_options(query)
+        except Exception:  # noqa: BLE001 - rede, formato, o que for
+            return []
+        return [
+            TitleAvailabilityData(
+                title=a.title,
+                year=a.year,
+                posterUrl=a.poster_url,
+                platforms=a.platforms,
+                kind=a.kind,
+            )
+            for a in achados
+        ]
 
     async def _handle_open_platform(
         self,
         websocket: WebSocket,
         request_id: str,
         platform: Platform,
+        na_busca: bool = False,
     ) -> None:
         label = PLATFORM_LABELS[platform]
-        launch = self.platform_launcher.open(platform)
+        launch = self.platform_launcher.open(platform, na_busca=na_busca)
         if not launch.executed or launch.strategy is None:
             error_message = (
                 "Google Chrome não foi encontrado no computador."
@@ -587,11 +929,22 @@ class Dispatcher:
                 websocket,
                 message.requestId,
                 "MEDIA_SESSION_NOT_FOUND",
-                "Nenhuma plataforma de mídia ativa foi identificada.",
+                # Não é falha do controle: é o estado mais comum de todos,
+                # alguém que pegou o celular antes de começar a assistir. A
+                # mensagem diz o que fazer em vez de só constatar a ausência.
+                "Nada tocando agora. Abra uma plataforma para começar.",
             )
             return
 
         label = PLATFORM_LABELS[session.platform]
+
+        # Sem isto a tecla ia para a janela que estivesse na frente: "tela
+        # cheia" digitava um "f" no editor de código, "+10s" mandava seta para
+        # o Explorer, e a resposta dizia "comando enviado" do mesmo jeito.
+        # Falhar em focar não impede o envio — o alvo pode já estar na frente —,
+        # mas o resultado diz em qual janela a tecla caiu.
+        focused = self.window_focuser.focus_platform(session.platform)
+
         if not self.media_adapter.supports(message.type, session.platform):
             await self._send_error(
                 websocket,
@@ -601,7 +954,13 @@ class Dispatcher:
             )
             return
 
-        if not self.media_adapter.execute(message.type, session.platform):
+        if message.type == "MEDIA_FULLSCREEN" and session.platform != "SPOTIFY":
+            executed = self._enter_fullscreen(session.platform)
+        elif message.type == "MEDIA_PLAY_PAUSE":
+            executed = self._toggle_play_pause(session.platform)
+        else:
+            executed = self.media_adapter.execute(message.type, session.platform)
+        if not executed:
             await self._send_error(
                 websocket,
                 message.requestId,
@@ -612,14 +971,171 @@ class Dispatcher:
 
         response = CommandResultMessage(
             requestId=message.requestId,
-            message=f"Comando enviado ao {label}.",
+            message=(
+                f"Comando enviado ao {label}."
+                if focused
+                else f"Comando enviado ao {label} — deixe a janela dele visível."
+            ),
             data=MediaCommandData(
                 action=message.type,
                 platform=session.platform,
                 session=session.kind,
+                focused=focused,
             ),
         )
         await websocket.send_json(response.model_dump())
+
+    def _clicar_no_video(self, platform: Platform, duplo: bool) -> bool | None:
+        """Clique no meio do vídeo. None quando não há janela para clicar.
+
+        É o mesmo caminho que resolveu a tela cheia: o atalho de teclado é de
+        cada site e nenhum deles o aplica igual, enquanto clicar no vídeo é o
+        gesto que todo player web implementa — um clique alterna play/pause,
+        dois alternam tela cheia.
+        """
+        window = self.window_focuser.find(platform)
+        if window is None:
+            return None
+        centro = self.window_focuser.center_of(window)
+        if centro is None:
+            return None
+
+        self.window_focuser.focus(window)
+        if not self.pointer_adapter.move_to(*centro):
+            return None
+        return self.pointer_adapter.double_click() if duplo else self.pointer_adapter.click()
+
+    async def _handle_screen_control(
+        self,
+        websocket: WebSocket,
+        message: ScreenTapMessage | ProfileSelectMessage,
+    ) -> None:
+        """Um toque na foto da tela vira um clique dentro da janela.
+
+        O caminho é o mesmo do play/pause por clique, que já provou funcionar
+        nos seis serviços: achar a janela, trazer para frente, mirar, clicar. A
+        única novidade é de onde vem a mira — do dedo na imagem, em vez do
+        centro do vídeo.
+        """
+        platform = message.payload.platform
+        if isinstance(message, ScreenTapMessage):
+            x, y, duplo = message.payload.x, message.payload.y, message.payload.double
+        else:
+            perfil = self.profile_store.buscar(platform, message.payload.profileId)
+            if perfil is None:
+                await self._send_error(
+                    websocket,
+                    message.requestId,
+                    "PROFILE_NOT_FOUND",
+                    "Esse perfil não está mais cadastrado.",
+                )
+                return
+            x, y, duplo = perfil.x, perfil.y, False
+
+        if not self._clicar_na_janela(platform, x, y, duplo):
+            await self._send_error(
+                websocket,
+                message.requestId,
+                "SCREEN_CONTROL_FAILED",
+                f"{PLATFORM_LABELS[platform]} não está aberto no computador.",
+            )
+            return
+
+        await websocket.send_json(CommandResultMessage(
+            requestId=message.requestId,
+            message="Toque enviado." if isinstance(message, ScreenTapMessage)
+            else f"Entrando como {perfil.nome}.",
+            data=ScreenCommandData(
+                action=message.type,
+                platform=platform,
+                executed=True,
+            ),
+        ).model_dump())
+
+    def _clicar_na_janela(self, platform: Platform, x: float, y: float, duplo: bool) -> bool:
+        """Clique numa posição relativa da janela da plataforma.
+
+        Relativa, e não absoluta: a janela pode ter mudado de tamanho — ou de
+        monitor, o que aconteceu no meio da medição — desde a foto que a pessoa
+        está vendo. A fração continua valendo; o pixel não continuaria.
+        """
+        janela = self.window_focuser.find(platform)
+        if janela is None:
+            return False
+        rect = self.window_capture.retangulo(janela)
+        if rect is None:
+            return False
+
+        alvo = ponto_na_tela(rect, x, y)
+        # Enquanto o clique errado não for explicado, o caminho inteiro fica
+        # visível no terminal: fração recebida, retângulo no instante do clique
+        # e pixel final. É o suficiente para separar "a foto estava velha" de
+        # "a conta está errada" sem ter de adivinhar de novo.
+        print(
+            f"[toque] {platform} fracao=({x:.4f}, {y:.4f}) "
+            f"janela={rect.esquerda},{rect.topo} {rect.largura}x{rect.altura} "
+            f"-> pixel={alvo} | {janela.title[:40]!r}",
+            flush=True,
+        )
+
+        self.window_focuser.focus(janela)
+        if not self.pointer_adapter.move_to(*alvo):
+            return False
+        return self.pointer_adapter.double_click() if duplo else self.pointer_adapter.click()
+
+    def _toggle_play_pause(self, platform: Platform) -> bool:
+        """Play/pause pela barra de espaço, com a janela em foco.
+
+        Nem a tecla global de mídia nem o clique no meio do vídeo.
+
+        A tecla `VK_MEDIA_PLAY_PAUSE` depende do subsistema de mídia do Windows
+        rotear o evento até o aplicativo certo — o mesmo subsistema cuja API
+        ficou pendurada nesta máquina por minutos. Quando ele adoece, a tecla
+        vai para lugar nenhum e o botão "não pega", sem erro nenhum aparecer.
+
+        O clique no centro funciona enquanto o vídeo ocupa o meio da tela — que
+        é exatamente o que deixa de valer quando ele pausa. Medido na tela do
+        usuário: no plano com anúncios, pausar a Netflix cobre a direita com um
+        anúncio e encolhe o player num cartão à esquerda. O centro da janela
+        cai no anúncio, então o botão pausava e não despausava — e ainda mirava
+        um link de anunciante, que é pior do que não fazer nada.
+
+        A barra de espaço é o atalho que todo player web implementa e não
+        depende de onde o vídeo está na tela. O foco na janela é o que faz a
+        tecla chegar no lugar certo sem passar pelo subsistema de mídia.
+
+        O Spotify segue fora: é aplicativo, não página, e a tecla de mídia
+        funciona nele.
+        """
+        if platform == "SPOTIFY":
+            return self.media_adapter.execute("MEDIA_PLAY_PAUSE", platform)
+        janela = self.window_focuser.find(platform)
+        if janela is None:
+            # Sem janela para focar, a tecla é a única tentativa que resta.
+            return self.media_adapter.execute("MEDIA_PLAY_PAUSE", platform)
+        self.window_focuser.focus(janela)
+        return self.keyboard_adapter.press_key("SPACE")
+
+    def _enter_fullscreen(self, platform: Platform) -> bool:
+        """Duplo clique no meio do vídeo, em vez da tecla F.
+
+        O atalho de teclado é de cada site e nenhum deles o aplica igual: no
+        Max, com a janela em foco, o F não fazia absolutamente nada — medido.
+        Já o duplo clique sobre o vídeo é o gesto de tela cheia que todo player
+        web implementa, e foi o que funcionou no uso real.
+
+        A saída continua sendo Escape, que é padrão do navegador e não depende
+        do site.
+
+        Vale o mesmo aviso do play/pause: mirar o centro só acerta o vídeo
+        enquanto ele ocupa o meio da tela. Com a reprodução pausada no plano com
+        anúncios, o meio é do anúncio — então o caso a reproduzir é sempre com
+        o vídeo tocando.
+        """
+        clicou = self._clicar_no_video(platform, duplo=True)
+        if clicou is None:
+            return self.media_adapter.execute("MEDIA_FULLSCREEN", platform)
+        return clicou
 
     async def _handle_volume_control(
         self,
@@ -687,12 +1203,14 @@ class Dispatcher:
 
     async def _send_volume_result(self, websocket, message, state, scope, target) -> None:
         alvo = target or "Windows"
-        prefixo = f"Volume do {alvo}" if scope == "LOCAL" else "Volume do Windows"
-        sufixo = "" if scope == "LOCAL" else " (fallback)"
+        # "geral" e não "(fallback)": o que a pessoa precisa saber é que o
+        # ajuste pegou o computador inteiro, e não só o aplicativo. A palavra
+        # em inglês aparecia na tela do celular sem explicar nada.
+        prefixo = f"Volume do {alvo}" if scope == "LOCAL" else "Volume geral do Windows"
         response_message = (
-            f"{prefixo}{sufixo}: mudo {'ativado' if state.muted else 'desativado'}, {state.level}%."
+            f"{prefixo}: mudo {'ativado' if state.muted else 'desativado'}, {state.level}%."
             if isinstance(message, VolumeMuteToggleMessage)
-            else f"{prefixo}{sufixo}: {state.level}%."
+            else f"{prefixo}: {state.level}%."
         )
         response = CommandResultMessage(
             requestId=message.requestId,
@@ -767,6 +1285,15 @@ class Dispatcher:
         websocket: WebSocket,
         message: KeyboardTextMessage | KeyboardKeyMessage,
     ) -> None:
+        # A tecla vai para a janela em primeiro plano, seja ela qual for. Sem
+        # trazer a plataforma para frente, "digitar no computador" digitava no
+        # editor de código que estivesse aberto — e o controle respondia "texto
+        # enviado", porque enviado ele foi. É o mesmo ponto cego que o módulo de
+        # foco resolveu para as teclas de mídia, e que ficou de fora aqui.
+        janela = self.window_focuser.media_window()
+        if janela is not None:
+            self.window_focuser.focus(janela)
+
         if isinstance(message, KeyboardTextMessage):
             executed = self.keyboard_adapter.write_text(message.payload.text)
             response_message = "Texto enviado."
@@ -861,6 +1388,7 @@ class Dispatcher:
         )
         await websocket.send_json(response.model_dump())
         await self._send_state(websocket, "READY", "Computador pronto.")
+        await self._send_now_playing(websocket)
 
     async def _authenticate(self, websocket: WebSocket, message: AuthMessage) -> None:
         if not self.device_store.authenticate(message.payload.deviceId, message.payload.token):
@@ -874,3 +1402,18 @@ class Dispatcher:
         )
         await websocket.send_json(response.model_dump())
         await self._send_state(websocket, "READY", "Computador pronto.")
+        await self._send_now_playing(websocket)
+
+    async def _send_now_playing(self, websocket: WebSocket) -> None:
+        """Estado atual assim que a conexão fica pronta.
+
+        Sem isto o cartão só apareceria na próxima mudança — e se o filme
+        estivesse tocando parado, o celular ficaria sem nada na tela até alguém
+        apertar pausa.
+        """
+        try:
+            payload = self._last_now_playing or await self._read_now_playing()
+            self._last_now_playing = payload
+            await websocket.send_json(payload)
+        except Exception:  # noqa: BLE001 - o cartão nunca derruba a sessão
+            return

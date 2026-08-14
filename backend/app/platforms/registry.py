@@ -26,7 +26,11 @@ BROWSER_PLATFORM_URLS: frozenset[str] = frozenset(
 )
 
 BROWSER_ALLOWED_URLS: frozenset[str] = (
-    BROWSER_PLATFORM_URLS | {PLATFORM_URLS["SPOTIFY"]}
+    BROWSER_PLATFORM_URLS
+    | {PLATFORM_URLS["SPOTIFY"]}
+    # Páginas de busca sem consulta. Entram como endereços exatos, não como
+    # regra: a allowlist só cresce com URL escrita à mão e conferida.
+    | {"https://play.max.com/search"}
 )
 
 
@@ -88,6 +92,38 @@ def suggested_search_platforms(music_hint: bool = False) -> list[Platform]:
     conteúdo: apenas reordena, sem remover opções.
     """
     return list(_MUSIC_FIRST if music_hint else _VIDEO_FIRST)
+
+
+# Plataformas sem busca por URL, oferecidas apenas para abrir. Ficavam fora da
+# escolha inteiramente, e o resultado era pior do que o beco sem saída que a
+# omissão queria evitar: um título que só existe no Max não tinha caminho
+# nenhum pelo controle, e a lista dava a impressão de que a plataforma não era
+# suportada. Aparecer como "abrir" é honesto e chega mais perto do que o
+# usuário pediu.
+_OPEN_ONLY: tuple[Platform, ...] = ("MAX", "DISNEY_PLUS")
+
+# Página de busca da plataforma, sem a consulta.
+#
+# Não substitui a busca por URL — a consulta continua sendo descartada, e por
+# isso estas plataformas seguem fora de QUERY_SEARCH_SPECS. O que muda é onde a
+# pessoa cai: abrir a home obrigava a achar e clicar na lupa antes de digitar.
+# Medido: `play.max.com/search` abre direto na tela de busca ("Pesquisar • HBO
+# Max" no título da janela) para quem está logado.
+OPEN_ONLY_SEARCH_URLS: dict[Platform, str] = {
+    "MAX": "https://play.max.com/search",
+}
+
+
+def open_only_search_url(platform: Platform) -> str | None:
+    """Onde abrir uma plataforma sem busca por URL, para cair mais perto."""
+    return OPEN_ONLY_SEARCH_URLS.get(platform)
+
+OPEN_ONLY_PLATFORMS: frozenset[Platform] = frozenset(_OPEN_ONLY)
+
+
+def open_only_platforms() -> list[Platform]:
+    """Plataformas que o controle só consegue abrir, sem levar a consulta."""
+    return list(_OPEN_ONLY)
 
 
 # Links de vídeo canônicos, montados por app/platforms/links.py a partir de um

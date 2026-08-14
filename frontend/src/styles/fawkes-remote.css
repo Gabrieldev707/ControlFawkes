@@ -63,6 +63,16 @@ button,
   -webkit-touch-callout: none;
 }
 
+/* Piso de 16px para campo de formulário sem estilo próprio. Abaixo disso o
+   Safari do iPhone amplia a página ao focar o campo e não volta sozinho — o
+   usuário fica preso numa tela com zoom. Regras mais específicas continuam
+   vencendo, então cada campo estilizado também precisa respeitar o piso. */
+input,
+select,
+textarea {
+  font-size: max(16px, 1rem);
+}
+
 /* Layout Principal */
 .remote-container {
   display: flex;
@@ -75,42 +85,102 @@ button,
   overflow: hidden;
 }
 
-/* Header */
+/* Header: a marca no centro, o estado da conexão discreto no canto. */
 .remote-header {
+  position: relative;
   display: flex;
-  justify-content: space-between;
+  justify-content: center;
   align-items: center;
-  padding-bottom: 20px;
+  min-height: 46px;
+  padding-bottom: 14px;
   flex: 0 0 auto;
 }
 
-.remote-title {
-  font-family: 'Syncopate', sans-serif;
-  font-size: 1.15rem;
-  font-weight: 700;
-  color: var(--text-primary);
-  letter-spacing: 0.15em;
+.fawkes-mark {
+  margin: 0;
+  color: var(--accent-bright);
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  /* Os blocos precisam encostar um no outro para o nome virar uma forma só:
+     qualquer entrelinha acima de 1 abre uma fresta no meio das letras. */
+  /* Escala com a largura da tela: são 50 colunas de bloco, e é isso que define
+     o tamanho. Travar em px deixaria a marca pequena no telefone grande e
+     cortada no pequeno. */
+  font-size: clamp(0.46rem, 2.75vw, 0.78rem);
+  font-weight: 400;
+  /* Abaixo de 1 de propósito: o glifo de bloco não preenche a altura da caixa,
+     então mesmo com entrelinha 1 sobra um fio de fundo atravessando cada letra.
+     0.85 fecha a costura sem deformar o desenho. */
+  line-height: 0.85;
+  letter-spacing: 0;
+  text-align: center;
+  white-space: pre;
+  background: linear-gradient(96deg, var(--accent-bright) 12%, var(--cyan) 58%, var(--gold) 96%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  /* Duas camadas: a escura define a borda da letra, a colorida faz o brilho.
+     Só com o brilho, as arestas finas da sombra do desenho se dissolvem. */
+  filter: drop-shadow(0 1px 0 rgba(0, 0, 0, 0.9)) drop-shadow(0 0 9px var(--accent-glow));
 }
 
-.status-badge {
+.connection-mark {
+  position: absolute;
+  top: 50%;
+  right: 0;
   display: flex;
   align-items: center;
   gap: 6px;
-  font-size: 0.8rem;
-  padding: 4px 10px;
-  background: var(--bg-panel);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-full);
+  transform: translateY(-50%);
+  margin-top: -7px;
 }
 
-.status-dot {
-  width: 8px;
-  height: 8px;
+.connection-mark__dot {
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
+  background: var(--text-secondary);
+  transition: background 200ms ease, box-shadow 200ms ease;
 }
-.status-dot.connected { background: var(--green); box-shadow: 0 0 8px var(--green); }
-.status-dot.disconnected { background: var(--red); box-shadow: 0 0 8px var(--red); }
-.status-dot.connecting { background: var(--cyan); box-shadow: 0 0 8px var(--cyan); }
+
+.connection-mark__label {
+  color: var(--text-secondary);
+  font-size: 0.63rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.connection-mark[data-state='connected'] .connection-mark__dot {
+  background: var(--green);
+  box-shadow: 0 0 7px rgba(74, 222, 128, 0.6);
+}
+
+.connection-mark[data-state='connecting'] .connection-mark__dot {
+  background: var(--cyan);
+  animation: connection-blink 1.1s ease-in-out infinite;
+}
+
+.connection-mark[data-state='connecting'] .connection-mark__label {
+  color: var(--cyan);
+}
+
+.connection-mark[data-state='disconnected'] .connection-mark__dot,
+.connection-mark[data-state='error'] .connection-mark__dot {
+  background: var(--red);
+  box-shadow: 0 0 7px rgba(248, 113, 113, 0.55);
+}
+
+.connection-mark[data-state='disconnected'] .connection-mark__label,
+.connection-mark[data-state='error'] .connection-mark__label {
+  color: var(--red);
+}
+
+@keyframes connection-blink {
+  50% { opacity: 0.3; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .connection-mark__dot { animation: none; }
+}
 
 /* Orb Container */
 .orb-container {
@@ -369,15 +439,47 @@ button,
   opacity: 0.52;
 }
 
-.voice-soon {
-  position: absolute;
-  bottom: -15px;
-  left: 50%;
+/* Gravando: o halo pulsante é o retorno de que o microfone está aberto — a
+   pessoa precisa saber disso sem depender de ler o texto de status. */
+.voice-btn[data-state='recording'] {
+  border-color: var(--red);
+  background: rgba(248, 113, 113, 0.16);
+  color: var(--red);
+  animation: voice-pulse 1.4s ease-in-out infinite;
+}
+
+.voice-btn[data-state='transcribing'],
+.voice-btn[data-state='requesting'] {
+  border-color: var(--accent-bright);
+  color: var(--accent-bright);
+}
+
+.voice-btn[data-state='error'] {
+  border-color: rgba(248, 113, 113, 0.45);
+  color: var(--red);
+}
+
+.voice-btn[data-state='unsupported'] {
   color: var(--text-secondary);
-  font-size: 0.58rem;
-  letter-spacing: 0.04em;
-  white-space: nowrap;
-  transform: translateX(-50%);
+  opacity: 0.7;
+}
+
+.voice-btn__spinner {
+  animation: voice-spin 900ms linear infinite;
+}
+
+@keyframes voice-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(248, 113, 113, 0.45); }
+  50% { box-shadow: 0 0 0 9px rgba(248, 113, 113, 0); }
+}
+
+@keyframes voice-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .voice-btn[data-state='recording'] { animation: none; }
+  .voice-btn__spinner { animation-duration: 2.4s; }
 }
 
 /* Local pairing */
@@ -481,10 +583,8 @@ button,
 }
 
 .home-shortcuts__heading {
-  display: flex;
-  align-items: end;
-  justify-content: space-between;
-  gap: 12px;
+  display: grid;
+  gap: 2px;
 }
 
 .home-shortcuts__eyebrow,
@@ -498,8 +598,9 @@ button,
 
 .home-shortcuts__heading h2 {
   color: var(--text-primary);
-  font-size: 0.96rem;
-  font-weight: 600;
+  font-size: 1.05rem;
+  font-weight: 650;
+  letter-spacing: -0.01em;
 }
 
 .home-shortcuts__grid {
@@ -560,6 +661,18 @@ button,
   min-height: 0;
   flex-direction: column;
   overflow-y: auto;
+  /* Sem isto, rolar além do fim encadeia no body e o iOS arrasta a página
+     inteira — a tela "escorregava" no meio do uso do controle. */
+  overscroll-behavior-y: contain;
+  /* Sem barra à mostra, como na tela inicial. A Início já escondia a dela e as
+     outras não: no Perfil sobrava uma barra cinza do sistema atravessando a
+     lateral, do topo até a navegação. Quem rola com o dedo não precisa dela, e
+     a tela de controle continua com a sua, fina e roxa, por regra própria. */
+  scrollbar-width: none;
+}
+
+.remote-screen::-webkit-scrollbar {
+  display: none;
 }
 
 .remote-screen__back {
@@ -582,61 +695,472 @@ button,
   color: var(--text-primary);
 }
 
-.remote-screen__content {
-  display: flex;
-  flex: 1;
-  min-height: 350px;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 32px 22px 72px;
-  text-align: center;
+/* ── Configurações ────────────────────────────────────────────────────────── */
+
+.settings-screen {
+  gap: 12px;
+  padding: 0 2px 24px;
 }
 
-.remote-screen__icon {
-  display: grid;
-  place-items: center;
-  width: 76px;
-  height: 76px;
-  margin-bottom: 20px;
-  border: 1px solid var(--border-accent);
-  border-radius: 24px;
-  background: radial-gradient(circle at 35% 30%, rgba(167, 139, 250, 0.18), rgba(124, 58, 237, 0.045));
-  color: var(--accent-bright);
-  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.28), inset 0 0 30px rgba(124, 58, 237, 0.06);
+.settings-screen__heading {
+  margin: 6px 0 2px;
 }
 
-.remote-screen__content h2 {
-  margin-top: 8px;
+.settings-screen__heading h2 {
+  margin-top: 3px;
   color: var(--text-primary);
-  font-size: clamp(1.65rem, 8vw, 2.2rem);
+  font-size: 1.7rem;
   font-weight: 600;
   letter-spacing: -0.035em;
 }
 
-.remote-screen__content > p:last-of-type {
-  max-width: 330px;
-  margin-top: 12px;
-  color: var(--text-secondary);
-  font-size: 0.9rem;
-  line-height: 1.55;
+.settings-card {
+  padding: 14px 16px;
+  border: 1px solid var(--border-default);
+  border-radius: 17px;
+  background: rgba(255, 255, 255, 0.025);
 }
 
-.remote-screen__status {
-  margin-top: 22px;
-  padding: 7px 11px;
-  border: 1px solid rgba(6, 182, 212, 0.18);
-  border-radius: var(--radius-full);
-  background: rgba(6, 182, 212, 0.06);
-  color: var(--cyan);
-  font-size: 0.67rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
+.settings-card__title {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--accent-bright);
+  font-size: 0.64rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
   text-transform: uppercase;
 }
 
+.settings-card__text {
+  margin-top: 9px;
+  color: var(--text-secondary);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+
+.settings-card__text[data-warning='true'] {
+  color: var(--gold);
+}
+
+.settings-rows {
+  margin-top: 10px;
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.08);
+}
+
+.settings-row:last-child {
+  border-bottom: 0;
+}
+
+.settings-row dt {
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+
+.settings-row dd {
+  color: var(--text-primary);
+  font-size: 0.82rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.settings-row__mono {
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 0.75rem !important;
+}
+
+.settings-row dd[data-state='connected'] { color: var(--green); }
+.settings-row dd[data-state='connecting'] { color: var(--cyan); }
+.settings-row dd[data-state='disconnected'],
+.settings-row dd[data-state='error'] { color: var(--red); }
+
+.settings-choices {
+  display: grid;
+  gap: 7px;
+  margin-top: 11px;
+}
+
+.settings-choice {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-height: 50px;
+  padding: 9px 13px;
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text-secondary);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease;
+}
+
+.settings-choice strong {
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.settings-choice span {
+  font-size: 0.7rem;
+}
+
+.settings-choice--active {
+  border-color: var(--accent-bright);
+  background: rgba(124, 58, 237, 0.13);
+}
+
+.settings-list {
+  margin-top: 10px;
+  padding-left: 17px;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  line-height: 1.6;
+}
+
+.settings-danger {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 44px;
+  margin-top: 12px;
+  border: 1px solid rgba(248, 113, 113, 0.32);
+  border-radius: 12px;
+  background: rgba(248, 113, 113, 0.08);
+  color: var(--red);
+  font: 600 0.8rem/1 var(--font-ui);
+  cursor: pointer;
+}
+
+.settings-danger:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.settings-confirm {
+  margin-top: 12px;
+  padding: 11px 13px;
+  border: 1px solid rgba(248, 113, 113, 0.28);
+  border-radius: 13px;
+  background: rgba(248, 113, 113, 0.06);
+}
+
+.settings-confirm > p {
+  color: var(--text-secondary);
+  font-size: 0.76rem;
+  line-height: 1.45;
+}
+
+.settings-confirm > div {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.settings-confirm .settings-danger {
+  margin-top: 10px;
+}
+
+.settings-confirm__cancel {
+  min-height: 44px;
+  margin-top: 10px;
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: 600 0.8rem/1 var(--font-ui);
+  cursor: pointer;
+}
+
+/* Chave do catálogo: colar, verificar e receber o veredito na mesma tela. */
+.catalog-key {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 7px;
+  margin-top: 11px;
+}
+
+.catalog-key input {
+  min-width: 0;
+  height: 44px;
+  padding: 0 13px;
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
+  outline: none;
+  background: rgba(4, 4, 9, 0.72);
+  color: var(--text-primary);
+  /* Piso de 16px: abaixo disso o Safari amplia a página ao focar o campo. */
+  font: 400 1rem/1 var(--font-ui);
+}
+
+.catalog-key input:focus {
+  border-color: var(--accent-bright);
+  box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.12);
+}
+
+.catalog-key button {
+  display: grid;
+  height: 44px;
+  padding: 0 15px;
+  place-items: center;
+  border: 1px solid var(--border-accent);
+  border-radius: 12px;
+  background: rgba(124, 58, 237, 0.14);
+  color: var(--accent-bright);
+  font: 650 0.78rem/1 var(--font-ui);
+  cursor: pointer;
+}
+
+.catalog-key button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.catalog-key__ok,
+.catalog-key__erro,
+.catalog-key__aviso {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 10px;
+  font-size: 0.74rem;
+  line-height: 1.45;
+}
+
+.catalog-key__ok { color: var(--green); }
+.catalog-key__erro { color: var(--red); }
+.catalog-key__aviso { color: var(--gold); }
+
+.catalog-key__ok svg,
+.catalog-key__erro svg,
+.catalog-key__aviso svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+}
+
+.settings-screen__footer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  opacity: 0.75;
+}
+
 .platforms-screen {
-  padding: 0 2px;
+  padding: 0 2px 20px;
+}
+
+.platforms-screen__heading {
+  margin: 6px 0 2px;
+}
+
+.platforms-screen__heading h2 {
+  margin-top: 3px;
+  color: var(--text-primary);
+  font-size: 1.7rem;
+  font-weight: 600;
+  letter-spacing: -0.035em;
+}
+
+.platforms-screen__loading,
+.platforms-screen__all {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 14px 0 8px;
+  color: var(--text-secondary);
+  font-size: 0.64rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+/* ── Faixa de capas por serviço ───────────────────────────────────────────── */
+
+.highlight-row {
+  margin-top: 16px;
+}
+
+.highlight-row__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.highlight-row__head img {
+  width: 20px;
+  height: 20px;
+  object-fit: contain;
+}
+
+.highlight-row__head h3 {
+  flex: 1;
+  color: var(--text-primary);
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+
+.highlight-row__open {
+  min-height: 30px;
+  padding: 0 11px;
+  border: 1px solid var(--border-default);
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: 650 0.66rem/1 var(--font-ui);
+  cursor: pointer;
+}
+
+.highlight-row__open:active:not(:disabled) {
+  border-color: var(--accent-bright);
+  color: var(--accent-bright);
+}
+
+/* Rolagem horizontal com encaixe: o dedo para sempre numa capa inteira, nunca
+   no meio de duas. */
+/* Sem `touch-action` de propósito. Declarar `pan-x` aqui parecia ajudar — a
+   faixa rola de lado, então só o eixo X importaria — e na verdade proibia o
+   deslize vertical em cima dela: como estas telas são quase só faixas de
+   pôster, a página inteira parava de rolar. O padrão do navegador decide pela
+   direção do gesto, que é exatamente o comportamento desejado. */
+.highlight-row__strip {
+  display: flex;
+  gap: 9px;
+  margin-top: 9px;
+  padding-bottom: 4px;
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+}
+
+.highlight-row__strip::-webkit-scrollbar {
+  display: none;
+}
+
+/* O lugar da capa enquanto ela não chegou. Sem texto e sem borda piscando:
+   só a forma, para a tela não pular quando as imagens entrarem. */
+.highlight-card__vazio {
+  display: block;
+  width: 96px;
+  height: 144px;
+  flex: 0 0 auto;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.045);
+  animation: respiro-do-esqueleto 1.6s ease-in-out infinite;
+}
+
+/* Falha é estado final: nada de pulsar como se ainda fosse chegar. */
+.highlight-card__vazio--falhou {
+  display: grid;
+  place-items: center;
+  color: var(--text-secondary);
+  opacity: 0.5;
+  animation: none;
+}
+
+.highlight-row--esqueleto .highlight-row__head h3 {
+  color: var(--text-secondary);
+}
+
+@keyframes respiro-do-esqueleto {
+  50% { opacity: 0.42; }
+}
+
+/* Quem pediu para reduzir movimento não precisa de uma tela pulsando. */
+@media (prefers-reduced-motion: reduce) {
+  .highlight-card__vazio {
+    animation: none;
+  }
+}
+
+/* Pôster grande, sem legenda: a arte é o nome. Em 96px a capa virava uma
+   miniatura de contato, e a tela de "o que assistir hoje" precisa que a capa
+   convença sozinha — é assim que todo serviço de streaming a apresenta. */
+.highlight-card {
+  display: grid;
+  width: 132px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  scroll-snap-align: start;
+  cursor: pointer;
+}
+
+.highlight-card img {
+  width: 132px;
+  height: 198px;
+  border: 0;
+  border-radius: 12px;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
+  background: rgba(255, 255, 255, 0.04);
+  object-fit: cover;
+  transition: transform 160ms ease, border-color 160ms ease;
+}
+
+.highlight-card:active:not(:disabled) img {
+  border-color: var(--accent-bright);
+  transform: scale(0.96);
+}
+
+.highlight-card:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.highlight-card__title {
+  /* Fora da vista, presente para quem usa leitor de tela — o nome real do
+     título continua no `aria-label` do botão. */
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Segundo toque confirma: o primeiro só arma. Rolar a faixa com o dedo em
+   cima de uma capa abria o título no computador sem querer. */
+.highlight-card[data-armado='true'] img {
+  outline: 2px solid var(--accent-bright);
+  outline-offset: 2px;
+}
+
+.highlight-card__confirmar {
+  position: absolute;
+  left: 50%;
+  bottom: 8px;
+  padding: 4px 9px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  background: rgba(10, 10, 16, 0.9);
+  color: var(--text-primary);
+  font-size: 0.6rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.highlight-card__capa {
+  position: relative;
+  display: block;
 }
 
 .platforms-screen__heading {
@@ -897,8 +1421,11 @@ button,
 /* Unified command deck: navigation, playback and system volume share one
    physical-remote hierarchy instead of competing feature cards. */
 .control-screen {
-  gap: 0;
-  padding: 0 2px 24px;
+  /* Espaçamento uniforme entre blocos, em vez de cada um trazer a própria
+     margem. Com quatro seções tituladas isso virava um scroll longo; agora os
+     controles cabem quase todos numa tela. */
+  gap: 11px;
+  padding: 0 2px 20px;
   scrollbar-width: thin;
   scrollbar-color: rgba(124, 58, 237, 0.42) transparent;
 }
@@ -912,12 +1439,16 @@ button,
   border-bottom: 1px solid rgba(148, 163, 184, 0.12);
 }
 
+/* Só o ícone no cabeçalho, mas o texto continua no aria-label. `font-size: 0`
+   colapsa o nó de texto de verdade; com `color: transparent` e `overflow`, o
+   rótulo continuava ocupando espaço e empurrava a seta para fora do botão —
+   sobrava um risco no canto. */
 .control-screen__header .remote-screen__back {
   width: 44px;
   padding: 0;
+  gap: 0;
   justify-content: center;
-  overflow: hidden;
-  color: transparent;
+  font-size: 0;
 }
 
 .control-screen__header .remote-screen__back svg {
@@ -957,61 +1488,443 @@ button,
   text-align: left;
 }
 
-.control-module {
+/* ── Tocando agora ────────────────────────────────────────────────────────── */
+
+.now-playing {
   display: grid;
-  gap: 10px;
-  padding: 12px 4px;
-  border-bottom: 1px solid rgba(148, 163, 184, 0.12);
+  grid-template-columns: 52px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  padding: 10px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  border-radius: 16px;
+  background:
+    linear-gradient(120deg, rgba(124, 58, 237, 0.1), transparent 62%),
+    rgba(255, 255, 255, 0.025);
 }
 
-.control-module--directional {
-  margin: 0 -2px;
-  padding: 13px 12px 14px;
+.now-playing__cover {
+  display: grid;
+  width: 52px;
+  height: 52px;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--accent-bright);
+}
+
+.now-playing__cover img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* O logo entra inteiro, com respiro: recortado como capa ele viraria um
+   borrão colorido sem identidade nenhuma. */
+.now-playing__cover img.now-playing__logo {
+  width: 62%;
+  height: 62%;
+  object-fit: contain;
+}
+
+/* Só gira quando está tocando: parado, o disco girando mentiria sobre o
+   estado da reprodução. */
+.now-playing__spin {
+  animation: now-playing-spin 3.4s linear infinite;
+}
+
+@keyframes now-playing-spin {
+  to { transform: rotate(360deg); }
+}
+
+.now-playing__body {
+  min-width: 0;
+}
+
+.now-playing__eyebrow {
+  color: var(--cyan);
+  font-size: 0.55rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.now-playing__title {
+  margin-top: 2px;
+  color: var(--text-primary);
+  font-size: 0.88rem;
+  font-weight: 650;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.now-playing__artist {
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.now-playing__progress {
+  margin-top: 7px;
+}
+
+.now-playing__bar {
+  height: 3px;
+  overflow: hidden;
+  border-radius: var(--radius-full);
+  background: rgba(148, 163, 184, 0.2);
+}
+
+.now-playing__bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent-bright), var(--cyan));
+  /* Acompanha a contagem local sem saltar a cada meio segundo. */
+  transition: width 520ms linear;
+}
+
+.now-playing__times {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 0.6rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* O serviço parou de informar o tempo: o número é desta reprodução, mas está
+   velho. Apagado em vez de escondido — sumir era o comportamento antigo, e ele
+   tirava a minutagem inteira da tela no meio do filme. */
+.now-playing__progress--travada {
+  opacity: 0.55;
+}
+
+.now-playing__progress--travada .now-playing__bar > span {
+  /* Sem transição: não há avanço para acompanhar, e animar daria a impressão
+     de movimento que justamente não existe. */
+  transition: none;
+}
+
+.now-playing__toggle {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border: 1px solid var(--border-accent);
+  border-radius: 50%;
+  background: rgba(124, 58, 237, 0.14);
+  color: var(--accent-bright);
+  cursor: pointer;
+}
+
+.now-playing__toggle:active {
+  transform: scale(0.94);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .now-playing__spin { animation: none; }
+  .now-playing__bar > span { transition: none; }
+}
+
+/* Nada tocando é estado normal, não erro: cinza calmo, sem vermelho, sem
+   ícone de alerta. O que ele precisa ter é a saída. */
+.no-media {
+  display: grid;
+  grid-template-columns: 40px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  padding: 10px 12px;
+  border: 1px dashed rgba(148, 163, 184, 0.2);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.015);
+}
+
+.no-media__icon {
+  display: grid;
+  width: 40px;
+  height: 40px;
+  place-items: center;
+  border-radius: 11px;
+  background: rgba(148, 163, 184, 0.08);
+  color: var(--text-secondary);
+}
+
+.no-media__body {
+  min-width: 0;
+}
+
+.no-media__title {
+  color: var(--text-primary);
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+
+.no-media__hint {
+  margin-top: 2px;
+  color: var(--text-secondary);
+  font-size: 0.66rem;
+  line-height: 1.35;
+}
+
+.no-media__action {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--border-accent);
+  border-radius: 11px;
+  background: rgba(124, 58, 237, 0.12);
+  color: var(--accent-bright);
+  font: 650 0.72rem/1 var(--font-ui);
+  cursor: pointer;
+}
+
+.no-media__action:active {
+  transform: scale(0.97);
+}
+
+/* ── Superfície unificada: navegar e apontar no mesmo lugar ───────────────── */
+
+.control-deck {
+  display: grid;
+  gap: 9px;
+}
+
+.control-deck__surface {
+  position: relative;
+  display: grid;
+  place-items: center;
+  height: clamp(190px, 30dvh, 260px);
   border: 1px solid rgba(124, 58, 237, 0.34);
-  border-radius: 22px 22px 7px 7px;
+  border-radius: 22px;
+  /* Uma trama de pontos por baixo do brilho: sem ela a área maior da tela era
+     um retângulo liso, que não se anuncia como algo para tocar e arrastar. Os
+     pontos são discretos de propósito — a textura precisa dizer "superfície"
+     sem competir com as setas nem com o rótulo do centro. */
+  background:
+    radial-gradient(circle at 50% 45%, rgba(124, 58, 237, 0.13), transparent 62%),
+    radial-gradient(rgba(148, 163, 184, 0.10) 1px, transparent 1px) 0 0 / 18px 18px,
+    #101018;
+  box-shadow: inset 0 1px rgba(255, 255, 255, 0.04), 0 18px 45px rgba(0, 0, 0, 0.22);
+  /* `none` e não `manipulation`: aqui o navegador não pode interpretar nada
+     sozinho: rolagem e pinça roubariam o gesto antes de ele chegar até nós. */
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  cursor: grab;
+}
+
+.control-deck__surface:active {
+  cursor: grabbing;
+}
+
+.control-deck__arrow {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  width: 46px;
+  height: 46px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-secondary);
+  /* Visíveis em repouso: em 0.55 sobre o fundo escuro as setas sumiam, e a
+     borda da superfície parecia não fazer nada. */
+  opacity: 0.75;
+  transition: opacity 140ms ease, color 140ms ease, background 140ms ease;
+}
+
+.control-deck__arrow[data-direction='NAVIGATE_UP'] { top: 4px; left: 50%; transform: translateX(-50%); }
+.control-deck__arrow[data-direction='NAVIGATE_DOWN'] { bottom: 4px; left: 50%; transform: translateX(-50%); }
+.control-deck__arrow[data-direction='NAVIGATE_LEFT'] { left: 4px; top: 50%; transform: translateY(-50%); }
+.control-deck__arrow[data-direction='NAVIGATE_RIGHT'] { right: 4px; top: 50%; transform: translateY(-50%); }
+
+.control-deck__arrow:active:not(:disabled),
+.control-deck__arrow[data-active='true'] {
+  background: rgba(246, 200, 95, 0.16);
+  color: var(--gold);
+  opacity: 1;
+}
+
+.control-deck__arrow:disabled {
+  opacity: 0.2;
+}
+
+.control-deck__center {
+  display: grid;
+  place-items: center;
+  gap: 3px;
+  pointer-events: none;
+}
+
+.control-deck__ok {
+  color: var(--text-secondary);
+  font-family: 'Syncopate', sans-serif;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  opacity: 0.5;
+}
+
+.control-deck__legend {
+  color: var(--text-secondary);
+  font-size: 0.58rem;
+  letter-spacing: 0.08em;
+  opacity: 0.4;
+  text-transform: uppercase;
+}
+
+/* Retorno imediato do gesto reconhecido: sem isto, um flick que não pegou é
+   indistinguível de um que o computador ignorou. */
+.control-deck__hint {
+  color: var(--gold);
+  font-family: 'Syncopate', sans-serif;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  animation: deck-hint 900ms ease-out forwards;
+}
+
+@keyframes deck-hint {
+  0% { opacity: 0; transform: scale(0.9); }
+  18% { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; }
+}
+
+.control-deck__actions {
+  display: grid;
+  grid-template-columns: 1.3fr 1fr 1fr;
+  gap: 8px;
+}
+
+.control-deck__confirm,
+.control-deck__next,
+.control-deck__back {
+  display: flex;
+  min-height: 48px;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--text-secondary);
+  font: 700 0.72rem/1 var(--font-ui);
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
+.control-deck__confirm {
+  border-color: rgba(246, 200, 95, 0.42);
+  background: radial-gradient(circle at 50% 30%, rgba(246, 200, 95, 0.18), rgba(246, 200, 95, 0.05));
+  color: var(--gold);
+  font-family: 'Syncopate', sans-serif;
+}
+
+.control-deck__confirm:active:not(:disabled),
+.control-deck__confirm[data-active='true'],
+.control-deck__back:active:not(:disabled),
+.control-deck__back[data-active='true'] {
+  border-color: rgba(246, 200, 95, 0.65);
+  color: #fff7df;
+}
+
+.control-deck__next:active:not(:disabled) {
+  border-color: rgba(34, 211, 238, 0.5);
+  color: var(--cyan);
+}
+
+.control-deck__confirm:disabled,
+.control-deck__next:disabled,
+.control-deck__back:disabled {
+  cursor: not-allowed;
+  opacity: 0.35;
+}
+
+/* Digitar sem sair da tela: o login de uma plataforma exigia três telas para
+   preencher dois campos. */
+.inline-keyboard {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 46px 46px;
+  gap: 7px;
+}
+
+.inline-keyboard input {
+  min-width: 0;
+  height: 46px;
+  padding: 0 14px;
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
+  outline: none;
+  background: rgba(4, 4, 9, 0.72);
+  color: var(--text-primary);
+  /* 16px é o piso do iOS: abaixo disso o Safari amplia a página ao focar. */
+  font: 400 1rem/1 var(--font-ui);
+}
+
+.inline-keyboard input:focus {
+  border-color: var(--accent-bright);
+  box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.12);
+}
+
+.inline-keyboard button {
+  display: grid;
+  height: 46px;
+  place-items: center;
+  border: 1px solid var(--border-accent);
+  border-radius: 12px;
+  background: rgba(124, 58, 237, 0.12);
+  color: var(--accent-bright);
+  cursor: pointer;
+}
+
+.inline-keyboard button:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.inline-keyboard button:disabled,
+.inline-keyboard input:disabled {
+  cursor: not-allowed;
+  opacity: 0.42;
+}
+
+.control-deck__help {
+  color: var(--text-secondary);
+  font-size: 0.6rem;
+  line-height: 1.4;
+  text-align: center;
+  opacity: 0.55;
+}
+
+/* O direcional clássico segue disponível na tela de Touchpad. */
+.control-dpad {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 14px;
+  padding: 14px 12px;
+  border: 1px solid rgba(124, 58, 237, 0.34);
+  border-radius: 22px;
   background:
     linear-gradient(145deg, rgba(124, 58, 237, 0.09), transparent 52%),
     #101018;
   box-shadow: inset 0 1px rgba(255, 255, 255, 0.035), 0 18px 45px rgba(0, 0, 0, 0.22);
 }
 
-.control-module__heading {
-  display: flex;
-  align-items: end;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.control-module__heading p {
-  color: var(--cyan);
-  font-size: 0.52rem;
-  font-weight: 800;
-  letter-spacing: 0.13em;
-  text-transform: uppercase;
-}
-
-.control-module__heading h3 {
-  color: var(--text-primary);
-  font-size: 0.86rem;
-  font-weight: 650;
-  letter-spacing: -0.01em;
-}
-
-.control-module__heading--inline > div {
-  display: grid;
-  gap: 2px;
-}
-
-.control-dpad {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: end;
-  gap: 14px;
-}
-
+/* O direcional cresce para ocupar a folga que sobrou ao remover os títulos:
+   é o alvo mais usado da tela e o que mais ganha com área de toque. */
 .control-screen .dpad {
-  width: min(13.5rem, 64vw);
-  gap: 0.42rem;
+  width: min(15.5rem, 70vw);
+  gap: 0.5rem;
 }
 
 .control-screen .dpad__button {
@@ -1053,7 +1966,6 @@ button,
 }
 
 .control-dpad__back:disabled,
-.quick-volume button:disabled,
 .secondary-controls button:disabled {
   cursor: not-allowed;
   opacity: 0.35;
@@ -1070,12 +1982,12 @@ button,
 }
 
 .control-screen .media-control {
-  min-height: 62px;
+  min-height: 56px;
   border-radius: 13px;
 }
 
 .control-screen .media-control--primary {
-  min-height: 76px;
+  min-height: 66px;
   border-color: rgba(124, 58, 237, 0.56);
   background: radial-gradient(circle at 50% 28%, rgba(167, 139, 250, 0.25), rgba(124, 58, 237, 0.075));
 }
@@ -1084,46 +1996,13 @@ button,
   box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.38), 0 0 18px rgba(34, 211, 238, 0.09);
 }
 
-.quick-volume {
-  position: relative;
-  display: grid;
-  grid-template-columns: 1fr 1.35fr 1fr;
-  gap: 8px;
-}
-
-.quick-volume button {
-  display: flex;
-  min-height: 56px;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  border: 1px solid rgba(148, 163, 184, 0.18);
-  border-radius: 12px;
-  background: #101018;
-  color: var(--text-secondary);
-  font: 700 0.62rem/1 var(--font-ui);
-}
-
-.quick-volume output {
-  position: absolute;
-  top: -29px;
-  right: 1px;
-  color: var(--gold);
-  font-family: 'Syncopate', sans-serif;
-  font-size: 0.82rem;
-  font-weight: 700;
-}
-
-.quick-volume button:nth-of-type(3) {
-  grid-column: 3;
-}
-
-.quick-volume button:active:not(:disabled),
-.quick-volume button[data-active='true'] {
-  border-color: rgba(34, 211, 238, 0.48);
-  color: var(--cyan);
-}
-
+/* Uma faixa só: menos, mudo, nível, mais. O nível estava posicionado de forma
+   absoluta acima da faixa e escapava do bloco em telas curtas. */
+/* Duas linhas: os botões em cima, a barra ocupando a largura embaixo. Em uma
+   linha só, o número dividia espaço com três botões e sobrava um campo
+   estreito, que era o que deixava o bloco apertado e sem hierarquia. */
+/* O nome do alvo em letra pequena, mas presente: sem ele, "43%" do Chrome ao
+   lado de um Windows em 100% parecia número errado. */
 .secondary-controls {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -1153,21 +2032,30 @@ button,
   color: var(--accent-bright);
 }
 
+/* Segmentado, no topo: Touchpad, Teclado e Volume são modos do controle, e
+   subiram para onde se procura por eles. */
 .control-tools {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 6px;
-  padding: 12px 4px 4px;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid rgba(148, 163, 184, 0.13);
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.022);
 }
 
 .control-tools button {
-  min-height: 50px;
+  min-height: 42px;
+  flex-direction: row;
+  gap: 6px;
   border: 0;
+  border-radius: 10px;
   background: transparent;
+  font-size: 0.66rem;
 }
 
 .control-tools button:active {
-  background: rgba(124, 58, 237, 0.1);
+  background: rgba(124, 58, 237, 0.14);
   color: var(--text-primary);
 }
 
@@ -1566,7 +2454,10 @@ button,
   outline: none;
   background: rgba(4, 4, 9, 0.72);
   color: var(--text-primary);
-  font: 400 0.85rem/1 var(--font-ui);
+  /* 16px é o piso do iOS: com qualquer coisa menor, o Safari amplia a página
+     inteira ao focar o campo — e não desfaz o zoom ao sair. Este campo estava
+     em 0.85rem (13,6px) e era a origem do zoom preso na tela do teclado. */
+  font: 400 1rem/1 var(--font-ui);
 }
 
 .keyboard-text input:focus {
@@ -1595,10 +2486,37 @@ button,
 
 .keyboard-keys {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
   margin-top: 12px;
 }
+
+.keyboard-keys__row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+/* Espaço e Enter fecham o bloco: duas colunas, com o espaço maior porque é a
+   tecla que mais recebe o dedo. */
+.keyboard-keys__row--pair {
+  grid-template-columns: 2fr 1fr;
+}
+
+/* A cruz de sempre. As áreas nomeadas deixam a posição na tela igual à
+   direção que a tecla envia, que é a única leitura que não exige pensar. */
+.keyboard-keys__arrows {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-areas:
+    '.    cima  .'
+    'esq  baixo dir';
+  gap: 8px;
+}
+
+.keyboard-keys__key--arrow_up { grid-area: cima; }
+.keyboard-keys__key--arrow_left { grid-area: esq; }
+.keyboard-keys__key--arrow_down { grid-area: baixo; }
+.keyboard-keys__key--arrow_right { grid-area: dir; }
 
 .keyboard-keys button {
   display: grid;
@@ -1824,6 +2742,224 @@ button,
   object-fit: contain;
 }
 
+/* ── Onde o título está, pelo catálogo ────────────────────────────────────── */
+
+.title-card {
+  display: grid;
+  grid-template-columns: 58px minmax(0, 1fr);
+  gap: 12px;
+  margin-bottom: 0.9rem;
+  padding: 11px;
+  border: 1px solid rgba(74, 222, 128, 0.25);
+  border-radius: 15px;
+  background: rgba(74, 222, 128, 0.05);
+}
+
+.title-card__poster {
+  width: 58px;
+  height: 86px;
+  border-radius: 8px;
+  object-fit: cover;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.title-card__poster--empty {
+  display: grid;
+  place-items: center;
+  color: var(--text-secondary);
+}
+
+.title-card__body {
+  min-width: 0;
+}
+
+.title-card__eyebrow {
+  color: var(--green);
+  font-size: 0.56rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.title-card__kinds {
+  display: flex;
+  gap: 3px;
+  width: fit-content;
+  padding: 3px;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.title-card__kind {
+  min-height: 26px;
+  padding: 0 10px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: 700 0.62rem/1 var(--font-ui);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.title-card__kind--on {
+  background: rgba(74, 222, 128, 0.16);
+  color: var(--green);
+  cursor: default;
+}
+
+.title-card__body h3 {
+  margin-top: 3px;
+  color: var(--text-primary);
+  font-size: 0.92rem;
+  font-weight: 650;
+  line-height: 1.25;
+}
+
+.title-card__year {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.title-card__platforms {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 9px;
+}
+
+.title-card__go {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 40px;
+  padding: 0 12px;
+  border: 1px solid rgba(74, 222, 128, 0.35);
+  border-radius: 11px;
+  background: rgba(74, 222, 128, 0.1);
+  color: var(--text-primary);
+  font: 650 0.8rem/1 var(--font-ui);
+  cursor: pointer;
+}
+
+.title-card__go img {
+  width: 18px;
+  height: 18px;
+  object-fit: contain;
+}
+
+.title-card__go:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.title-card__go:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.title-card__none {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+/* Separa "busca direta" de "só abre": as duas fazem coisas diferentes e a
+   diferença precisa estar visível antes do toque, não depois. */
+.platform-choice__group-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0 0 0.5rem;
+  color: var(--text-secondary);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.platform-choice__group-label:not(:first-of-type) {
+  margin-top: 0.85rem;
+}
+
+.platform-choice__option--open {
+  border-style: dashed;
+  border-color: rgba(255, 255, 255, 0.2);
+  background: transparent;
+}
+
+/* ── Consulta que segue para o teclado ────────────────────────────────────── */
+
+.search-handoff {
+  width: 100%;
+  padding: 0.9rem 1rem;
+  border: 1px solid rgba(34, 211, 238, 0.26);
+  border-radius: 1.1rem;
+  background: rgba(34, 211, 238, 0.06);
+}
+
+.search-handoff__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.search-handoff__title {
+  color: var(--cyan);
+  font-size: 0.63rem;
+  font-weight: 700;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.search-handoff__dismiss {
+  display: grid;
+  flex-shrink: 0;
+  place-items: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.07);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.search-handoff__query {
+  margin-top: 6px;
+  color: var(--text-primary);
+  font-size: 1rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-handoff__action {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 46px;
+  margin-top: 0.7rem;
+  border: 1px solid rgba(34, 211, 238, 0.35);
+  border-radius: 0.85rem;
+  background: rgba(34, 211, 238, 0.12);
+  color: var(--text-primary);
+  font: 600 0.85rem/1 var(--font-ui);
+  cursor: pointer;
+}
+
+.search-handoff__action:active {
+  transform: scale(0.98);
+}
+
 /* Painel de qualidade do orb (somente desenvolvimento) */
 .orb-quality-picker {
   display: flex;
@@ -1853,4 +2989,1163 @@ button,
   font-size: 0.78rem;
   text-align: center;
   color: var(--text-secondary);
+}
+
+/* ── Ver a tela do computador ─────────────────────────────────────────────
+   A foto é o elemento principal da tela: ganha a largura toda e proporção
+   livre, porque a janela do computador pode estar em qualquer formato. */
+
+.screen-page__abas {
+  display: flex;
+  gap: 7px;
+  margin: 12px 0 4px;
+  padding-bottom: 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.screen-page__abas::-webkit-scrollbar {
+  display: none;
+}
+
+.screen-page__aba {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 38px;
+  padding: 0 12px;
+  flex: 0 0 auto;
+  border: 1px solid var(--border-default);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-secondary);
+  font: 600 0.74rem/1 var(--font-ui);
+  cursor: pointer;
+}
+
+.screen-page__aba img {
+  width: 17px;
+  height: 17px;
+  object-fit: contain;
+}
+
+.screen-page__aba--on {
+  border-color: var(--accent-bright);
+  background: rgba(124, 58, 237, 0.14);
+  color: var(--text-primary);
+}
+
+.screen-mirror {
+  margin-top: 12px;
+  padding: 11px;
+  border: 1px solid var(--border-default);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.screen-mirror__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.screen-mirror__eyebrow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent-bright);
+  font-size: 0.6rem;
+  font-weight: 800;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.screen-mirror__refresh {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid rgba(124, 58, 237, 0.4);
+  border-radius: 10px;
+  background: rgba(124, 58, 237, 0.12);
+  color: var(--text-primary);
+  font: 650 0.72rem/1 var(--font-ui);
+  cursor: pointer;
+}
+
+.screen-mirror__refresh:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.screen-mirror__palco {
+  position: relative;
+  margin-top: 10px;
+  line-height: 0;
+}
+
+.screen-mirror__quadro {
+  width: 100%;
+  height: auto;
+  border-radius: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  cursor: crosshair;
+}
+
+/* Onde o dedo tocou. Some junto com o cadastro, e serve para conferir a mira
+   antes de dar nome ao perfil. */
+.screen-mirror__alvo {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  margin: -13px 0 0 -13px;
+  border: 2px solid var(--accent-bright);
+  border-radius: 50%;
+  background: rgba(124, 58, 237, 0.2);
+  pointer-events: none;
+}
+
+.screen-mirror__vazio {
+  margin-top: 12px;
+  padding: 22px 12px;
+  border: 1px dashed rgba(148, 163, 184, 0.22);
+  border-radius: 12px;
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  text-align: center;
+}
+
+.screen-mirror__cadastro {
+  margin-top: 11px;
+}
+
+.screen-mirror__cadastro label {
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+}
+
+.screen-mirror__linha {
+  display: flex;
+  gap: 7px;
+  margin-top: 6px;
+}
+
+.screen-mirror__linha input {
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0 12px;
+  border: 1px solid var(--border-default);
+  border-radius: 11px;
+  background: rgba(0, 0, 0, 0.3);
+  color: var(--text-primary);
+  /* 16px é o piso do iPhone: abaixo disso o Safari amplia a página ao focar. */
+  font-size: max(16px, 0.9rem);
+}
+
+.screen-mirror__linha button {
+  display: grid;
+  width: 44px;
+  place-items: center;
+  flex: 0 0 auto;
+  border: 1px solid rgba(124, 58, 237, 0.4);
+  border-radius: 11px;
+  background: rgba(124, 58, 237, 0.12);
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.screen-mirror__linha button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.screen-mirror__cancelar {
+  border-color: var(--border-default) !important;
+  background: transparent !important;
+  color: var(--text-secondary) !important;
+}
+
+/* ── Perfis do serviço ────────────────────────────────────────────────── */
+
+.profile-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+  padding-bottom: 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.profile-row::-webkit-scrollbar {
+  display: none;
+}
+
+.profile-chip {
+  position: relative;
+  flex: 0 0 auto;
+}
+
+.profile-chip__go {
+  display: grid;
+  width: 84px;
+  gap: 6px;
+  padding: 9px 6px;
+  justify-items: center;
+  border: 1px solid var(--border-default);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-primary);
+  font: 600 0.72rem/1.2 var(--font-ui);
+  cursor: pointer;
+}
+
+.profile-chip__go:active:not(:disabled) {
+  border-color: var(--accent-bright);
+  transform: scale(0.97);
+}
+
+.profile-chip__go:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+/* O avatar é o recorte da tela do computador — por isso quadrado com canto
+   arredondado, que é como os serviços desenham o deles. */
+.profile-chip__avatar {
+  display: grid;
+  width: 52px;
+  height: 52px;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-secondary);
+}
+
+.profile-chip__avatar img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.profile-chip__nome {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.profile-chip__remover {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border: 1px solid var(--border-default);
+  border-radius: 50%;
+  background: var(--bg-primary, #0b0b12);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+/* ── Perfis na tela inicial ───────────────────────────────────────────────
+   Aparece logo abaixo da grade de serviços, que é onde a pessoa está no
+   momento em que o computador pergunta "quem está assistindo?". */
+
+.home-profiles {
+  margin-top: 12px;
+}
+
+.home-profiles__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.home-profiles__eyebrow {
+  color: var(--accent-bright);
+  font-size: 0.6rem;
+  font-weight: 800;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.home-profiles__acao {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid var(--border-default);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+/* Sem nenhum perfil salvo, a seção é só um convite discreto — nunca uma
+   fileira vazia ocupando a tela inicial de quem não vai usar isto. */
+.home-profiles--vazia {
+  display: flex;
+  justify-content: center;
+}
+
+.home-profiles__abrir {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px dashed rgba(148, 163, 184, 0.28);
+  border-radius: 11px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: 600 0.72rem/1 var(--font-ui);
+  cursor: pointer;
+}
+
+.home-profiles .profile-row {
+  margin-top: 9px;
+}
+
+/* Conferir a mira antes de dar nome ao perfil: discreto, porque é a saída
+   secundária — o caminho principal do cadastro é dar o nome e salvar. */
+.screen-mirror__clicar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 7px;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border-default);
+  border-radius: 9px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: 600 0.7rem/1 var(--font-ui);
+  cursor: pointer;
+}
+
+.screen-mirror__clicar:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+/* ── Volume do Controle ───────────────────────────────────────────────────
+   Um controle só, contínuo, em vez de quatro caixas iguais lado a lado. O que
+   é quantidade vira barra; o que é sim-ou-não continua botão. */
+
+.volume-bar {
+  display: grid;
+  grid-template-columns: 46px 38px minmax(0, 1fr) 38px;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 10px 12px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.volume-bar__mudo {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  place-items: center;
+  grid-row: span 2;
+  border: 1px solid var(--border-default);
+  border-radius: 13px;
+  background: #101018;
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.volume-bar__mudo[aria-pressed='true'] {
+  border-color: rgba(246, 200, 95, 0.45);
+  background: rgba(246, 200, 95, 0.1);
+  color: var(--gold);
+}
+
+.volume-bar__mudo:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.volume-bar__alvo {
+  grid-column: 2 / 4;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-secondary);
+  font-size: 0.6rem;
+  font-weight: 800;
+  letter-spacing: 0.11em;
+  text-transform: uppercase;
+}
+
+.volume-bar__valor {
+  color: var(--text-primary);
+  font-family: 'Syncopate', sans-serif;
+  font-size: 0.82rem;
+  font-weight: 700;
+  text-align: right;
+}
+
+/* Os passos ficam nas pontas e a barra no meio: o polegar alcança os três sem
+   sair do lugar, e o curso continua longo o bastante para não exigir mira. */
+.volume-bar__passo {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  border: 1px solid var(--border-default);
+  border-radius: 11px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.volume-bar__passo:active:not(:disabled) {
+  border-color: var(--accent-bright);
+  color: var(--text-primary);
+}
+
+.volume-bar__passo:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+.volume-bar__slider {
+  width: 100%;
+  height: 26px;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  appearance: none;
+  -webkit-appearance: none;
+  cursor: pointer;
+}
+
+.volume-bar__slider::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.volume-bar__slider::-moz-range-track {
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.volume-bar__slider::-webkit-slider-thumb {
+  width: 20px;
+  height: 20px;
+  margin-top: -7px;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent-bright);
+  box-shadow: 0 0 0 4px rgba(124, 58, 237, 0.22);
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.volume-bar__slider::-moz-range-thumb {
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent-bright);
+}
+
+.volume-bar__slider:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+/* ── Perfil de quem usa o controle ────────────────────────────────────────
+   Faixas horizontais como no resto do app: a tela cresce em conteúdo, não em
+   altura, e comparar dois títulos é rolar o dedo de lado. */
+
+.profile-screen__heading {
+  margin-bottom: 4px;
+}
+
+.profile-screen__secao {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 18px 0 8px;
+  color: var(--accent-bright);
+  font-size: 0.62rem;
+  font-weight: 800;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.profile-screen__faixa {
+  display: flex;
+  gap: 9px;
+  padding-bottom: 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.profile-screen__faixa::-webkit-scrollbar {
+  display: none;
+}
+
+.profile-screen__nota {
+  margin-top: 7px;
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+}
+
+.profile-screen__vazio {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin-top: 16px;
+  padding: 16px;
+  border: 1px dashed rgba(148, 163, 184, 0.24);
+  border-radius: 14px;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  line-height: 1.4;
+}
+
+.continuar-card,
+.sugestao-card {
+  display: grid;
+  width: 132px;
+  gap: 5px;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+}
+
+.continuar-card__capa,
+.sugestao-card img {
+  position: relative;
+  display: grid;
+  width: 132px;
+  height: 198px;
+  place-items: center;
+  overflow: hidden;
+  border-radius: 12px;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--text-secondary);
+  object-fit: cover;
+}
+
+.continuar-card__capa img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+/* O logo do serviço no canto: sem ele, duas capas parecidas de serviços
+   diferentes viram a mesma coisa na hora de retomar. */
+.continuar-card__logo {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  width: 26px !important;
+  height: 26px !important;
+  padding: 3px;
+  border-radius: 7px;
+  background: rgba(0, 0, 0, 0.72);
+  object-fit: contain !important;
+}
+
+.continuar-card__titulo,
+.sugestao-card span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+/* Onde a pessoa parou, sobre a capa — é onde todo serviço põe, e é onde o olho
+   já procura antes de decidir retomar. */
+.continuar-card__barra {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 3px;
+  overflow: hidden;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.continuar-card__barra > span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent-bright), var(--cyan));
+}
+
+.continuar-card__tempo {
+  color: var(--text-secondary);
+  font-size: 0.62rem;
+  /* A minutagem fica alinhada entre um cartão e outro, em vez de dançar
+     conforme a largura de cada dígito. */
+  font-variant-numeric: tabular-nums;
+}
+
+.continuar-card:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.continuar-card:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+/* Barras de gênero: a maior define a escala, então a comparação é entre elas
+   e não com um total abstrato. */
+.profile-screen__barras {
+  display: grid;
+  gap: 8px;
+  list-style: none;
+}
+
+.profile-screen__barras li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 10px;
+  align-items: center;
+  font-size: 0.76rem;
+}
+
+.profile-screen__barras small {
+  color: var(--text-secondary);
+  font-size: 0.66rem;
+}
+
+.profile-screen__barra {
+  grid-column: 1 / -1;
+  height: 5px;
+  min-width: 6px;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent-bright), var(--cyan));
+}
+
+.profile-screen__numeros {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 20px;
+}
+
+.profile-screen__numeros div {
+  display: grid;
+  gap: 3px;
+  padding: 12px 8px;
+  justify-items: center;
+  border: 1px solid var(--border-default);
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+/* Fonte da interface, não a decorativa: "TÍTULOS" e "ASSISTIDAS" são números
+   para ler de relance, e a Syncopate — que é ótima para a marca — deixa
+   dígito e letra com a mesma largura estranha nesse tamanho. */
+.profile-screen__numeros strong {
+  overflow: hidden;
+  max-width: 100%;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-ui);
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.profile-screen__logo {
+  height: 22px;
+  max-width: 100%;
+  object-fit: contain;
+}
+
+.profile-screen__numeros span {
+  color: var(--text-secondary);
+  font-size: 0.6rem;
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+
+/* Apagar tudo fica longe do resto e sem destaque: é a saída, não o caminho. */
+.profile-screen__apagar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  margin: 22px 0 8px;
+  min-height: 42px;
+  border: 1px solid rgba(248, 113, 113, 0.3);
+  border-radius: 12px;
+  background: rgba(248, 113, 113, 0.06);
+  color: #f87171;
+  font: 600 0.76rem/1 var(--font-ui);
+  cursor: pointer;
+}
+
+/* ── Selos de gênero ──────────────────────────────────────────────────────
+   Um símbolo por gênero, com o anel dizendo o peso. Três por linha cabe em
+   qualquer telefone sem apertar o alvo do dedo. */
+
+.genre-tiles {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px 8px;
+  margin-top: 4px;
+  list-style: none;
+}
+
+.genre-tile {
+  display: grid;
+  gap: 3px;
+  justify-items: center;
+  text-align: center;
+}
+
+.genre-tile__marca {
+  position: relative;
+  display: grid;
+  width: 58px;
+  height: 58px;
+  place-items: center;
+}
+
+/* Só o aro, nunca todo `svg` de dentro: o ícone também é um SVG, e a regra
+   ampla o esticava para 58px e o girava junto com o anel — dois gêneros
+   diferentes chegavam a virar o mesmo desenho torto. */
+.genre-tile__aro {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  /* Começa no topo e enche no sentido do relógio, como todo medidor. */
+  transform: rotate(-90deg);
+}
+
+.genre-tile__trilho {
+  fill: rgba(255, 255, 255, 0.03);
+  stroke: rgba(148, 163, 184, 0.16);
+  stroke-width: 4;
+}
+
+.genre-tile__anel {
+  fill: none;
+  stroke: var(--accent-bright);
+  stroke-width: 4;
+  stroke-linecap: round;
+}
+
+.genre-tile__icone {
+  position: relative;
+  color: var(--text-primary);
+}
+
+.genre-tile__nome {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.68rem;
+  font-weight: 650;
+}
+
+.genre-tile__tempo {
+  color: var(--text-secondary);
+  font-size: 0.6rem;
+}
+
+/* ── Conquistas ───────────────────────────────────────────────────────────
+   Doze desenhos diferentes dentro da mesma moldura hexagonal: é a moldura
+   compartilhada que faz a coleção parecer uma coleção. */
+
+.achievements {
+  margin-top: 6px;
+}
+
+.achievements__nivel {
+  padding: 12px 14px;
+  border: 1px solid var(--border-default);
+  border-radius: 15px;
+  background: linear-gradient(140deg, rgba(124, 58, 237, 0.12), rgba(34, 211, 238, 0.05));
+}
+
+.achievements__nivel > p:first-child {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.achievements__nivel strong {
+  font-family: var(--font-ui);
+  font-size: 1.02rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.achievements__nivel span {
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+}
+
+.achievements__trilho {
+  display: block;
+  height: 6px;
+  margin: 9px 0 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.achievements__trilho span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent-bright), var(--cyan));
+  transition: width 260ms ease;
+}
+
+.achievements__proxima {
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+}
+
+.achievements__proxima strong {
+  color: var(--text-primary);
+  font-family: var(--font-ui);
+  font-size: 0.7rem;
+  font-weight: 700;
+}
+
+.achievements__grade {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px 6px;
+  margin-top: 14px;
+  list-style: none;
+}
+
+.achievements__medalha {
+  display: grid;
+  width: 100%;
+  gap: 2px;
+  justify-items: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+
+.achievements__medalha:active {
+  transform: scale(0.95);
+}
+
+.badge {
+  display: block;
+  width: 100%;
+  max-width: 62px;
+  height: auto;
+}
+
+.badge__fundo {
+  fill: rgba(255, 255, 255, 0.04);
+}
+
+.badge__borda {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linejoin: round;
+  opacity: 0.55;
+}
+
+/* Conquistada ganha brilho; trancada fica só com o contorno, para a diferença
+   ser visível de relance sem precisar ler nada. */
+.badge[data-conquistada='true'] {
+  filter: drop-shadow(0 0 7px currentColor);
+}
+
+.badge[data-conquistada='true'] .badge__borda {
+  opacity: 1;
+}
+
+.badge[data-conquistada='false'] .badge__fundo {
+  fill: rgba(255, 255, 255, 0.02);
+}
+
+.achievements__nome {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 0.58rem;
+  font-weight: 650;
+  text-align: center;
+}
+
+.achievements__nome[data-conquistada='false'] {
+  color: var(--text-secondary);
+}
+
+.achievements__cadeado {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  color: var(--text-secondary);
+  font-size: 0.52rem;
+  font-weight: 700;
+}
+
+.achievements__detalhe {
+  margin-top: 12px;
+  padding: 10px 12px;
+  border-left: 2px solid var(--accent-bright);
+  border-radius: 0 10px 10px 0;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text-secondary);
+  font-size: 0.74rem;
+  line-height: 1.45;
+}
+
+.achievements__detalhe strong {
+  color: var(--text-primary);
+}
+
+/* ── Foto de quem usa o controle ──────────────────────────────────────────
+   Mora no celular, nunca no servidor: é o único dado do controle que é sobre
+   a pessoa, e não sobre o computador. */
+
+.profile-photo {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 14px 0 4px;
+}
+
+.profile-photo__moldura {
+  position: relative;
+  width: 76px;
+  height: 76px;
+  flex: 0 0 auto;
+}
+
+.profile-photo__anel {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  /* Começa no topo, como todo medidor. */
+  transform: rotate(-90deg);
+}
+
+.profile-photo__trilho {
+  fill: none;
+  stroke: rgba(148, 163, 184, 0.18);
+  stroke-width: 5;
+}
+
+.profile-photo__progresso {
+  fill: none;
+  stroke: var(--accent-bright);
+  stroke-width: 5;
+  stroke-linecap: round;
+  transition: stroke-dasharray 320ms ease;
+}
+
+.profile-photo__alvo {
+  position: absolute;
+  inset: 8px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.profile-photo__alvo img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.profile-photo__camera {
+  position: absolute;
+  right: -1px;
+  bottom: -1px;
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--accent-bright);
+  color: #fff;
+}
+
+.profile-photo__dados {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+/* Sem cara de campo até tocar: no lugar de um retrato, uma caixa de formulário
+   com borda pesaria mais que a própria foto. */
+.profile-photo__nome {
+  width: 100%;
+  padding: 2px 0;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  background: transparent;
+  color: var(--text-primary);
+  font: 700 1.05rem/1.2 var(--font-ui);
+  letter-spacing: -0.01em;
+}
+
+.profile-photo__nome:focus {
+  border-bottom-color: var(--accent-bright);
+  outline: none;
+}
+
+.profile-photo__nivel {
+  margin-top: 3px;
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+}
+
+.profile-photo__erro {
+  margin-top: 3px;
+  color: #f87171;
+  font-size: 0.66rem;
+}
+
+.profile-photo__remover {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 5px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font: 600 0.64rem/1 var(--font-ui);
+  cursor: pointer;
+}
+
+/* ── Detalhe da conquista ─────────────────────────────────────────────── */
+
+.conquista-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.conquista-modal__fundo {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  background: rgba(4, 4, 8, 0.72);
+  backdrop-filter: blur(3px);
+  cursor: pointer;
+}
+
+.conquista-modal__caixa {
+  position: relative;
+  display: grid;
+  width: 100%;
+  max-width: 300px;
+  justify-items: center;
+  gap: 7px;
+  padding: 26px 22px 22px;
+  border: 1px solid var(--border-default);
+  border-radius: 20px;
+  background: #0f0f17;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.6);
+  text-align: center;
+}
+
+.conquista-modal__caixa .badge {
+  max-width: 84px;
+}
+
+.conquista-modal__caixa h3 {
+  font-family: var(--font-ui);
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.conquista-modal__como {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
+.conquista-modal__fechar {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+
+.conquista-modal__feita {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  color: var(--green);
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.conquista-modal__trilho {
+  display: block;
+  width: 100%;
+  height: 6px;
+  margin-top: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.conquista-modal__trilho span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--accent-bright), var(--cyan));
+}
+
+.conquista-modal__faltando {
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  font-weight: 600;
 }

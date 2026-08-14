@@ -6,6 +6,15 @@ filelock>=3.0.0
 httpx>=0.27.0,<1.0.0
 pytest>=8.0.0,<10.0.0
 pytest-asyncio>=0.23.0,<2.0.0
+python-multipart>=0.0.9
+# Só para gerar o certificado local do modo HTTPS (scripts/gerar_certificado.py).
+cryptography>=42.0
+# Voz: o Whisper da OpenAI rodando local pelo CTranslate2. Sem estes dois o
+# resto do controle segue funcionando — só o comando por voz fica indisponível.
+faster-whisper>=1.1.0
+# Ver a tela no celular: comprime o quadro da janela em JPEG e recorta o
+# avatar do perfil. Sem ela essa tela some e o resto do controle segue igual.
+Pillow>=10.0
 comtypes>=1.4.16; sys_platform == "win32"
 pycaw>=20251023; sys_platform == "win32"
 pywin32>=312; sys_platform == "win32"

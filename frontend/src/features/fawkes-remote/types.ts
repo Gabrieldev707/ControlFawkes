@@ -3,6 +3,9 @@ export const PROTOCOL_VERSION: ProtocolVersion = 1
 
 export type ConnectionState =
   | 'disconnected'
+  // Separado de `connecting`: reconectar é recuperação de uma queda, e a
+  // interface tem o que dizer sobre isso — quando vem a próxima tentativa.
+  | 'reconnecting'
   | 'connecting'
   | 'connected'
   | 'error'
@@ -120,7 +123,8 @@ export interface PairDeviceMessage extends ClientMessageBase {
 
 export interface PlatformSelectedMessage extends ClientMessageBase {
   type: 'PLATFORM_SELECTED'
-  payload: { platform: Platform }
+  /** `openSearch` leva à tela de busca da plataforma, não à home. */
+  payload: { platform: Platform; openSearch?: boolean }
 }
 
 export interface TextCommandMessage extends ClientMessageBase {
@@ -199,6 +203,34 @@ export interface PointerButtonMessage extends ClientMessageBase {
   type: Exclude<PointerAction, 'POINTER_MOVE' | 'POINTER_SCROLL'>
 }
 
+export const SCREEN_ACTIONS = ['SCREEN_TAP', 'PROFILE_SELECT'] as const
+
+export type ScreenAction = (typeof SCREEN_ACTIONS)[number]
+
+/**
+ * Toque na foto da tela do computador.
+ *
+ * As coordenadas vão como fração de 0 a 1, nunca em pixel: a foto no celular
+ * tem um tamanho, a janela no computador tem outro, e a janela ainda pode ser
+ * movida ou redimensionada entre a foto e o toque.
+ */
+export interface ScreenTapMessage extends ClientMessageBase {
+  type: 'SCREEN_TAP'
+  payload: { platform: Platform; x: number; y: number; double?: boolean }
+}
+
+export interface ProfileSelectMessage extends ClientMessageBase {
+  type: 'PROFILE_SELECT'
+  payload: { platform: Platform; profileId: string }
+}
+
+/** Um perfil de streaming como o controle o conhece. */
+export interface StreamingProfile {
+  id: string
+  nome: string
+  temAvatar: boolean
+}
+
 export const SAFE_KEYS = [
   'ENTER',
   'BACKSPACE',
@@ -272,6 +304,8 @@ export type ClientMessage =
   | KeyboardKeyMessage
   | NavigationMessage
   | SearchMediaMessage
+  | ScreenTapMessage
+  | ProfileSelectMessage
 
 export interface StateUpdateMessage {
   protocolVersion: ProtocolVersion
@@ -323,6 +357,8 @@ export interface MediaCommandData {
   action: MediaAction
   platform: Platform
   session: 'WEB' | 'APP'
+  /** Se a janela da plataforma foi trazida para frente antes de enviar a tecla. */
+  focused?: boolean
   executed: true
 }
 
@@ -355,12 +391,77 @@ export interface NavigationCommandData {
   executed: true
 }
 
+/** O que o catálogo sabe do título: onde ele está, de verdade. */
+export interface TitleAvailability {
+  title: string
+  year: number | null
+  posterUrl: string | null
+  platforms: Platform[]
+  /** Ausente contra um servidor anterior; o padrão é filme. */
+  kind?: 'MOVIE' | 'TV'
+}
+
+/**
+ * Sinal de vida do servidor.
+ *
+ * O ping do protocolo WebSocket é respondido pelo navegador sem passar pelo
+ * JavaScript, então a página não tem como saber que ele parou. Uma mensagem
+ * visível é o que permite detectar a conexão meio aberta.
+ */
+export interface HeartbeatMessage {
+  protocolVersion: ProtocolVersion
+  type: 'HEARTBEAT'
+}
+
+/** O que o computador está tocando agora. */
+export interface NowPlayingSession {
+  title: string
+  /** O episódio, quando `title` é o nome da série. */
+  episode?: string | null
+  artist: string | null
+  app: string | null
+  platform: Platform | null
+  playing: boolean
+  positionSeconds: number | null
+  durationSeconds: number | null
+  /**
+   * A posição é desta reprodução, mas o site parou de atualizá-la. O cartão
+   * mostra o número e para de contar sozinho — ausente contra um servidor
+   * anterior, e aí o padrão é a contagem normal.
+   */
+  positionStale?: boolean
+  /** Identidade da capa publicada pelo próprio aplicativo (Spotify manda). */
+  thumbnailId: string | null
+  /** Pôster do catálogo, para quando o aplicativo não publica capa. */
+  posterUrl?: string | null
+}
+
+export interface NowPlayingMessage {
+  protocolVersion: ProtocolVersion
+  type: 'NOW_PLAYING'
+  /** Nulo é um estado legítimo: nada tocando. */
+  session: NowPlayingSession | null
+}
+
 export interface NeedsPlatformMessage {
   protocolVersion: ProtocolVersion
   type: 'NEEDS_PLATFORM'
   requestId: string
   query: string
+  /** Recebem a consulta e abrem já na busca. */
   suggestedPlatforms: SearchablePlatform[]
+  /** Max e Disney+: o controle abre, mas a busca é feita na própria tela. */
+  openOnlyPlatforms?: Platform[]
+  /** Ausente quando o catálogo está desligado ou não achou o título. */
+  availability?: TitleAvailability | null
+  /**
+   * A outra leitura do mesmo nome, quando as duas fazem sentido.
+   *
+   * "O Justiceiro" é filme de 2004 no Max e série da Marvel no Disney+.
+   * Escolher por popularidade erraria metade das vezes, então a tela
+   * pergunta em vez de adivinhar.
+   */
+  availabilityAlternative?: TitleAvailability | null
 }
 
 export interface PointerCommandData {
@@ -372,6 +473,14 @@ export interface PointerCommandData {
 export interface KeyboardCommandData {
   intent: 'KEYBOARD_CONTROL'
   action: KeyboardAction
+  executed: true
+}
+
+/** Um toque na foto da tela virou clique, ou um perfil foi escolhido. */
+export interface ScreenCommandData {
+  intent: 'SCREEN_CONTROL'
+  action: ScreenAction
+  platform: Platform
   executed: true
 }
 
@@ -390,6 +499,7 @@ export interface CommandResultMessage {
     | KeyboardCommandData
     | NavigationCommandData
     | MediaLinkCommandData
+    | ScreenCommandData
 }
 
 export interface ErrorMessage {
@@ -401,6 +511,8 @@ export interface ErrorMessage {
 }
 
 export type ServerMessage =
+  | HeartbeatMessage
+  | NowPlayingMessage
   | StateUpdateMessage
   | AuthResultMessage
   | PairResultMessage

@@ -10,6 +10,13 @@ export interface StoredDevice {
 }
 
 export function useStoredDevice() {
+  /**
+   * Devolve um objeto novo a cada chamada, de propósito: lê o disco na hora.
+   *
+   * Cuidado ao usar o resultado como prop ou como dependência de efeito — a
+   * identidade nova a cada render faz o efeito disparar para sempre. Para esse
+   * caso existe uma versão memorizada em FawkesRemotePage; ver o comentário lá.
+   */
   const load = useCallback((): StoredDevice | null => {
     const deviceId = localStorage.getItem(DEVICE_ID_KEY)
     const token = localStorage.getItem(TOKEN_KEY)

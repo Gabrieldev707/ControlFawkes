@@ -16,6 +16,16 @@ const INITIAL_RECONNECT_DELAY = 1000
 const RECONNECT_MULTIPLIER = 1.5
 const MAX_RECONNECT_DELAY = 15000
 
+/**
+ * Silêncio tolerado antes de considerar a conexão morta.
+ *
+ * O servidor manda um sinal de vida a cada 10s. Duas vezes e meia isso dá
+ * folga para uma oscilação de rede sem derrubar quem está bem, e ainda detecta
+ * a conexão meio aberta em menos de meio minuto.
+ */
+const SILENCE_LIMIT_MS = 25000
+const SILENCE_CHECK_MS = 2000
+
 export function buildWebSocketUrl(
   configuredUrl: string | undefined,
   hostname: string,
@@ -35,12 +45,17 @@ function reconnectDelay(attempt: number): number {
 
 export function useWebSocket(options: UseWebSocketOptions = {}) {
   const [connectionState, setConnectionState] = useState<ConnectionState>('disconnected')
+  // Quando a próxima tentativa acontece. A interface conta a partir daqui, em
+  // vez de dizer só "sem conexão" — que não informa se algo ainda vai ocorrer.
+  const [nextRetryAt, setNextRetryAt] = useState<number | null>(null)
   const socketRef = useRef<WebSocket | null>(null)
   const reconnectTimerRef = useRef<number | null>(null)
   const retryCountRef = useRef(0)
   const activeRef = useRef(false)
   const onMessageRef = useRef(options.onMessage)
   const connectRef = useRef<() => void>(() => undefined)
+  const lastMessageAtRef = useRef(Date.now())
+  const hasConnectedOnceRef = useRef(false)
 
   useEffect(() => {
     onMessageRef.current = options.onMessage
@@ -57,6 +72,7 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
     if (!activeRef.current || reconnectTimerRef.current !== null) return
     const delay = reconnectDelay(retryCountRef.current)
     retryCountRef.current += 1
+    setNextRetryAt(Date.now() + delay)
     reconnectTimerRef.current = window.setTimeout(() => {
       reconnectTimerRef.current = null
       connectRef.current()
@@ -75,7 +91,10 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
     }
 
     clearReconnectTimer()
-    setConnectionState('connecting')
+    setNextRetryAt(null)
+    // "Reconectando" só depois de já ter conectado uma vez: na abertura do app
+    // o que está acontecendo é uma conexão, não uma recuperação.
+    setConnectionState(hasConnectedOnceRef.current ? 'reconnecting' : 'connecting')
 
     const url = buildWebSocketUrl(
       import.meta.env.VITE_WS_URL,
@@ -89,16 +108,24 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
     socket.onopen = () => {
       if (!activeRef.current || socketRef.current !== socket) return
       retryCountRef.current = 0
+      hasConnectedOnceRef.current = true
+      lastMessageAtRef.current = Date.now()
+      setNextRetryAt(null)
       setConnectionState('connected')
     }
 
     socket.onmessage = (event) => {
       if (!activeRef.current || socketRef.current !== socket) return
+      // Qualquer mensagem serve de sinal de vida, não só o batimento.
+      lastMessageAtRef.current = Date.now()
       const message = typeof event.data === 'string' ? parseServerMessage(event.data) : null
       if (!message) {
         console.warn('[WS] Invalid server message ignored')
         return
       }
+      // O batimento existe só para provar que a conexão está viva; repassá-lo
+      // obrigaria o resto da aplicação a saber que ele existe.
+      if (message.type === 'HEARTBEAT') return
       onMessageRef.current?.(message)
     }
 
@@ -123,6 +150,21 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
     clearReconnectTimer()
     connectRef.current()
   }, [clearReconnectTimer])
+
+  // Vigia do silêncio. Sem ele, uma conexão meio aberta — Wi-Fi que trocou de
+  // rede, celular que dormiu — deixaria o controle mostrando "conectado" para
+  // sempre, com todo comando falhando calado. O `onclose` nunca chega nesses
+  // casos porque o socket não foi fechado, só abandonado.
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      const socket = socketRef.current
+      if (socket?.readyState !== WebSocket.OPEN) return
+      if (Date.now() - lastMessageAtRef.current < SILENCE_LIMIT_MS) return
+      // Fechar dispara o `onclose`, que já sabe reconectar com espera crescente.
+      socket.close()
+    }, SILENCE_CHECK_MS)
+    return () => window.clearInterval(timer)
+  }, [])
 
   useEffect(() => {
     activeRef.current = true
@@ -160,5 +202,5 @@ export function useWebSocket(options: UseWebSocketOptions = {}) {
     return true
   }, [])
 
-  return { connectionState, sendMessage, reconnect }
+  return { connectionState, sendMessage, reconnect, nextRetryAt }
 }
