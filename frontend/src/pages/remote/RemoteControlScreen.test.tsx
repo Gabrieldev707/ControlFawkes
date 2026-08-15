@@ -127,10 +127,37 @@ describe('RemoteControlScreen', () => {
     const secondary = screen.getByRole('group', { name: 'Ações secundárias' })
 
     fireEvent.click(within(secondary).getByRole('button', { name: 'Voltar 10 segundos' }))
-    fireEvent.click(within(secondary).getByRole('button', { name: 'Fullscreen' }))
+    fireEvent.click(within(secondary).getByRole('button', { name: 'Tela cheia: entrar ou sair' }))
 
     expect(onAction).toHaveBeenNthCalledWith(1, 'MEDIA_SEEK_BACK')
     expect(onAction).toHaveBeenNthCalledWith(2, 'MEDIA_FULLSCREEN')
+  })
+
+  it('tem UM botão de tela cheia, e não um par entrar/sair', () => {
+    // `MEDIA_FULLSCREEN` dá duplo clique no meio do vídeo, e duplo clique é o
+    // gesto que todo player web trata como alternância. Um botão já era um
+    // toggle de verdade; dois só ocupavam a fileira.
+    renderScreen()
+    const secondary = screen.getByRole('group', { name: 'Ações secundárias' })
+
+    expect(within(secondary).getByRole('button', { name: 'Tela cheia: entrar ou sair' })).toBeTruthy()
+    expect(within(secondary).queryByRole('button', { name: 'Sair do fullscreen' })).toBeNull()
+  })
+
+  it('manda Esc pelo caminho de teclado, sem inventar comando novo', () => {
+    // A tecla já existia ponta a ponta e o caminho de teclado já foca a janela
+    // de mídia antes de teclar. O que faltava era ela estar na tela em que a
+    // pessoa está, em vez de só na tela de Teclado.
+    const { onKey, onAction } = renderScreen()
+    const secondary = screen.getByRole('group', { name: 'Ações secundárias' })
+
+    fireEvent.click(
+      within(secondary).getByRole('button', { name: 'Esc: sair da tela cheia ou fechar sobreposição' }),
+    )
+
+    expect(onKey).toHaveBeenCalledWith('ESCAPE')
+    // E NÃO passa pela fileira de mídia: Esc é tecla, não ação de mídia.
+    expect(onAction).not.toHaveBeenCalled()
   })
 
   it('opens touchpad, keyboard and detailed volume without sending a system action', () => {
@@ -196,7 +223,7 @@ describe('RemoteControlScreen sem mídia tocando', () => {
 
     // Sem o que controlar, o play mente se ficar ativo.
     expect((screen.getByRole('button', { name: 'Play/Pause' }) as HTMLButtonElement).disabled).toBe(true)
-    expect((screen.getByRole('button', { name: 'Fullscreen' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: 'Tela cheia: entrar ou sair' }) as HTMLButtonElement).disabled).toBe(true)
     // O resto não depende de mídia e continua valendo.
     expect((screen.getByRole('button', { name: 'Cima' }) as HTMLButtonElement).disabled).toBe(false)
     expect((screen.getByRole('slider', { name: 'Nível do volume' }) as HTMLInputElement).disabled).toBe(false)

@@ -4,12 +4,12 @@ import {
   Gauge,
   Keyboard,
   Maximize2,
-  Minimize2,
   MousePointer2,
   Play,
   Rewind,
   SkipBack,
   SkipForward,
+  X,
 } from 'lucide-react'
 
 import { NoMediaCard } from '../../components/fawkes-remote/NoMediaCard'
@@ -66,11 +66,29 @@ const TRANSPORT_ACTIONS = [
   { action: 'MEDIA_NEXT', label: 'Próxima faixa', icon: SkipForward, primary: false },
 ] as const
 
+/**
+ * A fileira secundária. Quatro botões, e o quarto deixou de ser "Sair".
+ *
+ * `MEDIA_FULLSCREEN` não manda a tecla F: ele dá um duplo clique no meio do
+ * vídeo, porque o atalho é de cada site e no Max o F não fazia nada — está
+ * medido em `_enter_fullscreen`. E duplo clique sobre o vídeo é o gesto que
+ * TODO player web trata como alternância: entra e sai. Ou seja, este botão já
+ * era um toggle de verdade; o que faltava era a tela parar de fingir que
+ * precisava de dois.
+ *
+ * O botão que saiu — `MEDIA_EXIT_FULLSCREEN` — mandava `Esc` (0x1B). Ele não
+ * some: vira o botão `Esc` explícito, que é o que ele sempre foi e que serve
+ * também para fechar sobreposição e menu de player. Ver `ESC` abaixo.
+ */
 const SECONDARY_ACTIONS = [
   { action: 'MEDIA_SEEK_BACK', label: 'Voltar 10 segundos', shortLabel: '−10s', icon: Rewind },
   { action: 'MEDIA_SEEK_FORWARD', label: 'Avançar 10 segundos', shortLabel: '+10s', icon: FastForward },
-  { action: 'MEDIA_FULLSCREEN', label: 'Fullscreen', shortLabel: 'Tela cheia', icon: Maximize2 },
-  { action: 'MEDIA_EXIT_FULLSCREEN', label: 'Sair do fullscreen', shortLabel: 'Sair', icon: Minimize2 },
+  {
+    action: 'MEDIA_FULLSCREEN',
+    label: 'Tela cheia: entrar ou sair',
+    shortLabel: 'Tela cheia',
+    icon: Maximize2,
+  },
 ] as const
 
 const TOOLS = [
@@ -218,6 +236,23 @@ export function RemoteControlScreen({
             <span>{shortLabel}</span>
           </button>
         ))}
+
+        {/* Esc, e não um comando novo: a tecla já existe ponta a ponta
+            (`SafeKey` no frontend, `ESCAPE` no adaptador) e o caminho de
+            teclado JÁ foca a janela de mídia antes de teclar — o mesmo cuidado
+            que a fileira de mídia tem. Faltava só ela estar aqui, na tela em
+            que a pessoa está, em vez de só na tela de Teclado.
+
+            Não é o "voltar" do ControlFawkes: este vai para o computador. */}
+        <button
+          type="button"
+          aria-label="Esc: sair da tela cheia ou fechar sobreposição"
+          disabled={disabled}
+          onClick={() => onKey('ESCAPE')}
+        >
+          <X size={16} aria-hidden="true" />
+          <span>Esc</span>
+        </button>
       </div>
     </main>
   )
