@@ -293,3 +293,80 @@ def test_o_manifesto_do_host_aponta_para_caminho_absoluto():
     assert conteudo["allowed_origins"] == [
         f"chrome-extension://{identidade['extensionId']}/"
     ]
+
+
+# ── A entrega no ControlFawkes (Fase 7) ───────────────────────────────────
+
+
+def _evento(**payload) -> dict:
+    return {
+        "protocolVersion": 1,
+        "messageType": "POSITION_SYNC",
+        "timestamp": 0,
+        "payload": {"sessionId": "sessao-1", **payload},
+    }
+
+
+def test_um_evento_valido_e_entregue_no_controlfawkes():
+    """O host deixou de responder ACK por conta própria: agora ele ENTREGA. Um
+    ACK sem entrega era o host fingindo que o evento chegou a algum lugar."""
+    entregues: list[dict] = []
+
+    resposta = responder(
+        _evento(currentTime=10.0, duration=100.0),
+        entregar=lambda mensagem: entregues.append(mensagem) or {"ok": True},
+    )
+
+    assert resposta["messageType"] == "ACK"
+    assert len(entregues) == 1
+    assert entregues[0]["payload"]["sessionId"] == "sessao-1"
+
+
+def test_um_evento_invalido_nao_chega_a_ser_entregue():
+    """O host valida ANTES de entregar. Um relay que repassa lixo obriga o
+    servidor a se defender sozinho de um cano em que ele confia."""
+    entregues: list[dict] = []
+
+    resposta = responder(
+        _evento(currentTime=500.0, duration=100.0),
+        entregar=lambda mensagem: entregues.append(mensagem) or {"ok": True},
+    )
+
+    assert resposta["code"] == "IMPOSSIBLE_POSITION"
+    assert entregues == []
+
+
+def test_controlfawkes_fora_do_ar_na_entrega_tambem_e_dado():
+    """Mesma resposta do PING: o servidor fora do ar é estado normal, e a
+    extensão precisa disso como dado em vez de silêncio."""
+    def recusada(_mensagem):
+        raise ConnectionRefusedError("connection refused")
+
+    resposta = responder(_evento(), entregar=recusada)
+
+    assert resposta["ok"] is False
+    assert resposta["code"] == "CONTROLFAWKES_UNREACHABLE"
+
+
+def test_a_falta_da_credencial_nao_derruba_o_host():
+    """Sem credencial no disco a entrega falha — e falhar é responder, não
+    morrer. O Chrome respawnaria o host num laço que ninguém veria."""
+    def sem_credencial(_mensagem):
+        raise RuntimeError("credencial da ponte ausente")
+
+    resposta = responder(_evento(), entregar=sem_credencial)
+
+    assert resposta["ok"] is False
+    assert resposta["code"] == "CONTROLFAWKES_UNREACHABLE"
+
+
+def test_o_host_continua_sem_saber_o_que_o_evento_significa():
+    """A trava do relay: ele confere que a mensagem é utilizável e entrega. Não
+    há merger, histórico, relógio nem regra de sessão neste arquivo."""
+    from pathlib import Path
+
+    import app.bridge.native_host as host
+
+    fonte = Path(host.__file__).read_text(encoding="utf-8")
+    for proibido in ("historico", "history", "merger", "RelogioDaMidia", "NowPlaying"):
+        assert proibido not in fonte

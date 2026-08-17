@@ -17,7 +17,7 @@ O agente deve avançar automaticamente para a próxima fase sempre que o gate at
 - [x] Fase 4 — Extensão MV3 mínima
 - [x] Fase 5 — Generic HTML5 Observer
 - [x] Fase 6 — Transporte integrado
-- [ ] Fase 7 — Media Merger
+- [x] Fase 7 — Media Merger
 - [ ] Fase 8 — Source Availability / Freshness
 - [ ] Fase 9 — Consumption Policy
 - [ ] Fase 10 — Netflix Adapter
@@ -812,27 +812,53 @@ Algoritmo:
 6. primeira elegível vence
 ```
 
+> Entrega: **`backend/app/bridge/merger.py`** — `FIELD_AUTHORITY`, `Leitura`,
+> `fundir()`. Testes em `test_bridge_merger.py` (24).
+
 Proibido:
-- [ ] Último evento vencer.
-- [ ] Última fonte registrada vencer.
-- [ ] Maior confidence vencer.
-- [ ] Fonte inteira vencer.
-- [ ] Timing decidir.
+- [x] Último evento vencer. — invertida a lista de leituras, a saída é a mesma
+- [x] Última fonte registrada vencer. — mesmo teste
+- [x] Maior confidence vencer. — não existe `confidence`; ver `contratos.py`
+- [x] Fonte inteira vencer. — o laço é por CAMPO, e uma fonte fora da tabela
+      daquele campo não escreve nele nem declarando valor perfeito
+- [x] Timing decidir. — não há relógio no módulo
 
 Testes:
-- [ ] SMTC playing / video paused.
-- [ ] SMTC paused / video playing.
-- [ ] SMTC título antigo / adapter novo.
-- [ ] Window Title correto / SMTC genérico.
-- [ ] Adapter correto / Window Title genérico.
-- [ ] Fonte prioritária stale.
-- [ ] Fonte secundária saudável.
+- [x] SMTC playing / video paused. — vence o `<video>`
+- [x] SMTC paused / video playing. — e o par, senão seria acaso
+- [x] SMTC título antigo / adapter novo.
+- [x] Window Title correto / SMTC genérico.
+- [x] Adapter correto / Window Title genérico. — o caso da Netflix
+- [x] Fonte prioritária stale. — cede o tempo e MANTÉM o nome da obra
+- [x] Fonte secundária saudável.
+
+## Ingestão autenticada
+
+> Entrega: **`backend/app/bridge/credencial.py`** e **`backend/app/api/bridge.py`**.
+> Testes em `test_bridge_credencial.py` (19) e `test_bridge_endpoint.py` (22).
+
+Segredo dedicado à ponte, e **não** o pairing de clientes externos: o Native
+Host é peça interna local, então isto é autenticação de PROCESSO.
+
+- [x] Segredo gerado e guardado sob `backend/data/bridge/`. — ignorado pelo git
+- [x] Nunca exposto ao content script nem ao manifest. — teste varre a extensão
+- [x] Nunca registrado. — provado no log do host e na resposta à extensão
+- [x] Conferido em toda mensagem. — sem sessão, sem memória
+- [x] Endpoint restrito a loopback. — medido: pela LAN, com a credencial CERTA,
+      responde 404 enquanto `/health` no mesmo endereço responde 200
+- [x] Toda a validação da Fase 6 preservada depois de autenticar.
+- [x] Testes: credencial correta, ausente, incorreta, endereço não-loopback,
+      mensagem válida e mensagem inválida.
 
 ## Gate
-- [ ] Resultado determinístico.
-- [ ] Ordem explícita.
-- [ ] Divergências principais testadas.
-- [ ] **FASE 7 CONCLUÍDA**
+- [x] Resultado determinístico.
+- [x] Ordem explícita. — `FIELD_AUTHORITY`, tabela única
+- [x] Divergências principais testadas.
+- [x] **FASE 7 CONCLUÍDA**
+
+> O Merger ainda NÃO está no caminho de leitura de produção. Ele entra quando
+> houver frescor para alimentá-lo — Fase 8. Ligá-lo antes disso seria decidir
+> `currentTime` com um `dinamicos_frescos` que ninguém mede.
 
 ---
 

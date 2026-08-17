@@ -65,13 +65,46 @@ def _sonda_padrao() -> dict:
     return resposta.json()
 
 
-def responder(mensagem: dict, sonda: Callable[[], dict] | None = None) -> dict:
+def _entrega_padrao(mensagem: dict) -> dict:
+    """Entrega o evento na rota interna do ControlFawkes, autenticado.
+
+    O segredo é lido do disco a cada entrega e NÃO é guardado em atributo nem
+    passado adiante. Ele existe entre a leitura e o cabeçalho, e some.
+    """
+    import httpx
+
+    from app.bridge.credencial import CABECALHO, CredencialDaPonte
+
+    segredo = CredencialDaPonte().ler()
+    if segredo is None:
+        # O servidor gera a credencial ao subir. Sem arquivo, ou o ControlFawkes
+        # nunca rodou nesta máquina, ou alguém apagou — e o host NÃO gera uma
+        # por conta própria: duas credenciais diferentes é pior do que nenhuma.
+        raise RuntimeError("credencial da ponte ausente")
+
+    resposta = httpx.post(
+        f"{CONTROLFAWKES_BASE}/bridge/eventos",
+        json=mensagem,
+        headers={CABECALHO: segredo},
+        timeout=TIMEOUT_SEGUNDOS,
+    )
+    resposta.raise_for_status()
+    return resposta.json()
+
+
+def responder(
+    mensagem: dict,
+    sonda: Callable[[], dict] | None = None,
+    entregar: Callable[[dict], dict] | None = None,
+) -> dict:
     """A resposta para uma mensagem da extensão.
 
-    Função pura em cima de uma sonda injetável: é o que permite provar o
-    caminho inteiro sem Chrome, sem registro do Windows e sem servidor no ar.
+    Função pura em cima de uma sonda e de uma entrega injetáveis: é o que
+    permite provar o caminho inteiro sem Chrome, sem registro do Windows e sem
+    servidor no ar.
     """
     sonda = sonda or _sonda_padrao
+    entregar = entregar or _entrega_padrao
 
     versao = mensagem.get("protocolVersion")
     if versao != PROTOCOL_VERSION:
@@ -91,6 +124,18 @@ def responder(mensagem: dict, sonda: Callable[[], dict] | None = None) -> dict:
         if isinstance(resultado, Recusa):
             anotar("RECUSADA", f"{resultado.code} {resultado.detail}")
             return _erro(resultado.code, resultado.detail)
+
+        # Valida ANTES de entregar. O host é relay, e um relay que repassa lixo
+        # obriga o servidor a se defender sozinho de um cano que ele confia. E
+        # não é redundância: a rota valida de novo, porque ela não pode supor
+        # que quem bateu nela foi este host.
+        try:
+            entregar(mensagem)
+        except Exception as erro:  # noqa: BLE001 - toda falha de entrega é a mesma
+            # O ControlFawkes fora do ar é estado normal — o Chrome pode abrir
+            # antes do servidor. A extensão precisa disso como dado.
+            return _erro("CONTROLFAWKES_UNREACHABLE", str(erro) or type(erro).__name__)
+
         return {
             "protocolVersion": PROTOCOL_VERSION,
             "messageType": "ACK",
@@ -186,7 +231,12 @@ def _temporais(mensagem: dict) -> str:
     return " ".join(partes)
 
 
-def servir(entrada, saida, sonda: Callable[[], dict] | None = None) -> None:
+def servir(
+    entrada,
+    saida,
+    sonda: Callable[[], dict] | None = None,
+    entregar: Callable[[dict], dict] | None = None,
+) -> None:
     """O laço do host: uma mensagem entra, uma resposta sai.
 
     Termina quando o cano fecha — que é como o Chrome avisa que a porta caiu,
@@ -208,7 +258,7 @@ def servir(entrada, saida, sonda: Callable[[], dict] | None = None) -> None:
             continue
 
         anotar("RECEBIDA", f"{mensagem.get('messageType')} {_temporais(mensagem)}")
-        escrever_mensagem(saida, responder(mensagem, sonda))
+        escrever_mensagem(saida, responder(mensagem, sonda, entregar))
 
 
 def main() -> int:  # pragma: no cover - o ponto de entrada real

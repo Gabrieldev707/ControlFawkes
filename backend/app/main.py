@@ -3,7 +3,7 @@ import asyncio
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from .api import catalog, health, now_playing, profile, screen, voice, websocket
+from .api import bridge, catalog, health, now_playing, profile, screen, voice, websocket
 from .security.instancia_unica import JaEstaRodando, TravaDeInstancia
 from .security.origins import cors_origin_settings
 from .windows.dpi import declarar_consciencia_de_dpi
@@ -26,6 +26,11 @@ async def lifespan(_app: FastAPI):
     except JaEstaRodando as erro:
         print(f"\n{erro}\n", flush=True)
         raise
+
+    # O segredo da ponte nasce aqui, na primeira execução. Gerar no startup e
+    # não sob demanda evita a corrida em que host e servidor criam credenciais
+    # diferentes ao mesmo tempo — e o segredo NUNCA é impresso.
+    bridge.credencial.garantir()
 
     await websocket.dispatcher.startup()
     # O modelo de voz leva alguns segundos para carregar. Aquecer em segundo
@@ -60,6 +65,11 @@ app.add_middleware(
 )
 
 app.include_router(health.router)
+# O CORS acima vale para o app inteiro, e para esta rota ele não é a defesa: um
+# `fetch` de página nem chega a precisar de CORS para SAIR. Quem barra navegador
+# aqui é a própria rota — loopback, ausência de `Origin` e credencial. Ver a
+# docstring de `api/bridge.py`.
+app.include_router(bridge.router)
 app.include_router(catalog.router)
 app.include_router(now_playing.router)
 app.include_router(profile.router)
