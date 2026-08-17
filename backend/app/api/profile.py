@@ -69,7 +69,9 @@ async def perfil(
 
     conquistas = achievements.calcular(tudo)
     return {
-        "continuar": [item.como_dicionario() for item in store.continuar(limite=10)],
+        # `como_obra` e não `como_dicionario`: esta lista é de OBRAS, e a
+        # posição do último episódio não descreve a obra. Ver `Assistido`.
+        "continuar": [item.como_obra() for item in store.continuar(limite=10)],
         "conquistas": [c.como_dicionario() for c in conquistas],
         "progresso": achievements.nivel(conquistas),
         "generos": maiores(por_genero, 5),

@@ -49,6 +49,19 @@ class HistoryRecorder:
         self._nao_gravado = 0.0
         self._posicao: float | None = None
         self._duracao: float | None = None
+        self._episodio: str | None = None
+        # A última obra que se conseguiu NOMEAR em cada serviço, nesta execução.
+        #
+        # Existe para o caso do Max: a janela dele publica o nome do EPISÓDIO
+        # ("Members Only"), nunca o da série, e quando a SMTC pendura não sobra
+        # ninguém que saiba dizer "Família Soprano". Sem isto o tempo era
+        # jogado fora inteiro — a obra parava de contar no meio da sessão, sem
+        # nada na tela explicando por quê.
+        #
+        # NÃO é palpite: só entra aqui obra que uma fonte confiável nomeou
+        # nesta mesma execução, no mesmo serviço. Some quando o servidor
+        # reinicia, que é quando deixa de haver continuidade para afirmar.
+        self._obra_do_servico: dict[str, str] = {}
 
     def observar(self, atual: NowPlaying | None, intervalo: float) -> None:
         """Um instante do que está tocando. Chamado a cada volta do laço."""
@@ -67,30 +80,61 @@ class HistoryRecorder:
         if platform in PLATAFORMAS_FORA_DO_HISTORICO:
             titulo = None
 
-        # Leitura degradada não vira histórico. Com a API de mídia do Windows
-        # pendurada, o que sobra é o título da janela — e numa série ele é o do
-        # EPISÓDIO, não o da obra. Medido no histórico real: uma tarde de Rick
-        # and Morty virou quatro "títulos assistidos" com nome de episódio, um
-        # deles ("Campo dos Sonhos") com o pôster do filme de 1989 que se chama
-        # igual, e nenhum com duração, porque a janela não sabe de duração.
-        #
-        # Continua aparecendo no cartão e continua controlável — é para isso que
-        # essa leitura existe. Só não conta como obra assistida, porque não dá
-        # para afirmar qual obra é.
-        if atual is not None and not atual.trustworthy:
-            titulo = None
+        episodio = atual.episode if atual is not None else None
 
-        # Trocou de título: o anterior fecha a conta agora.
+        # Leitura degradada. Com a API de mídia do Windows pendurada, o que
+        # sobra é o título da janela — e numa série do Max ele é o do EPISÓDIO,
+        # não o da obra. Medido no histórico real: uma tarde de Rick and Morty
+        # virou quatro "títulos assistidos" com nome de episódio, um deles
+        # ("Campo dos Sonhos") com o pôster do filme de 1989 que se chama igual.
+        #
+        # Duas saídas, e a escolha entre elas é o conserto desta rodada:
+        #
+        #   se o serviço já teve uma obra NOMEADA nesta execução, o tempo é
+        #   dela, e este nome degradado passa a valer como episódio. É o caso
+        #   do Sopranos: a SMTC disse "Família Soprano" às 2h54, pendurou, e a
+        #   partir daí a janela só sabia dizer "Members Only".
+        #
+        #   se não houve, não se inventa obra nenhuma. O episódio NÃO vira uma
+        #   linha independente — era assim que "46 Long" e "Pilot" viravam
+        #   obras assistidas, e as duas estão no backup deste histórico.
+        if atual is not None and not atual.trustworthy and titulo is not None:
+            conhecida = self._obra_do_servico.get(platform) if platform else None
+            if conhecida is not None:
+                episodio, titulo = titulo, conhecida
+            else:
+                titulo = None
+
+        # Uma obra nomeada por fonte confiável fica lembrada para o serviço.
+        if (
+            titulo is not None
+            and platform is not None
+            and atual is not None
+            and atual.trustworthy
+        ):
+            self._obra_do_servico[platform] = titulo
+
+        # Trocou de OBRA: a anterior fecha a conta agora. Trocar de EPISÓDIO
+        # não fecha nada — é a mesma obra, e fechar aqui foi o que fazia o
+        # tempo de uma série virar vários registros curtos.
         if titulo != self._titulo or platform != self._platform:
             self.encerrar()
             self._titulo = titulo
             self._platform = platform
             self._acumulado = 0.0
             self._nao_gravado = 0.0
+            self._episodio = None
 
         if atual is None or titulo is None:
             return
 
+        # Mudou o episódio dentro da mesma obra: grava o que houve ATÉ AQUI com
+        # a posição da reprodução que está saindo, senão o trecho do episódio
+        # anterior seria carimbado com a posição do próximo.
+        if episodio != self._episodio and self._nao_gravado > 0 and self._acumulado >= SEGUNDOS_PARA_CONTAR:
+            self._gravar()
+
+        self._episodio = episodio
         self._posicao = atual.position_seconds
         self._duracao = atual.duration_seconds
 
@@ -124,6 +168,7 @@ class HistoryRecorder:
                 segundos=self._nao_gravado,
                 posicao=self._posicao,
                 duracao=self._duracao,
+                episodio=self._episodio,
             )
         except Exception:  # noqa: BLE001 - histórico nunca derruba a reprodução
             return

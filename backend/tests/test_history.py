@@ -251,28 +251,23 @@ def test_uma_leitura_sem_posicao_nao_apaga_o_fossil(store: HistoryStore):
     assert store.listar()[0].posicao == 100.0
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "Bug do Batman, ainda não corrigido. A correção pertence à Fase 11 "
-        "(PlaybackIdentity != WorkIdentity) e à Fase 12 (histórico) do Master "
-        "Loop. `strict=True` de propósito: quando a correção entrar, este "
-        "teste passa a FALHAR por passar, e alguém tem de vir aqui tirar o "
-        "marcador em vez de deixá-lo apodrecendo."
-    ),
-)
 def test_serie_terminada_nao_pode_exibir_progresso_de_episodio_antigo(
     store: HistoryStore,
 ):
-    """O comportamento que se quer, escrito antes de existir.
+    """O bug do Batman, com os números medidos na tela.
+
+    Este teste nasceu `xfail(strict=True)` — o comportamento certo escrito antes
+    de existir. O marcador saiu quando a correção entrou, que era exatamente o
+    combinado.
 
     Quando o tempo assistido supera a duração persistida, essa duração não
-    descreve a obra — descreve um episódio. Nesse caso não há progresso que se
-    possa afirmar, e a tela não pode anunciar quanto falta.
+    descreve a obra: descreve um episódio. 7850 segundos não cabem em 1680. Não
+    há progresso de OBRA que se possa afirmar, e a tela não pode anunciar
+    quanto falta.
 
-    A correção pode tomar mais de uma forma (marcar a linha como terminada,
-    zerar a posição, guardar posição por reprodução). Este teste exige apenas
-    que a tela pare de mentir.
+    A forma que a correção tomou: a obra continua na lista — ela é uma série e
+    a pessoa está no meio dela —, mas vai para a tela sem posição e sem
+    duração, porque esses dois números são do episódio.
     """
     store.registrar(
         "Batman: Caped Crusader", "PRIME_VIDEO",
@@ -282,8 +277,14 @@ def test_serie_terminada_nao_pode_exibir_progresso_de_episodio_antigo(
     pendentes = {item.titulo: item for item in store.continuar()}
     batman = pendentes.get("Batman: Caped Crusader")
 
-    # Ou some de "continuar assistindo", ou fica sem posição para exibir.
-    assert batman is None or batman.posicao is None
+    assert batman is not None
+    assert batman.multiplas_reproducoes is True
+    # O que vai para a tela não carrega progresso que não é da obra.
+    assert batman.como_obra()["posicao"] is None
+    assert batman.como_obra()["duracao"] is None
+    # E o que se persiste continua inteiro: a posição serve para retomar a
+    # reprodução, só não serve para descrever a série.
+    assert batman.como_dicionario()["posicao"] == 484.943334
 
 
 def test_the_same_name_on_another_service_is_another_line(store: HistoryStore):

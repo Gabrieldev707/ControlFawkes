@@ -23,6 +23,7 @@ import unicodedata
 from pathlib import Path
 
 from app.catalog.tmdb import PLATAFORMAS_COM_CATALOGO
+from app.media.identidade import chave_da_reproducao, de_multiplas_reproducoes
 from app.media.now_playing import _titulo_generico
 from app.schemas.platform import Platform
 
@@ -82,10 +83,31 @@ class Assistido:
     visto_em: float
     poster_url: str | None = None
     generos: tuple[str, ...] = ()
+    #: O episódio da ÚLTIMA reprodução, quando se soube o nome dele. A chave
+    #: continua sendo a da obra: isto é detalhe de onde ela está, não identidade.
+    episodio: str | None = None
+    #: Qual reprodução `posicao` e `duracao` descrevem. Ver
+    #: `IdentidadeDaReproducao.chave`.
+    reproducao: str | None = None
+    #: Esta linha já juntou mais de uma reprodução? Gruda uma vez descoberto:
+    #: uma série não deixa de ser série porque a leitura seguinte foi pobre.
+    multiplas_reproducoes: bool = False
 
     @property
     def terminado(self) -> bool:
-        """Perto do fim já conta como visto: não entra em "continuar"."""
+        """A OBRA acabou — e não apenas a reprodução que estava tocando.
+
+        A distinção não é sutil, é o bug. Medido no histórico real: Loki tinha
+        `posicao` 2226,5 de `duracao` 2241,2 — a razão passava de 0,94 e a série
+        inteira saía de "continuar assistindo". Só que 2241 segundos são trinta
+        e sete minutos: um episódio. A pessoa tinha acabado UM episódio de oito
+        horas e meia de série, que é o momento em que ela MAIS quer o próximo.
+
+        Numa linha que junta várias reproduções, a posição não responde por
+        obra nenhuma, e a resposta honesta é "não terminou".
+        """
+        if self.multiplas_reproducoes:
+            return False
         if self.duracao is None or self.posicao is None or self.duracao <= 0:
             return False
         return self.posicao / self.duracao >= 0.94
@@ -101,7 +123,34 @@ class Assistido:
             "posterUrl": self.poster_url,
             "generos": list(self.generos),
             "terminado": self.terminado,
+            "episodio": self.episodio,
+            "reproducao": self.reproducao,
+            "multiplasReproducoes": self.multiplas_reproducoes,
         }
+
+    def como_obra(self) -> dict:
+        """A visão de OBRA — a que vai para a tela de perfil.
+
+        Diferente do que se persiste, e a diferença é o conserto do bug do
+        Batman. No arquivo cabe tudo, inclusive a posição do último episódio,
+        que serve para retomar a reprodução. Já numa lista de OBRAS, esse
+        número não responde por obra nenhuma.
+
+        Medido no histórico real: "Batman: Caped Crusader", 7850 segundos
+        assistidos, `posicao` 484,9 de `duracao` 1680,0. A tela lia esses dois
+        números como progresso da série e anunciava "faltam 20 min" para uma
+        série que a pessoa já tinha terminado. Os números estavam certos — eles
+        descrevem um episódio. Errada era a frase que a tela montava com eles.
+
+        Então a obra multi-reprodução vai sem posição e sem duração. Ela tem o
+        que de fato se sabe dela: quanto tempo somou, quando foi a última vez, e
+        em que episódio parou.
+        """
+        dados = self.como_dicionario()
+        if self.multiplas_reproducoes:
+            dados["posicao"] = None
+            dados["duracao"] = None
+        return dados
 
 
 class HistoryStore:
@@ -139,16 +188,28 @@ class HistoryStore:
             return float(valor) if isinstance(valor, (int, float)) else None
 
         generos = bruto.get("generos")
+        segundos = numero("segundos") or 0.0
+        duracao = numero("duracao")
+        episodio = bruto.get("episodio")
         return Assistido(
             chave=chave,
             titulo=titulo,
             platform=bruto.get("platform"),
-            segundos=numero("segundos") or 0.0,
+            segundos=segundos,
             posicao=numero("posicao"),
-            duracao=numero("duracao"),
+            duracao=duracao,
             visto_em=numero("vistoEm") or 0.0,
             poster_url=bruto.get("posterUrl") if isinstance(bruto.get("posterUrl"), str) else None,
             generos=tuple(g for g in generos if isinstance(g, str)) if isinstance(generos, list) else (),
+            episodio=episodio if isinstance(episodio, str) and episodio else None,
+            reproducao=bruto.get("reproducao") if isinstance(bruto.get("reproducao"), str) else None,
+            # Derivado na leitura, e não só lido do arquivo: os registros
+            # gravados ANTES desta correção não têm o campo, e é justamente
+            # neles que a série já está marcada como terminada. Recalcular aqui
+            # desfaz o estrago sem migração e sem tocar no arquivo.
+            multiplas_reproducoes=bool(bruto.get("multiplasReproducoes")) or de_multiplas_reproducoes(
+                segundos, duracao, isinstance(episodio, str) and bool(episodio),
+            ),
         )
 
     def _linha_da_obra(
@@ -189,12 +250,17 @@ class HistoryStore:
         poster_url: str | None = None,
         generos: tuple[str, ...] = (),
         agora: float | None = None,
+        episodio: str | None = None,
     ) -> Assistido | None:
         """Soma este trecho ao que já havia deste título.
 
         Soma em vez de sobrescrever porque assistir é interrompido: meia hora
         hoje e meia hora amanhã são uma hora do mesmo filme, e é o total que diz
         se aquilo importou.
+
+        A chave é a da OBRA, e sempre foi. O que mudou é que `posicao` e
+        `duracao` agora sabem de QUAL reprodução falam — sem isso, o fim de um
+        episódio marcava a série inteira como vista.
         """
         if not titulo.strip():
             return None
@@ -208,6 +274,41 @@ class HistoryStore:
         acumulado = sum(a.segundos for a in anteriores) + max(0.0, segundos)
         anterior = anteriores[0] if anteriores else None
 
+        # De qual reprodução esta leitura fala, e se é a mesma de antes.
+        reproducao = chave_da_reproducao(episodio, duracao)
+        mesma_reproducao = (
+            anterior is not None
+            and reproducao is not None
+            and anterior.reproducao == reproducao
+        )
+
+        # AQUI estava a armadilha. A herança existe por um bom motivo — uma
+        # leitura em que a janela não respondeu não pode apagar onde a pessoa
+        # parou — mas ela era incondicional, e então a posição de um episódio
+        # TERMINADO sobrevivia a todos os episódios seguintes. Medido: uma hora
+        # do episódio seguinte, e a série continuava marcada como vista.
+        #
+        # A regra que separa os dois casos é sobre o que a leitura AFIRMA:
+        #
+        #   não sei de que reprodução falo   herda. Não saber não contradiz
+        #                                    nada, e apagar por ignorância foi
+        #                                    o que este teste de caracterização
+        #                                    já protegia.
+        #   falo de OUTRA reprodução         não herda. Aí há contradição, e a
+        #                                    posição guardada é de algo que
+        #                                    acabou.
+        contradiz = (
+            anterior is not None
+            and reproducao is not None
+            and anterior.reproducao is not None
+            and not mesma_reproducao
+        )
+        pode_herdar = anterior is not None and not contradiz
+        herdada_posicao = anterior.posicao if (pode_herdar and anterior) else None
+        herdada_duracao = anterior.duracao if (pode_herdar and anterior) else None
+
+        segundos_finais = acumulado
+        duracao_final = duracao if duracao is not None else herdada_duracao
         item = Assistido(
             chave=chave,
             titulo=titulo.strip(),
@@ -217,9 +318,25 @@ class HistoryStore:
             platform=platform or next(
                 (a.platform for a in anteriores if a.platform is not None), None,
             ),
-            segundos=acumulado,
-            posicao=posicao if posicao is not None else (anterior.posicao if anterior else None),
-            duracao=duracao if duracao is not None else (anterior.duracao if anterior else None),
+            segundos=segundos_finais,
+            posicao=posicao if posicao is not None else herdada_posicao,
+            duracao=duracao_final,
+            episodio=episodio or (anterior.episodio if mesma_reproducao and anterior else None),
+            reproducao=reproducao if reproducao is not None else (
+                anterior.reproducao if pode_herdar and anterior else None
+            ),
+            # Gruda: uma vez série, sempre série. E vale para trás — uma linha
+            # antiga que já acumulou mais do que cabe numa reprodução é
+            # reconhecida sem precisar ver outro episódio.
+            multiplas_reproducoes=(
+                any(a.multiplas_reproducoes for a in anteriores)
+                # Uma reprodução contradizendo a anterior É a prova direta: a
+                # obra teve mais de uma, logo é série.
+                or contradiz
+                or de_multiplas_reproducoes(
+                    segundos_finais, duracao_final, bool(episodio),
+                )
+            ),
             visto_em=agora if agora is not None else time.time(),
             # O pôster e os gêneros chegam depois, pelo catálogo: uma vez
             # descobertos, não se perdem numa atualização sem eles — nem quando

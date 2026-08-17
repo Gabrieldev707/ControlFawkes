@@ -9,6 +9,41 @@ describe('ProfilePhoto', () => {
     localStorage.clear()
   })
 
+  /**
+   * Onde o nome e a foto REALMENTE moram — e por que uma troca de porta os
+   * levou embora.
+   *
+   * Relatado em 17/08/2026: o controle era aberto em `192.168.0.168:5174`,
+   * passou a ser aberto em `:5173`, e nome e foto tinham sumido. Auditado: o
+   * `backend/data/perfis.json` não fora tocado (e nem é sobre isto — ele guarda
+   * os perfis DO SERVIÇO, tipo "quem está assistindo?" da Netflix), e o
+   * histórico estava inteiro, com todos os 19 registros.
+   *
+   * A causa é esta: `localStorage` é separado por ORIGEM, e origem inclui a
+   * porta. `http://host:5174` e `http://host:5173` são dois armazenamentos
+   * diferentes, e o segundo nasce vazio. Não houve apagamento — houve mudança
+   * de gaveta.
+   *
+   * Isto é consequência de uma decisão deliberada: a foto nunca sai do
+   * aparelho, não passa pelo servidor e não é guardada nele (ver a docstring de
+   * `comoQuadrado`). O preço é este. Se o preço deixar de valer a pena, a
+   * decisão a rever é a de onde o dado mora — não este teste.
+   */
+  it('guarda nome e foto no armazenamento do navegador, que é por origem', () => {
+    render(<ProfilePhoto nivel={0} total={12} />)
+    fireEvent.change(screen.getByLabelText('Seu nome'), { target: { value: 'Gabriel' } })
+
+    expect(localStorage.getItem('controlfawkes.nome')).toBe('Gabriel')
+
+    // Trocar de porta é ter outro `localStorage`. Aqui o equivalente possível
+    // em teste: o armazenamento vazio é indistinguível de um perfil novo.
+    localStorage.clear()
+    render(<ProfilePhoto nivel={0} total={12} />)
+
+    const campos = screen.getAllByLabelText('Seu nome') as HTMLInputElement[]
+    expect(campos[campos.length - 1].value).toBe('')
+  })
+
   it('começa sem foto e com o nível à mostra', () => {
     render(<ProfilePhoto nivel={5} total={12} />)
 
