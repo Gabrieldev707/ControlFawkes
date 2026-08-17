@@ -41,12 +41,40 @@ PROVIDERS_BR = {
 
 
 def fake_client(routes: dict[str, dict], registro: list[str] | None = None):
+    """Cliente falso do TMDB.
+
+    Um stub de `/search/multi` também responde `/search/movie` e `/search/tv`,
+    filtrado por tipo — que é como a API de verdade se comporta. Isso existe
+    porque o resolver deixou de usar `/search/multi`: ele não trazia
+    "O Rei"/"The King" (2019) nem na página 3 de 57, medido contra a API. Sem
+    esta ponte, cada fixture teria de ser reescrita em três, e o que os testes
+    verificam não mudou.
+    """
+    def por_tipo(payload: dict, media_type: str) -> dict:
+        resultados = payload.get("results")
+        if not isinstance(resultados, list):
+            return payload
+        return {
+            **payload,
+            "results": [
+                item for item in resultados
+                if isinstance(item, dict)
+                and item.get("media_type", media_type) == media_type
+            ],
+        }
+
     def handler(request: httpx.Request) -> httpx.Response:
+        caminho = request.url.path
         if registro is not None:
-            registro.append(request.url.path)
+            registro.append(caminho)
         for path, payload in routes.items():
-            if request.url.path.endswith(path):
+            if caminho.endswith(path):
                 return httpx.Response(200, json=payload)
+            if path.endswith("/search/multi"):
+                if caminho.endswith("/search/movie"):
+                    return httpx.Response(200, json=por_tipo(payload, "movie"))
+                if caminho.endswith("/search/tv"):
+                    return httpx.Response(200, json=por_tipo(payload, "tv"))
         return httpx.Response(404, json={})
 
     return httpx.AsyncClient(transport=httpx.MockTransport(handler))
@@ -487,11 +515,23 @@ def busca_exigente(esperado: str, resultado: dict):
     tentativas: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.url.path.endswith("/search/multi"):
+        if request.url.path.endswith(("/search/multi", "/search/movie", "/search/tv")):
             consulta = request.url.params.get("query", "")
-            tentativas.append(consulta)
+            # Uma CONSULTA pode bater em dois endpoints (`/search/movie` e
+            # `/search/tv`) e em mais de uma página. O que estes testes medem é
+            # a sequência de tentativas de RECUO — quantas grafias diferentes
+            # foram pedidas —, não quantas requisições saíram.
+            if not tentativas or tentativas[-1] != consulta:
+                tentativas.append(consulta)
             achou = consulta == esperado
-            return httpx.Response(200, json={"results": [resultado] if achou else []})
+            # O endpoint de filme não devolve série e vice-versa. Sem isto a
+            # mesma obra aparecia duas vezes, como MOVIE e como TV, e virava um
+            # empate fantasma que não existe na API real.
+            tipo = "movie" if request.url.path.endswith("/search/movie") else "tv"
+            combina = resultado.get("media_type", tipo) == tipo
+            return httpx.Response(
+                200, json={"results": [resultado] if achou and combina else []},
+            )
         return httpx.Response(200, json=PROVIDERS_BR)
 
     return httpx.AsyncClient(transport=httpx.MockTransport(handler)), tentativas

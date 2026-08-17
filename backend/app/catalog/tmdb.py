@@ -21,6 +21,19 @@ import unicodedata
 
 import httpx
 
+from app.catalog.identidades import IdentidadeStore
+from app.catalog.resolver import (
+    Candidato,
+    Escolhido,
+    Nivel,
+    Observado,
+    classificar,
+    normalizar,
+    resolver,
+    sem_ligacoes,
+    tem_candidato_forte,
+    tem_casamento_exato,
+)
 from app.catalog.store import TmdbKeyStore
 from app.schemas.ws import Platform
 
@@ -123,8 +136,10 @@ class TmdbCatalog:
         client: httpx.AsyncClient | None = None,
         timeout: float = DEFAULT_TIMEOUT,
         key_store: TmdbKeyStore | None = None,
+        identidades: IdentidadeStore | None = None,
     ) -> None:
         self._key_store = key_store or TmdbKeyStore()
+        self._identidades = identidades or IdentidadeStore()
         # A variável de ambiente vence a chave guardada: quem configurou o
         # servidor assim não pode ter isso sobrescrito pelo celular.
         self._fixed_key = api_key if api_key is not None else None
@@ -318,6 +333,104 @@ class TmdbCatalog:
         except ValueError:
             return None
         return payload if isinstance(payload, dict) else None
+
+    # ── Geração progressiva de candidatos ─────────────────────────────────
+    #
+    # Mais recall NÃO é varrer o TMDB. É pedir na ordem certa e parar cedo:
+    #
+    #   1. /search/movie + /search/tv, página 1, com ano quando houver
+    #   2. só se ainda não houver candidato forte: página 2
+    #   3. só então, e só se o título original diferir: busca por ele
+    #
+    # Medido em 15/08/2026: `/search/multi` — o endpoint que era usado — não
+    # trazia "O Rei"/"The King" (2019) nem na página 3 de 57. Em
+    # `/search/movie` ele está na página 2, posição 6; com `primary_release_year`
+    # sobe para a 3ª da página 1. Não faltava varrer mais: faltava perguntar
+    # direito.
+    PAGINAS_MAXIMAS = 2
+
+    async def gerar_candidatos(
+        self,
+        client: httpx.AsyncClient,
+        observado: Observado,
+        associado: int | None = None,
+    ) -> list[Candidato]:
+        achados: dict[tuple[str, int], Candidato] = {}
+
+        async def colher(consulta: str, caminho: str, tipo: str, pagina: int, **extra) -> None:
+            resposta = await self._get(
+                client, caminho,
+                query=consulta, language=self.language,
+                include_adult="false", page=pagina, **extra,
+            )
+            for item in (resposta or {}).get("results") or []:
+                if not isinstance(item, dict) or not isinstance(item.get("id"), int):
+                    continue
+                achados.setdefault(
+                    (tipo, item["id"]), self._como_candidato(item, tipo),
+                )
+
+        async def rodada(consulta: str, pagina: int) -> None:
+            # O ano só entra na busca de FILME: em série a data de estreia é a
+            # da primeira temporada, que raramente é o ano que o serviço mostra.
+            ano = (
+                {"primary_release_year": observado.ano}
+                if observado.ano is not None else {}
+            )
+            await colher(consulta, "/search/movie", "MOVIE", pagina, **ano)
+            await colher(consulta, "/search/tv", "TV", pagina)
+
+        def avaliar() -> list:
+            # Com a identidade guardada em mãos, ela entra já na avaliação: se o
+            # id associado aparecer na primeira página, a expansão para aí. É
+            # exatamente o ponto de guardar a associação — não repetir a busca
+            # frágil por título.
+            return [classificar(c, observado, associado) for c in achados.values()]
+
+        def ja_basta() -> bool:
+            return tem_candidato_forte(avaliar())
+
+        for pagina in range(1, self.PAGINAS_MAXIMAS + 1):
+            await rodada(observado.titulo, pagina)
+            if ja_basta():
+                return list(achados.values())
+
+        # Estágio final: o recuo por encurtamento, que já existia e continua
+        # ganhando o que ganhava. A busca do TMDB é literal — medido, "Batman:
+        # Cruzado e Encapuzado" (com o "e", que é como o serviço mostra) não
+        # devolve nada, e "Batman: Cruzado Encapuzado" devolve.
+        #
+        # Encurtar era perigoso: foi assim que "Prime Video: Batman" virou a
+        # consulta "Prime Video" e trouxe um evento de boxe. Antes o perigo era
+        # contido por uma checagem à parte (`_fala_do_mesmo_item`); agora ele é
+        # contido pela ESTRUTURA — o que vier de uma consulta encurtada ainda
+        # tem de responder ao título ORIGINAL para sair de `Nivel.NENHUM`. O
+        # ranking é o guarda, e ele não pode ser esquecido como uma checagem
+        # pode.
+        for tentativa in self._tentativas(observado.titulo)[1:]:
+            # A grafia literal já achou alguém pelo nome inteiro: encurtar daqui
+            # em diante só acrescenta ruído.
+            if tem_casamento_exato(avaliar()):
+                break
+            await rodada(tentativa, 1)
+
+        return list(achados.values())
+
+    def _como_candidato(self, item: dict, tipo: str) -> Candidato:
+        return Candidato(
+            tmdb_id=item["id"],
+            tipo=tipo,
+            titulo=self._title_of(item),
+            nomes=self._nomes_de(item),
+            ano=self._year_of(item),
+            popularidade=float(item.get("popularity") or 0.0),
+            poster_path=item.get("poster_path") if isinstance(
+                item.get("poster_path"), str,
+            ) else None,
+            genre_ids=tuple(
+                i for i in (item.get("genre_ids") or []) if isinstance(i, int)
+            ),
+        )
 
     async def lookup(self, query: str) -> TitleAvailability | None:
         opcoes = await self.lookup_options(query)
@@ -688,36 +801,72 @@ class TmdbCatalog:
                 found.append(platform)
         return found
 
-    async def detalhes_de(self, titulo: str) -> tuple[str | None, tuple[str, ...]]:
-        """Pôster e gêneros de um título, numa busca só.
+    async def detalhes_de(
+        self,
+        titulo: str,
+        ano: int | None = None,
+        tipo: str | None = None,
+        provider: str | None = None,
+        provider_content_id: str | None = None,
+    ) -> tuple[str | None, tuple[str, ...]]:
+        """Pôster e gêneros da obra — ou nada, quando não dá para afirmar qual é.
 
-        Duas idas separadas ao catálogo para o mesmo nome seria pagar duas
-        vezes pela mesma resposta — o `/search/multi` traz `poster_path` e
-        `genre_ids` no mesmo item.
+        `ano` e `tipo` são opcionais porque hoje quase nunca se sabem: a janela
+        do navegador dá só o nome. Quando chegarem — pelo Browser Media Bridge,
+        que já lê a aba — eles transformam um palpite num casamento
+        determinístico. Medido: para "O Rei", o ano leva a escolha de
+        `Nivel.TITULO` (desempate por fama) para `Nivel.TITULO_ANO_TIPO`.
+
+        `provider` e `provider_content_id` são o id da obra DENTRO do serviço.
+        Não é um id do TMDB e não vira um por decreto — mas, uma vez que a
+        resolução por título tenha decidido com segurança, a ligação fica
+        guardada e a busca frágil não se repete. Ver `identidades.py`.
         """
         if not self.enabled or not titulo.strip():
             return None, ()
 
         async def buscar(client: httpx.AsyncClient) -> tuple[str | None, tuple[str, ...]]:
-            nomes = await self._nomes_dos_generos(client)
-            for item in await self._procurar(client, titulo):
-                # Precisa ser sobre a mesma coisa. Sem esta checagem, o
-                # histórico ganhava a capa do primeiro resultado qualquer —
-                # e "Prime Video: Batman" chegou a virar um evento de boxe.
-                #
-                # Contra todos os nomes, e não só o traduzido: medido, "The
-                # Gentlemen" era rejeitado por vir como "Magnatas do Crime" e a
-                # capa acabava sendo a de "The League of Gentlemen", uma série
-                # de 1999 que não tem nada a ver.
-                if not self._fala_do_mesmo_item(item, titulo):
-                    continue
-                ids = item.get("genre_ids")
-                generos = (
-                    tuple(nomes[i] for i in ids if i in nomes)
-                    if isinstance(ids, list) else ()
+            # Geração ampla, ranking determinístico, e o direito de não decidir.
+            #
+            # O caminho antigo pegava o primeiro resultado que "falasse do
+            # mesmo" — e isso deixou "O Rei" com o pôster do homônimo de 2014 e
+            # "Prime Video: Batman" com o de um evento de boxe. Aqui, empate sem
+            # desempate vira ENRIQUECIMENTO NENHUM: melhor um título sem capa do
+            # que um título com a capa de outra obra e o histórico contaminado.
+            observado = Observado(
+                titulo=titulo.strip(), ano=ano, tipo=tipo,
+                provider=provider, providerContentId=provider_content_id,
+            )
+            associado = self._identidades.tmdb_de(provider, provider_content_id)
+            candidatos = await self.gerar_candidatos(client, observado, associado)
+            escolha = resolver(candidatos, observado, associado)
+            if not isinstance(escolha, Escolhido):
+                return None, ()
+
+            # Só se guarda o que foi decidido por algo além do nome. Uma
+            # associação errada aqui é PIOR do que nenhuma: ela vira identidade
+            # e passa a ganhar de todo o resto, inclusive de uma resolução
+            # futura melhor informada.
+            if escolha.nivel <= Nivel.TITULO_TIPO:
+                self._identidades.associar(
+                    provider, provider_content_id,
+                    escolha.candidato.tmdb_id,
+                    escolha.candidato.tipo,
+                    escolha.candidato.titulo,
                 )
-                return self._poster_of(item), generos
-            return None, ()
+
+            # Os gêneros já vieram na busca, como ids. Traduzi-los pelo mapa —
+            # que é resolvido uma vez por execução — custa zero requisição a
+            # mais; pedir o detalhe da obra custaria uma por título.
+            nomes = await self._nomes_dos_generos(client)
+            generos = tuple(
+                nomes[i] for i in escolha.candidato.genre_ids if i in nomes
+            )
+            poster = (
+                f"{IMAGE_BASE}{escolha.candidato.poster_path}"
+                if escolha.candidato.poster_path else None
+            )
+            return poster, generos
 
         if self._client is not None:
             return await buscar(self._client)
