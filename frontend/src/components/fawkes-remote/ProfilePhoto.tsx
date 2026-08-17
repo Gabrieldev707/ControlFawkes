@@ -83,7 +83,6 @@ async function comoQuadrado(arquivo: File): Promise<string | null> {
   }
 }
 
-/** A foto e o nome de quem usa o controle. */
 function guardarLocal(chave: string, valor: string | null): void {
   try {
     if (valor) localStorage.setItem(chave, valor)
@@ -94,6 +93,7 @@ function guardarLocal(chave: string, valor: string | null): void {
   }
 }
 
+/** A foto e o nome de quem usa o controle. */
 export function ProfilePhoto({ nivel, total, credentials = null }: ProfilePhotoProps) {
   // Começa pelo cache local para a tela não piscar vazia enquanto o servidor
   // responde. Quem manda é a resposta, e ela chega logo abaixo.
@@ -121,6 +121,25 @@ export function ProfilePhoto({ nivel, total, credentials = null }: ProfilePhotoP
         if (cancelado) return
         const doServidor = typeof dados.foto === 'string' ? dados.foto : null
         const nomeDoServidor = typeof dados.nome === 'string' ? dados.nome : ''
+
+        // Servidor vazio NÃO apaga o que este navegador já tinha.
+        //
+        // A primeira versão disto sobrescrevia sempre, e com isso o perfil
+        // sumia de novo em dois casos reais: quando o servidor ainda não tinha
+        // nada (primeira abertura depois da mudança) e quando um `PUT` anterior
+        // falhou por o servidor estar fora do ar. Vazio não é uma resposta
+        // sobre o perfil — é a ausência de uma.
+        //
+        // Neste caso quem tem o dado é este navegador, e ele SOBE. É a adoção
+        // do que já existia, e é o que faz a migração acontecer sozinha, sem
+        // ninguém precisar digitar de novo.
+        const localFoto = lerGuardado(CHAVE)
+        const localNome = lerGuardado(NOME) ?? ''
+        if (doServidor === null && nomeDoServidor === '' && (localFoto || localNome)) {
+          void enviar(localNome.trim() || null, localFoto)
+          return
+        }
+
         setFoto(doServidor)
         setNome(nomeDoServidor)
         guardarLocal(CHAVE, doServidor)

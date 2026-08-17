@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ProfilePhoto } from './ProfilePhoto'
 
@@ -91,5 +91,84 @@ describe('ProfilePhoto', () => {
     const progresso = container.querySelector('.profile-photo__progresso')!
     const [pintado, volta] = progresso.getAttribute('stroke-dasharray')!.split(' ').map(Number)
     expect(pintado).toBeCloseTo(volta / 2, 1)
+  })
+})
+
+describe('ProfilePhoto e o servidor', () => {
+  const credenciais = { deviceId: 'aparelho', token: 'segredo' }
+
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
+  /**
+   * O bug que fez o nome e a foto sumirem DE NOVO, e que eu mesmo introduzi ao
+   * mover o perfil para o servidor: a resposta era aplicada sempre, inclusive
+   * quando vinha vazia.
+   *
+   * Vazio não é uma resposta sobre o perfil — é a ausência de uma. Acontece na
+   * primeira abertura depois da mudança, e acontece quando um `PUT` anterior
+   * falhou com o servidor fora do ar. Nos dois casos quem tem o dado é este
+   * navegador, e apagá-lo é destruir a única cópia.
+   */
+  it('servidor vazio não apaga o que este navegador já tinha', async () => {
+    localStorage.setItem('controlfawkes.nome', 'Gabriel')
+    const chamadas: Array<{ metodo: string; corpo: unknown }> = []
+    vi.stubGlobal('fetch', vi.fn((_url: string, init?: RequestInit) => {
+      chamadas.push({
+        metodo: init?.method ?? 'GET',
+        corpo: init?.body === undefined ? null : JSON.parse(String(init.body)),
+      })
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ nome: null, foto: null }),
+      })
+    }))
+
+    render(<ProfilePhoto nivel={0} total={12} credentials={credenciais} />)
+
+    await waitFor(() => {
+      expect(chamadas.some((c) => c.metodo === 'PUT')).toBe(true)
+    })
+    // O nome continua na tela...
+    expect((screen.getByLabelText('Seu nome') as HTMLInputElement).value).toBe('Gabriel')
+    // ...e SOBE para o servidor, que é a migração acontecendo sozinha.
+    expect(chamadas.find((c) => c.metodo === 'PUT')?.corpo)
+      .toEqual({ nome: 'Gabriel', foto: null })
+  })
+
+  it('o que o servidor tem vence o cache deste navegador', async () => {
+    localStorage.setItem('controlfawkes.nome', 'Antigo')
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({
+      ok: true,
+      json: () => Promise.resolve({ nome: 'Gabriel', foto: null }),
+    })))
+
+    render(<ProfilePhoto nivel={0} total={12} credentials={credenciais} />)
+
+    await waitFor(() => {
+      expect((screen.getByLabelText('Seu nome') as HTMLInputElement).value).toBe('Gabriel')
+    })
+  })
+
+  it('servidor fora do ar deixa o cache em paz', async () => {
+    localStorage.setItem('controlfawkes.nome', 'Gabriel')
+    vi.stubGlobal('fetch', vi.fn(() => Promise.reject(new Error('sem rede'))))
+
+    render(<ProfilePhoto nivel={0} total={12} credentials={credenciais} />)
+
+    // Melhor a foto de ontem do que uma tela vazia sugerindo que o dado sumiu.
+    await waitFor(() => {
+      expect((screen.getByLabelText('Seu nome') as HTMLInputElement).value).toBe('Gabriel')
+    })
+  })
+
+  it('sem credenciais não fala com o servidor', () => {
+    const chamou = vi.fn()
+    vi.stubGlobal('fetch', chamou)
+
+    render(<ProfilePhoto nivel={0} total={12} />)
+
+    expect(chamou).not.toHaveBeenCalled()
   })
 })
