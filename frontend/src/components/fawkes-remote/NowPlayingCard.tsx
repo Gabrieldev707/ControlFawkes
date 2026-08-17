@@ -101,8 +101,16 @@ export function NowPlayingCard({
   const temPosicao = positionSeconds !== null
   const temDuracao = durationSeconds !== null && durationSeconds > 0
   const temBarra = temPosicao && temDuracao
+  // O contador roda aqui no celular a partir da última posição recebida, e
+  // nada o segurava. Quando o site para de publicar posição nova — o estado
+  // normal com a API de mídia do Windows pendurada — o episódio acaba e o
+  // contador continua: a tela mostrava "1:01:00 de 1:00:00".
+  //
+  // A barra já era limitada; faltava limitar o NÚMERO, que é o que se lê.
+  // Sem duração não há fim para segurar: transmissão ao vivo continua correndo.
+  const mostrado = temDuracao ? Math.min(decorrido, durationSeconds) : decorrido
   const proporcao = temBarra
-    ? Math.min(1, Math.max(0, decorrido / durationSeconds))
+    ? Math.min(1, Math.max(0, mostrado / durationSeconds))
     : 0
 
   return (
@@ -149,13 +157,13 @@ export function NowPlayingCard({
                 aria-label="Progresso"
                 aria-valuemin={0}
                 aria-valuemax={Math.round(durationSeconds)}
-                aria-valuenow={Math.round(decorrido)}
+                aria-valuenow={Math.round(mostrado)}
               >
                 <span style={{ width: `${proporcao * 100}%` }} />
               </div>
             ) : null}
             <p className="now-playing__times">
-              <span>{formatarTempo(decorrido)}</span>
+              <span>{formatarTempo(mostrado)}</span>
               {/* Sem duração é transmissão ao vivo: o tempo decorrido continua
                   valendo, e dizer "ao vivo" é mais honesto do que inventar um
                   fim que não existe. */}

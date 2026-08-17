@@ -17,10 +17,13 @@ from fastapi import APIRouter, Header, HTTPException, Request
 from app.api import websocket as websocket_module
 from app.catalog.tmdb import PLATAFORMAS_COM_CATALOGO
 from app.history import achievements
+from app.profiles.usuario import PerfilDoUsuario
 from app.security.origins import is_origin_allowed
 
 
 router = APIRouter()
+
+perfil_do_usuario = PerfilDoUsuario()
 
 # Recomendação não muda de minuto em minuto, e cada resposta custa várias idas
 # ao TMDB. Meia hora é tempo de sobra para parecer viva.
@@ -72,6 +75,17 @@ async def perfil(
         # `como_obra` e não `como_dicionario`: esta lista é de OBRAS, e a
         # posição do último episódio não descreve a obra. Ver `Assistido`.
         "continuar": [item.como_obra() for item in store.continuar(limite=10)],
+        # E o mesmo por serviço. A lista acima tem teto, e um teto único faz os
+        # serviços disputarem: três vídeos do YouTube empurravam para fora tudo
+        # o que era de streaming. Aqui nenhuma obra é escondida por causa de
+        # outra de serviço diferente.
+        "continuarPorServico": [
+            {
+                "platform": servico,
+                "itens": [item.como_obra() for item in itens],
+            }
+            for servico, itens in store.continuar_por_servico(limite_por_servico=10)
+        ],
         "conquistas": [c.como_dicionario() for c in conquistas],
         "progresso": achievements.nivel(conquistas),
         "generos": maiores(por_genero, 5),
@@ -79,6 +93,45 @@ async def perfil(
         "totalDeTitulos": len(tudo),
         "totalDeSegundos": round(sum(item.segundos for item in tudo)),
     }
+
+
+@router.get("/profile/me")
+async def ler_perfil(
+    request: Request,
+    x_device_id: str | None = Header(default=None),
+    x_device_token: str | None = Header(default=None),
+):
+    """O nome e a foto de quem usa o controle.
+
+    Fica no computador e não no navegador porque `localStorage` é separado por
+    origem, e origem inclui a porta: trocar `:5174` por `:5173` fazia nome e
+    foto sumirem sem nada ter sido apagado. Ver `profiles/usuario.py`.
+    """
+    _autenticar(request, x_device_id, x_device_token)
+    return perfil_do_usuario.ler().como_dicionario()
+
+
+@router.put("/profile/me")
+async def salvar_perfil(
+    request: Request,
+    x_device_id: str | None = Header(default=None),
+    x_device_token: str | None = Header(default=None),
+):
+    """Guarda o nome e a foto, e devolve o que ficou guardado.
+
+    Devolve o resultado real: um nome é aparado e uma foto fora do formato vira
+    ausente, e a tela precisa saber disso em vez de mostrar o que mandou.
+    """
+    _autenticar(request, x_device_id, x_device_token)
+    try:
+        corpo = await request.json()
+    except Exception:  # noqa: BLE001 - corpo ilegível é entrada inválida
+        raise HTTPException(status_code=400, detail="Corpo não é JSON.") from None
+    if not isinstance(corpo, dict):
+        raise HTTPException(status_code=400, detail="Esperava um objeto.")
+
+    guardado = perfil_do_usuario.salvar(corpo.get("nome"), corpo.get("foto"))
+    return guardado.como_dicionario()
 
 
 @router.get("/profile/recommendations")

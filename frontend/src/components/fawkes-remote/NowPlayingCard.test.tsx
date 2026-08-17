@@ -253,3 +253,64 @@ describe('NowPlayingCard capa', () => {
     expect(screen.getByText('Queen')).toBeTruthy()
   })
 })
+
+describe('o tempo decorrido não passa do fim', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: false })))
+  })
+
+  /**
+   * O relato de 17/08/2026: "a visualização de tempo tá bugando".
+   *
+   * A barra era limitada a 100% e o NÚMERO não era. O contador roda no próprio
+   * celular a partir da última posição recebida, e quando o site para de
+   * publicar posição nova — que é o estado normal desta máquina, com a SMTC
+   * pendurada — nada o segura. O episódio acaba, o contador continua, e a
+   * tela mostra um decorrido maior que o total.
+   */
+  it('para no fim em vez de contar para sempre', () => {
+    vi.useFakeTimers()
+    try {
+      render(
+        <NowPlayingCard
+          session={{ ...sessao, positionSeconds: 3590, durationSeconds: 3600 }}
+          apiBaseUrl="http://192.168.0.1:8100"
+          credentials={null}
+        />,
+      )
+
+      // Um minuto de relógio depois do fim do que estava tocando.
+      act(() => { vi.advanceTimersByTime(70_000) })
+
+      // Decorrido e total marcam a mesma coisa: o fim. Antes o decorrido
+      // marcava 1:01:00 num total de 1:00:00.
+      const barra = screen.getByRole('progressbar')
+      expect(barra.getAttribute('aria-valuenow')).toBe('3600')
+      expect(screen.getAllByText('1:00:00')).toHaveLength(2)
+      expect(screen.queryByText('1:01:00')).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('sem duração conhecida o tempo continua correndo', () => {
+    vi.useFakeTimers()
+    try {
+      render(
+        <NowPlayingCard
+          session={{ ...sessao, positionSeconds: 10, durationSeconds: null }}
+          apiBaseUrl="http://192.168.0.1:8100"
+          credentials={null}
+        />,
+      )
+
+      act(() => { vi.advanceTimersByTime(20_000) })
+
+      // Transmissão ao vivo: não há fim para segurar o contador.
+      expect(screen.getByText('0:30')).toBeTruthy()
+      expect(screen.getByText('ao vivo')).toBeTruthy()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

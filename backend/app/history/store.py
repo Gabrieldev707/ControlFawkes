@@ -411,6 +411,39 @@ class HistoryStore:
         """O que ficou pela metade, do mais recente para o mais antigo."""
         return [item for item in self.listar() if not item.terminado][:limite]
 
+    def continuar_por_servico(
+        self, limite_por_servico: int = 10,
+    ) -> list[tuple[Platform, list[Assistido]]]:
+        """O mesmo, separado por serviço — e é aqui que o que sumiu reaparece.
+
+        A lista principal tem um teto, e um teto único faz os serviços
+        disputarem entre si. Medido em 17/08/2026: três vídeos do YouTube de
+        16/08 empurraram para fora do corte tudo o que era de 14/08 — Família
+        Soprano, A Casa do Dragão, Rick and Morty e Batman: Caped Crusader
+        estavam no arquivo, inteiros, e não cabiam na tela.
+
+        Nenhuma obra é escondida por causa de outra de serviço diferente:
+        maratonar YouTube não pode enterrar o que se assiste no Max.
+
+        A ordem dos serviços é a da atividade mais recente, pelo mesmo motivo
+        que a das obras: quem está assistindo agora quer ver isso primeiro.
+        Obra sem serviço reconhecido não entra — não há em que seção pô-la, e
+        inventar uma seção "outros" seria dar nome ao que não tem.
+        """
+        por_servico: dict[Platform, list[Assistido]] = {}
+        for item in self.listar():
+            if item.terminado or item.platform is None:
+                continue
+            por_servico.setdefault(item.platform, []).append(item)
+
+        # `listar()` já vem do mais recente para o mais antigo, então o primeiro
+        # de cada lista é o mais recente do serviço.
+        return sorted(
+            ((servico, itens[:limite_por_servico]) for servico, itens in por_servico.items()),
+            key=lambda par: par[1][0].visto_em,
+            reverse=True,
+        )
+
     def consolidar(self, limpar_titulo) -> int:
         """Reaplica a limpeza de título ao que já está guardado.
 

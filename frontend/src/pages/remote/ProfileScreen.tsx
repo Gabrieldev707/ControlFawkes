@@ -38,8 +38,14 @@ interface Contagem {
   segundos: number
 }
 
+interface SecaoDeServico {
+  platform: Platform
+  itens: Assistido[]
+}
+
 interface Perfil {
   continuar: Assistido[]
+  continuarPorServico: SecaoDeServico[]
   generos: Contagem[]
   plataformas: Contagem[]
   totalDeTitulos: number
@@ -97,6 +103,73 @@ function horas(segundos: number): string {
   return `${total < 10 ? total.toFixed(1) : Math.round(total)} h`
 }
 
+/**
+ * Uma faixa de obras para retomar.
+ *
+ * Extraída porque agora há mais de uma: a principal, com o que se viu por
+ * último em qualquer serviço, e uma por serviço. Duas cópias do mesmo cartão
+ * divergiriam — foi assim que o mapa de logos acabou desencontrado em quatro
+ * telas.
+ */
+function FaixaDeObras({
+  itens,
+  disabled,
+  onResume,
+}: {
+  itens: Assistido[]
+  disabled: boolean
+  onResume: (platform: Platform | null, titulo: string) => void
+}) {
+  return (
+    <div className="profile-screen__faixa">
+      {itens.map((item) => {
+        const restante = restanteDe(item.posicao, item.duracao)
+        return (
+          <button
+            key={`${item.platform}-${item.titulo}`}
+            type="button"
+            className="continuar-card"
+            disabled={disabled}
+            aria-label={
+              restante !== null
+                ? `Retomar ${item.titulo}, ${restante.legenda}`
+                : `Retomar ${item.titulo}`
+            }
+            onClick={() => onResume(item.platform, item.titulo)}
+          >
+            <span className="continuar-card__capa" aria-hidden="true">
+              {item.posterUrl !== null
+                ? <img src={item.posterUrl} alt="" loading="lazy" />
+                : <Play size={20} />}
+              {item.platform !== null ? (
+                <img
+                  className="continuar-card__logo"
+                  src={PLATFORM_BRANDS[item.platform].logo}
+                  alt=""
+                />
+              ) : null}
+              {/* Sobre a capa, como todo serviço faz: é onde o olho já procura
+                  o quanto falta. */}
+              {restante !== null ? (
+                <span className="continuar-card__barra">
+                  <span style={{ width: `${restante.proporcao * 100}%` }} />
+                </span>
+              ) : null}
+            </span>
+            <span className="continuar-card__titulo">{item.titulo}</span>
+            {/* A barra e o texto aparecem juntos ou não aparecem: os dois saem
+                da mesma posição, e um sem o outro sugeriria que a informação
+                que falta é de outro tipo. */}
+            {restante !== null ? (
+              <span className="continuar-card__tempo">{restante.legenda}</span>
+            ) : null}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 /** Só o que veio no formato esperado: a lista alimenta `src` de imagens. */
 function comoPerfil(dados: unknown): Perfil | null {
   if (typeof dados !== 'object' || dados === null) return null
@@ -113,22 +186,41 @@ function comoPerfil(dados: unknown): Perfil | null {
       : []
   )
 
-  const continuar = Array.isArray(bruto.continuar)
-    ? bruto.continuar.flatMap((item) => {
-      if (typeof item !== 'object' || item === null) return []
-      const dado = item as Record<string, unknown>
-      if (typeof dado.titulo !== 'string' || !dado.titulo) return []
-      const poster = typeof dado.posterUrl === 'string' && dado.posterUrl.startsWith('https://')
-        ? dado.posterUrl
-        : null
-      return [{
-        titulo: dado.titulo,
-        platform: isPlatform(dado.platform) ? dado.platform : null,
-        segundos: typeof dado.segundos === 'number' ? dado.segundos : 0,
-        posicao: typeof dado.posicao === 'number' ? dado.posicao : null,
-        duracao: typeof dado.duracao === 'number' ? dado.duracao : null,
-        posterUrl: poster,
-      }]
+  // Uma leitura só de item assistido, usada pela faixa principal e por todas as
+  // faixas de serviço. Duas cópias divergiriam, e a que ficasse para trás
+  // deixaria de barrar um `posterUrl` que não é https — que alimenta `src`.
+  const assistidos = (valor: unknown): Assistido[] => (
+    Array.isArray(valor)
+      ? valor.flatMap((item) => {
+        if (typeof item !== 'object' || item === null) return []
+        const dado = item as Record<string, unknown>
+        if (typeof dado.titulo !== 'string' || !dado.titulo) return []
+        const poster = typeof dado.posterUrl === 'string' && dado.posterUrl.startsWith('https://')
+          ? dado.posterUrl
+          : null
+        return [{
+          titulo: dado.titulo,
+          platform: isPlatform(dado.platform) ? dado.platform : null,
+          segundos: typeof dado.segundos === 'number' ? dado.segundos : 0,
+          posicao: typeof dado.posicao === 'number' ? dado.posicao : null,
+          duracao: typeof dado.duracao === 'number' ? dado.duracao : null,
+          posterUrl: poster,
+        }]
+      })
+      : []
+  )
+
+  const continuar = assistidos(bruto.continuar)
+
+  // Só serviço reconhecido vira seção: o título dela é o nome da marca, e sem
+  // plataforma não há nome nem logo para pôr.
+  const continuarPorServico = Array.isArray(bruto.continuarPorServico)
+    ? bruto.continuarPorServico.flatMap((secao) => {
+      if (typeof secao !== 'object' || secao === null) return []
+      const dado = secao as Record<string, unknown>
+      if (!isPlatform(dado.platform)) return []
+      const itens = assistidos(dado.itens)
+      return itens.length > 0 ? [{ platform: dado.platform, itens }] : []
     })
     : []
 
@@ -164,6 +256,7 @@ function comoPerfil(dados: unknown): Perfil | null {
 
   return {
     continuar,
+    continuarPorServico,
     generos: contagens(bruto.generos),
     plataformas: contagens(bruto.plataformas),
     totalDeTitulos: typeof bruto.totalDeTitulos === 'number' ? bruto.totalDeTitulos : 0,
@@ -295,6 +388,7 @@ export function ProfileScreen({
       </div>
 
       <ProfilePhoto
+        credentials={credentials}
         nivel={perfil?.progresso?.nivel ?? 0}
         total={perfil?.progresso?.total ?? 0}
       />
@@ -312,54 +406,34 @@ export function ProfileScreen({
       {perfil !== null && perfil.continuar.length > 0 ? (
         <section aria-labelledby="continuar-titulo">
           <p className="profile-screen__secao" id="continuar-titulo">Continuar assistindo</p>
-          <div className="profile-screen__faixa">
-            {perfil.continuar.map((item) => {
-              const restante = restanteDe(item.posicao, item.duracao)
-              return (
-                <button
-                  key={`${item.platform}-${item.titulo}`}
-                  type="button"
-                  className="continuar-card"
-                  disabled={disabled}
-                  aria-label={
-                    restante !== null
-                      ? `Retomar ${item.titulo}, ${restante.legenda}`
-                      : `Retomar ${item.titulo}`
-                  }
-                  onClick={() => onResume(item.platform, item.titulo)}
-                >
-                  <span className="continuar-card__capa" aria-hidden="true">
-                    {item.posterUrl !== null
-                      ? <img src={item.posterUrl} alt="" loading="lazy" />
-                      : <Play size={20} />}
-                    {item.platform !== null ? (
-                      <img
-                        className="continuar-card__logo"
-                        src={PLATFORM_BRANDS[item.platform].logo}
-                        alt=""
-                      />
-                    ) : null}
-                    {/* Sobre a capa, como todo serviço faz: é onde o olho já
-                        procura o quanto falta. */}
-                    {restante !== null ? (
-                      <span className="continuar-card__barra">
-                        <span style={{ width: `${restante.proporcao * 100}%` }} />
-                      </span>
-                    ) : null}
-                  </span>
-                  <span className="continuar-card__titulo">{item.titulo}</span>
-                  {/* A barra e o texto aparecem juntos ou não aparecem: os dois
-                      saem da mesma posição, e um sem o outro sugeriria que a
-                      informação que falta é de outro tipo. */}
-                  {restante !== null ? (
-                    <span className="continuar-card__tempo">{restante.legenda}</span>
-                  ) : null}
-                </button>
-              )
-            })}
-          </div>
+          <FaixaDeObras itens={perfil.continuar} disabled={disabled} onResume={onResume} />
         </section>
       ) : null}
+
+      {/* E o mesmo, serviço a serviço.
+
+          A faixa acima tem teto, e um teto único faz os serviços disputarem
+          entre si: medido em 17/08/2026, três vídeos do YouTube de 16/08
+          empurraram para fora do corte tudo o que era de 14/08 — Família
+          Soprano, A Casa do Dragão e Rick and Morty estavam no histórico,
+          inteiros, e não cabiam na tela. Maratonar um serviço não pode
+          enterrar o que se assiste nos outros. */}
+      {perfil !== null && perfil.continuarPorServico.map((secao) => (
+        secao.itens.length > 0 ? (
+          <section key={secao.platform} aria-labelledby={`continuar-${secao.platform}`}>
+            <p className="profile-screen__secao" id={`continuar-${secao.platform}`}>
+              <img
+                className="profile-screen__secao-logo"
+                src={PLATFORM_BRANDS[secao.platform].logo}
+                alt=""
+                aria-hidden="true"
+              />
+              {`Continuar no ${PLATFORM_BRANDS[secao.platform].name}`}
+            </p>
+            <FaixaDeObras itens={secao.itens} disabled={disabled} onResume={onResume} />
+          </section>
+        ) : null
+      ))}
 
       {sugestoes.titles.length > 0 ? (
         <section aria-labelledby="sugestoes-titulo">

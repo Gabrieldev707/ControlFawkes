@@ -1,6 +1,8 @@
 import { Camera, Trash2, UserRound } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 
+import { apiBaseUrl } from '../../features/fawkes-remote/apiUrl'
+
 
 const CHAVE = 'controlfawkes.foto'
 const NOME = 'controlfawkes.nome'
@@ -15,6 +17,8 @@ interface ProfilePhotoProps {
   /** Quantas medalhas já foram conquistadas, para o anel em volta da foto. */
   nivel: number
   total: number
+  /** Sem credenciais o perfil vale só neste navegador. */
+  credentials?: { deviceId: string; token: string } | null
 }
 
 function lerGuardado(chave: string): string | null {
@@ -28,10 +32,20 @@ function lerGuardado(chave: string): string | null {
 /**
  * Recorta o centro da imagem num quadrado e devolve como JPEG pequeno.
  *
- * O recorte acontece no próprio celular: a foto nunca sai do aparelho, não
- * passa pelo servidor e não vai para lugar nenhum. É por isso que ela mora no
- * `localStorage` e não em `backend/data` — este é o único dado do controle que
- * é sobre a pessoa, não sobre o computador.
+ * O recorte acontece no próprio celular, e é o que mantém a imagem pequena:
+ * um retrato moderno tem 4000px de largura e viraria megabytes trafegando por
+ * nada.
+ *
+ * A foto era guardada só aqui, e isso mudou em 17/08/2026. `localStorage` é
+ * separado por ORIGEM, e origem inclui a porta: trocar `:5174` por `:5173`
+ * fazia nome e foto sumirem sem nada ter sido apagado, e o mesmo aconteceria a
+ * cada troca de celular ou navegador. Um dado que a pessoa entende como "minha
+ * conta" não pode depender da porta em que o servidor subiu naquele dia.
+ *
+ * Agora o servidor é a fonte da verdade e o `localStorage` é cache: a tela
+ * pinta na hora com o que tem e corrige quando a resposta chega. O destino da
+ * imagem é o mesmo computador que já está sendo controlado, na mesma rede — ver
+ * `backend/app/profiles/usuario.py`.
  */
 async function comoQuadrado(arquivo: File): Promise<string | null> {
   const url = URL.createObjectURL(arquivo)
@@ -70,19 +84,72 @@ async function comoQuadrado(arquivo: File): Promise<string | null> {
 }
 
 /** A foto e o nome de quem usa o controle. */
-export function ProfilePhoto({ nivel, total }: ProfilePhotoProps) {
+function guardarLocal(chave: string, valor: string | null): void {
+  try {
+    if (valor) localStorage.setItem(chave, valor)
+    else localStorage.removeItem(chave)
+  } catch {
+    // Armazenamento bloqueado ou cheio. O cache é acelerador, não a verdade:
+    // sem ele a tela só pinta um instante depois, quando o servidor responde.
+  }
+}
+
+export function ProfilePhoto({ nivel, total, credentials = null }: ProfilePhotoProps) {
+  // Começa pelo cache local para a tela não piscar vazia enquanto o servidor
+  // responde. Quem manda é a resposta, e ela chega logo abaixo.
   const [foto, setFoto] = useState<string | null>(() => lerGuardado(CHAVE))
   const [nome, setNome] = useState<string>(() => lerGuardado(NOME) ?? '')
   const [erro, setErro] = useState(false)
   const entradaRef = useRef<HTMLInputElement>(null)
 
+  const cabecalhos = credentials === null ? null : {
+    'Content-Type': 'application/json',
+    'X-Device-Id': credentials.deviceId,
+    'X-Device-Token': credentials.token,
+  }
+
+  // O que está no computador vence o que está neste navegador. É esta linha
+  // que faz o perfil sobreviver a uma troca de porta, de aparelho ou de aba.
   useEffect(() => {
+    if (cabecalhos === null) return
+    let cancelado = false
+    void (async () => {
+      try {
+        const resposta = await fetch(`${apiBaseUrl()}/profile/me`, { headers: cabecalhos })
+        if (!resposta.ok) return
+        const dados = await resposta.json() as { nome?: unknown; foto?: unknown }
+        if (cancelado) return
+        const doServidor = typeof dados.foto === 'string' ? dados.foto : null
+        const nomeDoServidor = typeof dados.nome === 'string' ? dados.nome : ''
+        setFoto(doServidor)
+        setNome(nomeDoServidor)
+        guardarLocal(CHAVE, doServidor)
+        guardarLocal(NOME, nomeDoServidor || null)
+      } catch {
+        // Servidor fora do ar: fica o que o cache tinha. Melhor a foto de
+        // ontem do que uma tela vazia que sugere que o dado se perdeu.
+      }
+    })()
+    return () => { cancelado = true }
+    // Só quando as credenciais mudam: `cabecalhos` é recriado a cada render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [credentials?.deviceId, credentials?.token])
+
+  async function enviar(proximoNome: string | null, proximaFoto: string | null) {
+    if (cabecalhos === null) return
     try {
-      if (nome.trim()) localStorage.setItem(NOME, nome.trim())
-      else localStorage.removeItem(NOME)
+      await fetch(`${apiBaseUrl()}/profile/me`, {
+        method: 'PUT',
+        headers: cabecalhos,
+        body: JSON.stringify({ nome: proximoNome, foto: proximaFoto }),
+      })
     } catch {
-      // Armazenamento bloqueado: o nome vale só nesta sessão.
+      // Guardado localmente de qualquer forma; sobe na próxima alteração.
     }
+  }
+
+  useEffect(() => {
+    guardarLocal(NOME, nome.trim() || null)
   }, [nome])
 
   async function escolher(arquivo: File | undefined) {
@@ -92,24 +159,18 @@ export function ProfilePhoto({ nivel, total }: ProfilePhotoProps) {
       setErro(true)
       return
     }
-    try {
-      localStorage.setItem(CHAVE, quadrado)
-      setFoto(quadrado)
-      setErro(false)
-    } catch {
-      // Passou do limite do navegador. Dizer isso é melhor do que aparentar
-      // que salvou e sumir no próximo carregamento.
-      setErro(true)
-    }
+    guardarLocal(CHAVE, quadrado)
+    setFoto(quadrado)
+    setErro(false)
+    await enviar(nome.trim() || null, quadrado)
   }
 
   function remover() {
-    try {
-      localStorage.removeItem(CHAVE)
-    } catch {
-      // Nada a fazer: o estado abaixo já tira a foto da tela.
-    }
+    // Apaga dos dois lados: "remover" tem de remover, e uma foto que voltasse
+    // na próxima abertura seria pior do que não ter o botão.
+    guardarLocal(CHAVE, null)
     setFoto(null)
+    void enviar(nome.trim() || null, null)
   }
 
   const proporcao = total > 0 ? nivel / total : 0
@@ -172,6 +233,9 @@ export function ProfilePhoto({ nivel, total }: ProfilePhotoProps) {
           placeholder="Seu nome"
           aria-label="Seu nome"
           onChange={(evento) => setNome(evento.target.value)}
+          /* Ao sair do campo, e não a cada tecla: "Gabriel" viraria sete
+             requisições, e a última chegando fora de ordem gravaria "Gabrie". */
+          onBlur={() => { void enviar(nome.trim() || null, foto) }}
         />
         {/* "12 medalhas" ao lado de "Nível 2" lia-se como doze conquistadas —
             e o bloco de conquistas, na mesma tela, dizia "2 de 12". Duas contas

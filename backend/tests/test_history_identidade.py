@@ -480,3 +480,80 @@ def test_as_duas_telas_nunca_discordam_sobre_a_obra_existir(store: HistoryStore)
         if item.chave not in na_tela:
             # Só há um motivo possível, e ele é verificável.
             assert item.terminado is True
+
+
+# ── Continuar assistindo, serviço a serviço ───────────────────────────────
+#
+# A faixa principal tem teto, e um teto único faz os serviços disputarem entre
+# si. Medido em 17/08/2026: três vídeos do YouTube de 16/08 empurraram para
+# fora do corte tudo o que era de 14/08 -- Família Soprano, A Casa do Dragão,
+# Rick and Morty e Batman: Caped Crusader estavam no arquivo, inteiros, e não
+# cabiam na tela.
+
+
+def test_maratonar_um_servico_nao_enterra_os_outros(store: HistoryStore):
+    """O caso real, reproduzido com serviços de verdade e obras inventadas."""
+    store.registrar("Série do Max", "MAX", 4501, None, None, agora=1000)
+    store.registrar("Filme do Prime", "PRIME_VIDEO", 7850, None, None, agora=1100)
+    for numero in range(12):
+        store.registrar(f"Vídeo {numero:02}", "YOUTUBE", 600, None, None, agora=5000 + numero)
+
+    principal = {i.titulo for i in store.continuar(limite=10)}
+    por_servico = dict(store.continuar_por_servico())
+
+    # Na faixa principal os vídeos novos empurraram tudo para fora — e isso é a
+    # lista fazendo o que foi pedida para fazer.
+    assert "Série do Max" not in principal
+    # Nas faixas por serviço, cada obra volta ao lugar dela.
+    assert [i.titulo for i in por_servico["MAX"]] == ["Série do Max"]
+    assert [i.titulo for i in por_servico["PRIME_VIDEO"]] == ["Filme do Prime"]
+
+
+def test_cada_servico_tem_o_proprio_teto(store: HistoryStore):
+    for numero in range(14):
+        store.registrar(f"Obra {numero:02}", "MAX", 600, None, None, agora=1000 + numero)
+
+    assert len(dict(store.continuar_por_servico(limite_por_servico=10))["MAX"]) == 10
+
+
+def test_os_servicos_vem_pela_atividade_mais_recente(store: HistoryStore):
+    store.registrar("Antiga", "MAX", 600, None, None, agora=1000)
+    store.registrar("Do meio", "PRIME_VIDEO", 600, None, None, agora=2000)
+    store.registrar("De agora", "DISNEY_PLUS", 600, None, None, agora=3000)
+
+    ordem = [servico for servico, _ in store.continuar_por_servico()]
+
+    assert ordem == ["DISNEY_PLUS", "PRIME_VIDEO", "MAX"]
+
+
+def test_dentro_do_servico_a_ordem_tambem_e_por_atividade(store: HistoryStore):
+    store.registrar("Vista antes", "MAX", 600, None, None, agora=1000)
+    store.registrar("Vista agora", "MAX", 600, None, None, agora=9000)
+
+    assert [i.titulo for i in dict(store.continuar_por_servico())["MAX"]] == [
+        "Vista agora", "Vista antes",
+    ]
+
+
+def test_obra_terminada_nao_aparece_em_nenhuma_faixa(store: HistoryStore):
+    store.registrar("Filme Terminado", "MAX", 6000, 5900.0, 6000.0, agora=1)
+
+    assert store.continuar_por_servico() == []
+
+
+def test_obra_sem_servico_reconhecido_nao_vira_secao(store: HistoryStore):
+    """Não há em que seção pô-la, e inventar uma "outros" seria dar nome ao que
+    não tem."""
+    store.registrar("Sem Serviço", None, 600, None, None, agora=1)
+
+    assert store.continuar_por_servico() == []
+
+
+def test_uma_serie_aparece_na_faixa_do_servico_dela(store: HistoryStore):
+    """O fecho entre as duas correções: a série que voltou a não terminar
+    também precisa aparecer na seção certa."""
+    store.registrar(
+        "Loki", "DISNEY_PLUS", 30444, 2226.529369, 2241.166666, agora=1,
+    )
+
+    assert [i.titulo for i in dict(store.continuar_por_servico())["DISNEY_PLUS"]] == ["Loki"]
