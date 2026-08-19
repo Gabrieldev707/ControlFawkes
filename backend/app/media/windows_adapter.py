@@ -2,12 +2,12 @@ from collections.abc import Callable
 import ctypes
 import sys
 
+from app.input.teclas import flags_de, scan_code_de
 from app.media.actions import MediaAction
 from app.schemas.ws import Platform
 
 
 KeyEvent = Callable[[int, int, int, int], None]
-KEYEVENTF_KEYUP = 0x0002
 
 MEDIA_VIRTUAL_KEYS: dict[Platform, dict[MediaAction, int]] = {
     "YOUTUBE": {
@@ -55,9 +55,13 @@ class WindowsMediaAdapter:
         virtual_key = MEDIA_VIRTUAL_KEYS[platform].get(action)
         if virtual_key is None:
             return False
+        # Scan code e flag de tecla estendida: sem eles, seta-esquerda chega
+        # como o 4 do teclado numérico e o player web ignora. Ver
+        # `app/input/teclas.py` — foi o que quebrou avançar e voltar 10s.
+        scan = scan_code_de(virtual_key)
         try:
-            self._key_event(virtual_key, 0, 0, 0)
-            self._key_event(virtual_key, 0, KEYEVENTF_KEYUP, 0)
+            self._key_event(virtual_key, scan, flags_de(virtual_key), 0)
+            self._key_event(virtual_key, scan, flags_de(virtual_key, soltando=True), 0)
         except OSError:
             return False
         return True

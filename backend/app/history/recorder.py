@@ -172,6 +172,21 @@ class HistoryRecorder:
         ):
             self._gravar()
 
+    def obra_conhecida(self, platform: str | None) -> str | None:
+        """A obra que uma fonte confiável nomeou neste serviço, nesta execução.
+
+        Serve ao cartão de "tocando agora" pelo mesmo motivo que já servia ao
+        histórico: a janela do Max publica o EPISÓDIO, e quando a API de mídia
+        do Windows pendura não sobra ninguém que saiba dizer "Ben 10". O cartão
+        mostrava só "Fame" e quem lia entendia que estava tocando algo chamado
+        Fame.
+
+        Não é palpite: só sai daqui obra que a SMTC nomeou nesta mesma
+        execução, no mesmo serviço. Some quando o servidor reinicia, que é
+        quando deixa de haver continuidade para afirmar.
+        """
+        return self._obra_do_servico.get(platform) if platform else None
+
     def encerrar(self) -> None:
         """Fecha a conta do título atual, se ele merecer entrar."""
         if self._titulo is None:

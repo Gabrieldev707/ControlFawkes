@@ -40,12 +40,24 @@ def test_keyboard_adapter_maps_every_safe_key_to_a_fixed_virtual_key():
     key_event = Mock()
     adapter = WindowsKeyboardAdapter(unicode_writer=Mock(return_value=True), key_event=key_event)
 
+    from app.input.teclas import TECLAS_ESTENDIDAS, flags_de, scan_code_de
+
     for key, virtual_key in SAFE_KEY_VIRTUAL_KEYS.items():
         assert adapter.press_key(key) is True
+        scan = scan_code_de(virtual_key)
         assert key_event.call_args_list[-2:] == [
-            call(virtual_key, 0, 0, 0),
-            call(virtual_key, 0, 2, 0),
+            call(virtual_key, scan, flags_de(virtual_key), 0),
+            call(virtual_key, scan, flags_de(virtual_key, soltando=True), 0),
         ]
+
+    # E a razão de tudo isto: as setas têm de sair marcadas como ESTENDIDAS.
+    # Sem a marca o Windows as entrega como as teclas do bloco numérico, e um
+    # player web que escuta ArrowLeft não vê nada acontecer.
+    for seta in ("ARROW_LEFT", "ARROW_RIGHT", "ARROW_UP", "ARROW_DOWN"):
+        assert SAFE_KEY_VIRTUAL_KEYS[seta] in TECLAS_ESTENDIDAS
+        assert flags_de(SAFE_KEY_VIRTUAL_KEYS[seta]) & 0x1
+    # E o espaço não, senão a correção teria mudado o que já funcionava.
+    assert flags_de(SAFE_KEY_VIRTUAL_KEYS["SPACE"]) == 0
 
 
 def test_keyboard_adapter_reports_native_failures_without_false_success():
@@ -65,8 +77,8 @@ def test_release_all_only_emits_key_up_never_key_down():
 
     assert adapter.release_all() is True
 
-    flags = {call.args[2] for call in emitter.call_args_list}
-    assert flags == {KEYEVENTF_KEYUP}
+    # Só keyup, nunca keydown — e as setas levam junto a marca de estendida.
+    assert all(call.args[2] & KEYEVENTF_KEYUP for call in emitter.call_args_list)
     assert emitter.call_count == len(SAFE_KEY_VIRTUAL_KEYS) + len(RELEASE_ONLY_VIRTUAL_KEYS)
 
 
@@ -89,7 +101,10 @@ def test_a_failed_key_up_is_retried_so_the_key_does_not_stay_pressed():
 
     # keydown, keyup que falhou, keyup de recuperação.
     assert emitter.call_count == 3
-    assert emitter.call_args_list[-1].args[2] == KEYEVENTF_KEYUP
+    # O keyup de recuperação repete as MESMAS flags do keyup normal — inclusive
+    # a de tecla estendida, que a seta carrega. Soltar uma seta sem a flag
+    # deixaria pressionada a que foi pressionada com ela.
+    assert emitter.call_args_list[-1].args[2] & KEYEVENTF_KEYUP
 
 
 def test_press_key_never_touches_a_modifier():
@@ -131,8 +146,14 @@ def test_release_stuck_releases_a_key_whose_key_up_failed():
     emitter.reset_mock()
 
     assert adapter.release_stuck() is True
+    from app.input.teclas import flags_de, scan_code_de
+
+    seta = SAFE_KEY_VIRTUAL_KEYS["ARROW_DOWN"]
+    # Solta com as MESMAS flags com que foi apertada. Uma seta pressionada como
+    # tecla estendida e solta sem a marca continua pressionada para o Windows,
+    # e seta presa repete sozinha sem parar.
     assert emitter.call_args_list == [
-        call(SAFE_KEY_VIRTUAL_KEYS["ARROW_DOWN"], 0, KEYEVENTF_KEYUP, 0),
+        call(seta, scan_code_de(seta), flags_de(seta, soltando=True), 0),
     ]
 
 

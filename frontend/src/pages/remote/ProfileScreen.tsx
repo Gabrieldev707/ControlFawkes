@@ -31,6 +31,9 @@ interface Assistido {
   posicao: number | null
   duracao: number | null
   posterUrl: string | null
+  /** Onde a pessoa parou, quando é série. Sem isto o cartão não dizia de ONDE
+   *  continuar — só o nome da obra e mais nada. */
+  episodio: string | null
 }
 
 interface Contagem {
@@ -131,9 +134,11 @@ function FaixaDeObras({
             className="continuar-card"
             disabled={disabled}
             aria-label={
-              restante !== null
-                ? `Retomar ${item.titulo}, ${restante.legenda}`
-                : `Retomar ${item.titulo}`
+              [
+                `Retomar ${item.titulo}`,
+                item.episodio,
+                restante?.legenda,
+              ].filter(Boolean).join(', ')
             }
             onClick={() => onResume(item.platform, item.titulo)}
           >
@@ -157,6 +162,19 @@ function FaixaDeObras({
               ) : null}
             </span>
             <span className="continuar-card__titulo">{item.titulo}</span>
+            {/* Em QUE episódio a pessoa parou — a resposta para "continuar de
+                onde?", que o cartão não dava.
+
+                Linha própria, e não no lugar do tempo: o slot de tempo responde
+                "quanto falta" e só isso. Misturar ali "8,5 h vistas" com
+                "faltam 20 min" na mesma faixa põe duas perguntas diferentes no
+                mesmo lugar, e quem lê não sabe qual está lendo — foi um defeito
+                já corrigido uma vez, e o teste que o protege continua de pé. */}
+            {item.episodio !== null ? (
+              <span className="continuar-card__episodio" title={item.episodio}>
+                {item.episodio}
+              </span>
+            ) : null}
             {/* A barra e o texto aparecem juntos ou não aparecem: os dois saem
                 da mesma posição, e um sem o outro sugeriria que a informação
                 que falta é de outro tipo. */}
@@ -205,6 +223,9 @@ function comoPerfil(dados: unknown): Perfil | null {
           posicao: typeof dado.posicao === 'number' ? dado.posicao : null,
           duracao: typeof dado.duracao === 'number' ? dado.duracao : null,
           posterUrl: poster,
+          episodio: typeof dado.episodio === 'string' && dado.episodio
+            ? dado.episodio
+            : null,
         }]
       })
       : []

@@ -362,9 +362,21 @@ class Dispatcher:
             for antigo in list(self.thumbnails)[:-2]:
                 self.thumbnails.pop(antigo, None)
 
+        # A obra vem do histórico quando a leitura só soube o episódio.
+        #
+        # Medido com Ben 10 no Max: a janela publica "⁨Fame⁩ • HBO Max", e o Max
+        # nunca publica o nome da série. Se a SMTC já nomeou "Ben 10" nesta
+        # execução, o cartão tem como mostrar OS DOIS em vez de escolher — que
+        # é a mesma correção que o histórico já tinha recebido.
+        titulo, episodio, titulo_e_obra = atual.title, atual.episode, atual.trustworthy
+        if not atual.trustworthy:
+            lembrada = self.history_recorder.obra_conhecida(atual.platform)
+            if lembrada is not None:
+                titulo, episodio, titulo_e_obra = lembrada, atual.title, True
+
         return NowPlayingMessage(session=NowPlayingSession(
-            title=atual.title,
-            episode=atual.episode,
+            title=titulo,
+            episode=episodio,
             artist=atual.artist,
             app=atual.app,
             platform=atual.platform,
@@ -372,7 +384,7 @@ class Dispatcher:
             positionSeconds=atual.position_seconds,
             durationSeconds=atual.duration_seconds,
             positionStale=atual.position_stale,
-            titleIsWork=atual.trustworthy,
+            titleIsWork=titulo_e_obra,
             thumbnailId=atual.thumbnail_id,
             posterUrl=self._poster_para(atual),
         )).model_dump()

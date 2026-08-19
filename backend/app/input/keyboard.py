@@ -4,6 +4,8 @@ from ctypes import wintypes
 import sys
 from typing import Literal, TypeAlias
 
+from app.input.teclas import flags_de, scan_code_de
+
 
 SafeKey: TypeAlias = Literal[
     "ENTER",
@@ -166,12 +168,16 @@ class WindowsKeyboardAdapter:
         if self._key_event is None:
             return False
         virtual_key = SAFE_KEY_VIRTUAL_KEYS[key]
+        # Mesma correção do adapter de mídia: as setas são teclas ESTENDIDAS, e
+        # sem a flag o Windows as entrega como se viessem do teclado numérico.
+        # Ver `app/input/teclas.py`.
+        scan = scan_code_de(virtual_key)
         pressed = False
         try:
-            self._key_event(virtual_key, 0, 0, 0)
+            self._key_event(virtual_key, scan, flags_de(virtual_key), 0)
             pressed = True
             self._stuck.add(virtual_key)
-            self._key_event(virtual_key, 0, KEYEVENTF_KEYUP, 0)
+            self._key_event(virtual_key, scan, flags_de(virtual_key, soltando=True), 0)
             self._stuck.discard(virtual_key)
         except OSError:
             # Se o keydown passou e o keyup falhou, a tecla fica presa no
@@ -179,7 +185,7 @@ class WindowsKeyboardAdapter:
             # itens sem parar. O keyup precisa ser tentado de novo.
             if pressed:
                 try:
-                    self._key_event(virtual_key, 0, KEYEVENTF_KEYUP, 0)
+                    self._key_event(virtual_key, scan, flags_de(virtual_key, soltando=True), 0)
                     self._stuck.discard(virtual_key)
                 except OSError:
                     pass
@@ -205,7 +211,13 @@ class WindowsKeyboardAdapter:
         released = True
         for virtual_key in tuple(self._stuck):
             try:
-                self._key_event(virtual_key, 0, KEYEVENTF_KEYUP, 0)
+                # As MESMAS flags do keydown, mais o keyup: uma seta apertada
+                # como tecla estendida e solta sem a marca continua pressionada
+                # para o Windows — e seta presa repete sozinha para sempre.
+                self._key_event(
+                    virtual_key, scan_code_de(virtual_key),
+                    flags_de(virtual_key, soltando=True), 0,
+                )
                 self._stuck.discard(virtual_key)
             except OSError:
                 released = False
@@ -229,7 +241,13 @@ class WindowsKeyboardAdapter:
         )
         for virtual_key in virtual_keys:
             try:
-                self._key_event(virtual_key, 0, KEYEVENTF_KEYUP, 0)
+                # As MESMAS flags do keydown, mais o keyup: uma seta apertada
+                # como tecla estendida e solta sem a marca continua pressionada
+                # para o Windows — e seta presa repete sozinha para sempre.
+                self._key_event(
+                    virtual_key, scan_code_de(virtual_key),
+                    flags_de(virtual_key, soltando=True), 0,
+                )
                 self._stuck.discard(virtual_key)
             except OSError:
                 released = False

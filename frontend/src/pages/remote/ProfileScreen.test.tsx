@@ -157,3 +157,74 @@ describe('ProfileScreen — continuar assistindo', () => {
     expect(await screen.findByText('faltam 2 h 22 min')).toBeTruthy()
   })
 })
+
+describe('continuar assistindo diz DE ONDE continuar', () => {
+  /**
+   * O relato de 18/08/2026: "continuar assistindo, mas continuar assistindo de
+   * onde? não fala nada pro usuário".
+   *
+   * O cartão só tinha o que dizer quando havia posição — e numa série quase
+   * nunca há, porque a posição é do EPISÓDIO e não da obra. Então a lista
+   * mostrava o nome e mais nada.
+   */
+  it('mostra em que episódio a pessoa parou', async () => {
+    responder([{
+      titulo: 'Ben 10: Supremacia Alienígena', platform: 'MAX',
+      segundos: 7850, posicao: null, duracao: null, posterUrl: null,
+      episodio: 'Enganados',
+    }])
+
+    renderizar()
+
+    expect(await screen.findByText('Ben 10: Supremacia Alienígena')).toBeTruthy()
+    expect(screen.getByText('Enganados')).toBeTruthy()
+  })
+
+  it('o episódio entra no rótulo de quem usa leitor de tela', async () => {
+    responder([{
+      titulo: 'Ben 10', platform: 'MAX', segundos: 7850,
+      posicao: null, duracao: null, posterUrl: null, episodio: 'Enganados',
+    }])
+
+    renderizar()
+
+    expect(await screen.findByRole('button', { name: 'Retomar Ben 10, Enganados' }))
+      .toBeTruthy()
+  })
+
+  /**
+   * A trava que a primeira versão desta correção quebrou.
+   *
+   * O episódio vai numa LINHA PRÓPRIA, e não no lugar do tempo. O slot de
+   * tempo responde "quanto falta" e só isso — pôr ali "8,5 h vistas" num
+   * cartão e "faltam 20 min" no cartão do lado são duas perguntas diferentes
+   * no mesmo lugar da tela, e quem lê não sabe qual está lendo.
+   */
+  it('o episódio não ocupa o lugar do tempo', async () => {
+    responder([{
+      titulo: 'Um Filme', platform: 'MAX', segundos: 3000,
+      posicao: 3000, duracao: 6000, posterUrl: null, episodio: 'Um Episódio',
+    }])
+
+    const { container } = renderizar()
+
+    await screen.findByText('Um Filme')
+    // Os dois aparecem, cada um no seu lugar.
+    expect(container.querySelector('.continuar-card__episodio')?.textContent)
+      .toBe('Um Episódio')
+    expect(container.querySelector('.continuar-card__tempo')?.textContent)
+      .toContain('faltam')
+  })
+
+  it('sem episódio, o cartão não inventa uma linha vazia', async () => {
+    responder([{
+      titulo: 'Loki', platform: 'DISNEY_PLUS', segundos: 30444,
+      posicao: null, duracao: null, posterUrl: null, episodio: null,
+    }])
+
+    const { container } = renderizar()
+
+    await screen.findByText('Loki')
+    expect(container.querySelector('.continuar-card__episodio')).toBeNull()
+  })
+})

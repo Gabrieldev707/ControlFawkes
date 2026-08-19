@@ -3490,6 +3490,16 @@ textarea {
 /* O logo do serviço no título da seção. Mesma altura da linha de texto: o
    título já é caixa-alta pequena, e um logo maior que a letra vira o assunto
    da linha em vez de acompanhá-la. */
+.continuar-card__episodio {
+  display: block;
+  overflow: hidden;
+  color: var(--text-dim, rgba(255, 255, 255, 0.55));
+  font-size: 0.6rem;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .profile-screen__secao-logo {
   width: 13px;
   height: 13px;

@@ -607,9 +607,17 @@ def test_authenticated_media_control_uses_only_allowlisted_windows_keys(
                 "executed": True,
             },
         }
+        # A tecla é a da lista, pressionada e solta — e agora com o scan code
+        # e a flag de tecla ESTENDIDA que fazem o Windows entregá-la como o
+        # teclado de verdade entregaria. Sem a flag, seta-esquerda chega como o
+        # 4 do numérico e o player web ignora; foi o que quebrou avançar e
+        # voltar 10s. Ver `app/input/teclas.py`.
+        from app.input.teclas import flags_de, scan_code_de
+
+        scan = scan_code_de(virtual_key)
         assert windows_key_event_mock.call_args_list == [
-            call(virtual_key, 0, 0, 0),
-            call(virtual_key, 0, 2, 0),
+            call(virtual_key, scan, flags_de(virtual_key), 0),
+            call(virtual_key, scan, flags_de(virtual_key, soltando=True), 0),
         ]
 
 
