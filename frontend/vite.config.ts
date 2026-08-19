@@ -35,5 +35,26 @@ export default defineConfig({
     host: true, // Allow external connections (IP)
     port: 5173,
     https: certificadoLocal(),
+    /**
+     * Nomes mDNS liberados — e só eles.
+     *
+     * O Vite recusa requisições cujo `Host` ele não conhece, e faz isso por um
+     * motivo real: DNS rebinding. Um site qualquer pode apontar um domínio dele
+     * para 127.0.0.1 e, se o servidor de desenvolvimento responder a qualquer
+     * `Host`, passa a ler o que roda na sua máquina. Endereço IP o Vite já
+     * aceita sozinho; nome, não.
+     *
+     * Medido em 17/08/2026: o IP da máquina mudou de 192.168.0.168 para
+     * 192.168.18.175 ao trocar de Wi-Fi, e com ele foram embora o pareamento e
+     * qualquer coisa guardada por origem no navegador. O nome mDNS não muda
+     * junto — `DESKTOP-GBRLL5E.local` resolve para o IP de agora, e vai
+     * resolver para o próximo.
+     *
+     * O ponto na frente cobre o domínio e os subdomínios dele, então isto vale
+     * para qualquer máquina sem precisar escrever o nome desta aqui. E é bem
+     * mais estreito que `allowedHosts: true`, que desligaria a proteção
+     * inteira.
+     */
+    allowedHosts: ['.local'],
   },
 })
