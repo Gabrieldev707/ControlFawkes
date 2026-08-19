@@ -46,6 +46,7 @@ reprodução que acabou.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 
 from app.schemas.platform import Platform
 
@@ -140,3 +141,58 @@ def de_multiplas_reproducoes(
     if duracao is None or duracao <= 0:
         return False
     return segundos > duracao * FATOR_DE_MULTIPLAS_REPRODUCOES
+
+
+# ── Temporada e episódio, quando o serviço os publica ─────────────────────
+
+# As grafias que os serviços usam de verdade. A lista é curta de propósito:
+# inventar padrões "que poderiam existir" só cria formas novas de casar errado.
+_PADROES_DE_EPISODIO = (
+    # "S1:E4", "S01E04", "S1 E4"
+    re.compile(r"\bS(?P<t>\d{1,2})\s*[:xE\s-]\s*E?(?P<e>\d{1,3})\b", re.IGNORECASE),
+    # "T1:E4", "T01 EP04" — a grafia em português
+    re.compile(r"\bT(?P<t>\d{1,2})\s*[:x\s-]\s*EP?\s*(?P<e>\d{1,3})\b", re.IGNORECASE),
+    # "Temporada 1, Episódio 4"
+    re.compile(
+        r"\btemporada\s*(?P<t>\d{1,2}).{0,4}epis[oó]dio\s*(?P<e>\d{1,3})\b",
+        re.IGNORECASE,
+    ),
+    # "1x04", a forma antiga que ainda aparece
+    re.compile(r"\b(?P<t>\d{1,2})x(?P<e>\d{2,3})\b"),
+)
+
+
+def temporada_e_episodio(texto: str | None) -> tuple[int, int] | None:
+    """Os números da temporada e do episódio, quando o texto os traz.
+
+    `None` quando não traz — e esse é o caso COMUM, não a exceção. Medido em
+    19/08/2026 com Ben 10 no Max: a janela publica
+    "⁨Enganados Enganados⁩ • HBO Max", só o nome do episódio. O Max não põe
+    número nenhum ali, e a API de mídia do Windows estava pendurada.
+
+    Quem sabe os números é a PÁGINA, e chegar até ela é o trabalho do Browser
+    Media Bridge. Enquanto ele não estiver ligado, esta função devolve `None`
+    na maior parte das vezes — e devolver `None` é o certo. Um "T1 E1"
+    inventado seria pior do que número nenhum: a pessoa acreditaria nele.
+    """
+    if not texto:
+        return None
+    for padrao in _PADROES_DE_EPISODIO:
+        achado = padrao.search(texto)
+        if achado is None:
+            continue
+        temporada, episodio = int(achado.group("t")), int(achado.group("e"))
+        # Zero não existe em nenhuma das duas contagens; números altos demais
+        # são ano ou parte do nome.
+        if 1 <= temporada <= 50 and 1 <= episodio <= 999:
+            return temporada, episodio
+    return None
+
+
+def como_temporada_e_episodio(texto: str | None) -> str | None:
+    """"T1 E4", para a tela. `None` quando não dá para afirmar."""
+    numeros = temporada_e_episodio(texto)
+    if numeros is None:
+        return None
+    temporada, episodio = numeros
+    return f"T{temporada} E{episodio}"

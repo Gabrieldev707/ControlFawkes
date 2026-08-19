@@ -279,12 +279,22 @@ async def test_a_number_at_the_end_picks_the_nth_film_of_the_franchise():
 async def test_the_normal_search_always_wins_first():
     """Medido: "Blade Runner 2049" e "velozes e furiosos 7" já são achados pela
     busca normal, porque o número faz parte do nome. Tentar a coleção antes
-    estragaria os dois."""
+    estragaria os dois.
+
+    A fixture devolvia "Harry Potter" para esta consulta, e o caminho antigo
+    aceitava — era a mesma frouxidão que fazia "O Rei" virar o homônimo de
+    2014. Agora o resultado precisa responder ao que foi buscado, então a
+    fixture passou a devolver o filme que a busca de verdade devolveria.
+    """
     caminhos: list[str] = []
+    blade_runner = {"results": [{
+        "media_type": "movie", "id": 335984, "title": "Blade Runner 2049",
+        "release_date": "2017-10-04", "popularity": 60.0,
+    }]}
     tmdb = TmdbCatalog(
         api_key="chave",
         client=fake_client(
-            {"/search/multi": HARRY_POTTER, "/watch/providers": PROVIDERS_BR},
+            {"/search/multi": blade_runner, "/watch/providers": PROVIDERS_BR},
             caminhos,
         ),
     )
@@ -720,3 +730,85 @@ def test_matching_uses_the_best_of_the_names():
     assert tmdb._casa_com(item, "magnatas do crime") == 3
     # Sem virar indiscriminado: outro título não passa a casar.
     assert tmdb._casa_com(item, "interestelar") == 0
+
+
+# ── A busca usa o mesmo motor da identificação ────────────────────────────
+#
+# A busca ficou de fora quando o resolver entrou, e continuou com o defeito que
+# ele existe para corrigir. Medido contra a API real em 19/08/2026, ANTES:
+#
+#   "O Rei"           devolvia o homônimo de 2014
+#   "The king"        devolvia "The King" (2017) e "O Rei do Bairro" (1998)
+#   "Capitão América" devolvia o filme de 1991
+#   "Flash"           devolvia "Flash" (2018)
+#
+# Nenhum é falta de ranking: o candidato certo não estava na lista, porque
+# `/search/multi` numa página só não o traz.
+
+
+O_REI_DUPLO = {"results": [
+    {"media_type": "movie", "id": 999001, "title": "O Rei",
+     "release_date": "2014-01-01", "popularity": 2.01},
+    {"media_type": "movie", "id": 504949, "title": "O Rei",
+     "original_title": "The King", "release_date": "2019-10-11",
+     "popularity": 6.63},
+    {"media_type": "movie", "id": 8587, "title": "O Rei Leão",
+     "release_date": "1994-06-24", "popularity": 32.61},
+]}
+
+
+@pytest.mark.asyncio
+async def test_a_busca_nao_devolve_mais_o_homonimo_menos_relevante():
+    """O caso que o usuário relatou. "O Rei Leão" é cinco vezes mais popular e
+    continua perdendo, porque casamento exato de título é um NÍVEL acima."""
+    opcoes = await catalog({
+        "/search/multi": O_REI_DUPLO, "/watch/providers": PROVIDERS_BR,
+    }).lookup_options("O Rei")
+
+    assert opcoes[0].title == "O Rei"
+    assert opcoes[0].year == 2019
+
+
+@pytest.mark.asyncio
+async def test_o_titulo_original_encontra_a_obra_pelo_nome_traduzido():
+    """"The king" digitado, "O Rei" no catálogo. O TMDB devolve os dois nomes e
+    o casamento acontece sem tradução manual em lugar nenhum."""
+    opcoes = await catalog({
+        "/search/multi": O_REI_DUPLO, "/watch/providers": PROVIDERS_BR,
+    }).lookup_options("The king")
+
+    assert (opcoes[0].title, opcoes[0].year) == ("O Rei", 2019)
+
+
+@pytest.mark.asyncio
+async def test_a_segunda_vaga_e_do_mais_famoso_e_nao_do_segundo_melhor():
+    """As duas vagas respondem perguntas diferentes de propósito.
+
+    Medido: "Capitão América" casa EXATO com o filme de 1990, que por nível
+    ganha do "Capitão América" da Marvel — e o de 1990 é uma resposta legítima,
+    é literalmente o nome. Mas quase ninguém quer ele.
+
+    Deixar a fama mandar na primeira vaga estragaria o caso oposto: "O Rei"
+    devolveria "O Rei Leão". Então a fama não decide quem vence — decide o que
+    aparece ao lado.
+    """
+    opcoes = await catalog({
+        "/search/multi": O_REI_DUPLO, "/watch/providers": PROVIDERS_BR,
+    }).lookup_options("O Rei")
+
+    # Duas opções, e "O Rei Leão" não é nenhuma delas — apesar de ser cinco
+    # vezes mais popular. "rei" tem três letras e não conta como começo que
+    # identifique: é a mesma trava que impede "Prime Video" de ligar um filme a
+    # um evento de boxe.
+    assert [(o.title, o.year) for o in opcoes] == [("O Rei", 2019), ("O Rei", 2014)]
+
+
+@pytest.mark.asyncio
+async def test_uma_busca_sem_resposta_nao_devolve_um_titulo_qualquer():
+    """A frouxidão que sustentava o bug: qualquer resultado servia para
+    qualquer consulta."""
+    opcoes = await catalog({
+        "/search/multi": O_REI_DUPLO, "/watch/providers": PROVIDERS_BR,
+    }).lookup_options("Um Filme Que Não Existe Mesmo")
+
+    assert opcoes == []

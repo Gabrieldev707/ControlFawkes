@@ -386,10 +386,10 @@ class Dispatcher:
             positionStale=atual.position_stale,
             titleIsWork=titulo_e_obra,
             thumbnailId=atual.thumbnail_id,
-            posterUrl=self._poster_para(atual),
+            posterUrl=self._poster_para(atual, titulo, titulo_e_obra),
         )).model_dump()
 
-    def _poster_para(self, atual) -> str | None:
+    def _poster_para(self, atual, titulo_da_obra: str, e_a_obra: bool) -> str | None:
         """Pôster do catálogo, quando o aplicativo não publica capa.
 
         O Spotify manda a capa do álbum pela própria API do Windows; o
@@ -406,7 +406,13 @@ class Dispatcher:
         if self.catalog is None or not self.catalog.enabled:
             return None
 
-        titulo = atual.title.strip()
+        # O título da OBRA, e não o que a janela leu.
+        #
+        # Medido com Ben 10 no Max: a janela publica "Enganados Enganados", o
+        # nome do episódio, e o catálogo não tem capa para episódio nenhum —
+        # então o cartão ficava sem foto. A obra o sistema já conhece, porque a
+        # SMTC a nomeou nesta execução, e é dela que a capa vem.
+        titulo = titulo_da_obra.strip()
         if not titulo:
             return None
         # "Netflix" não é uma obra. É a página de catálogo — ou, o que dá no
@@ -422,7 +428,10 @@ class Dispatcher:
         # de Rick and Morty, recebeu o pôster do filme de 1989. Sem capa é
         # honesto — e o logo do serviço, que o cartão já usa nesse caso, diz o
         # que dá para dizer.
-        if not atual.trustworthy:
+        # Sem obra identificada não se pergunta nada. Pedir a capa do episódio
+        # devolve a capa de outra obra com muita confiança: "Campo dos Sonhos",
+        # episódio de Rick and Morty, recebeu o pôster do filme de 1989.
+        if not e_a_obra:
             return None
         # O YouTube não é catálogo de filme, e o Spotify toca música: procurar
         # esses títulos no TMDB devolve a capa de outra coisa. Medido no cartão

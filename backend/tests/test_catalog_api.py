@@ -22,7 +22,22 @@ def cliente(tmp_path, monkeypatch):
             client=fake_client({
                 "/authentication": {"success": True, "status_code": 1},
                 **(routes if routes is not None else {
-                    "/search/multi": HARRY_POTTER,
+                    # A busca de teste da chave é por "Interestelar" (ver
+                    # `TmdbCatalog.verify`), e a fixture só servia Harry
+                    # Potter. O caminho antigo aceitava qualquer resultado para
+                    # qualquer consulta — a mesma frouxidão que fazia "O Rei"
+                    # virar o homônimo de 2014. Agora o resultado precisa
+                    # responder ao que foi buscado, então os dois estão aqui.
+                    "/search/multi": {
+                        "results": [
+                            *HARRY_POTTER["results"],
+                            {
+                                "media_type": "movie", "id": 157336,
+                                "title": "Interestelar",
+                                "release_date": "2014-11-05", "popularity": 90.0,
+                            },
+                        ],
+                    },
                     "/watch/providers": PROVIDERS_BR,
                 }),
             }),

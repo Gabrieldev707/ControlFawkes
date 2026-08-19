@@ -27,6 +27,7 @@ from app.catalog.resolver import (
     Escolhido,
     Nivel,
     Observado,
+    Avaliacao,
     classificar,
     normalizar,
     resolver,
@@ -416,6 +417,81 @@ class TmdbCatalog:
 
         return list(achados.values())
 
+    # Quantas opções a tela oferece. Duas, e não uma: "The Gentlemen" é um
+    # filme de 2020 E uma série de 2024, e escolher por conta própria acerta
+    # metade das vezes. Quem sabe qual quer é quem digitou.
+    OPCOES_MAXIMAS = 2
+
+    def _melhores_candidatos(
+        self, candidatos: list[Candidato], observado: Observado,
+    ) -> list[Candidato]:
+        """As melhores opções para oferecer — no máximo uma de cada tipo.
+
+        Diferente de `resolver`, e a diferença é o propósito. `resolver`
+        responde "qual é esta obra?" e tem o direito de recusar quando não dá
+        para saber; aqui a pergunta é "o que mostrar para a pessoa escolher?", e
+        recusar seria devolver uma tela vazia para uma busca que tem resposta.
+
+        Então a ambiguidade, que lá é motivo de recusa, aqui é o resultado: as
+        duas obras vão para a tela e quem decide é quem digitou.
+        """
+        avaliados = [
+            a for a in (classificar(c, observado) for c in candidatos)
+            if a.nivel != Nivel.NENHUM
+        ]
+        if not avaliados:
+            return []
+
+        # Nível primeiro, fama depois — a mesma ordem do resolver. Sem isso "O
+        # Rei Leão", cinco vezes mais popular, ganharia de "O Rei".
+        avaliados.sort(key=lambda a: (a.nivel, -a.candidato.popularidade))
+
+        # A primeira vaga é do melhor casamento. A segunda é do mais FAMOSO
+        # entre o resto — e as duas perguntas são diferentes de propósito.
+        #
+        # Medido em 19/08/2026: "Capitão América" casa exato com o filme de
+        # 1990, que por nível ganha do "Capitão América: O Primeiro Vingador"
+        # da Marvel. E o de 1990 é uma resposta legítima: é literalmente o
+        # nome. Mas quase ninguém quer ele.
+        #
+        # Deixar a fama mandar na primeira vaga estragaria o caso oposto: "O
+        # Rei" devolveria "O Rei Leão", cinco vezes mais popular. Então a fama
+        # não desempata quem vence — ela decide o que mais aparece ao lado.
+        primeiro = avaliados[0].candidato
+        escolhidos = [primeiro]
+
+        # Qualquer um que ainda RESPONDA à consulta — `avaliados` já descartou
+        # os que não respondem. Sem corte de nível: medido, "Marvel - O
+        # Justiceiro" casa só pela palavra que os dois dividem, e é exatamente
+        # a segunda opção que a pessoa quer ver ao lado do filme de 2004.
+        restantes = [
+            a.candidato for a in avaliados
+            if a.candidato.tmdb_id != primeiro.tmdb_id
+        ]
+        if restantes:
+            escolhidos.append(max(restantes, key=lambda c: c.popularidade))
+        return escolhidos[:self.OPCOES_MAXIMAS]
+
+    def _como_item(self, candidato: Candidato) -> dict:
+        """De volta ao formato de item da API, que é o que o resto espera."""
+        return {
+            "media_type": "tv" if candidato.tipo == "TV" else "movie",
+            "id": candidato.tmdb_id,
+            "title": candidato.titulo,
+            "name": candidato.titulo,
+            "poster_path": candidato.poster_path,
+            "genre_ids": list(candidato.genre_ids),
+            "popularity": candidato.popularidade,
+            **(
+                {"release_date": f"{candidato.ano}-01-01"}
+                if candidato.ano and candidato.tipo == "MOVIE" else {}
+            ),
+            **(
+                {"first_air_date": f"{candidato.ano}-01-01"}
+                if candidato.ano and candidato.tipo == "TV" else {}
+            ),
+        }
+
     def _como_candidato(self, item: dict, tipo: str) -> Candidato:
         return Candidato(
             tmdb_id=item["id"],
@@ -527,9 +603,24 @@ class TmdbCatalog:
         client: httpx.AsyncClient,
         query: str,
     ) -> list[TitleAvailability]:
-        resultados = await self._procurar(client, query)
-        melhor, alternativa = self._melhor_de_cada_tipo(resultados, query)
-        escolhidos = [item for item in (melhor, alternativa) if item is not None]
+        # O MESMO motor que resolve o pôster do histórico: geração ampla e
+        # ranking por nível. A busca ficou de fora quando o resolver entrou, e
+        # continuou com o defeito que ele existe para corrigir — medido em
+        # 19/08/2026 contra a API real:
+        #
+        #   "O Rei"           devolvia o homônimo de 2014
+        #   "The king"        devolvia "The King" de 2017 e "O Rei do Bairro"
+        #   "Capitão América" devolvia o filme de 1991
+        #   "Flash"           devolvia "Flash" de 2018
+        #
+        # Nenhum desses é falta de ranking: o candidato certo não estava na
+        # lista, porque `/search/multi` numa página só não o traz. Ver
+        # `catalog/resolver.py`.
+        observado = Observado(titulo=query.strip())
+        candidatos = await self.gerar_candidatos(client, observado)
+        escolhidos = [
+            self._como_item(c) for c in self._melhores_candidatos(candidatos, observado)
+        ]
         if not escolhidos:
             # Só agora, e nunca antes: medido contra a API, "Blade Runner 2049"
             # e "velozes e furiosos 7" já são achados pela busca normal, porque

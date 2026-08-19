@@ -23,7 +23,11 @@ import unicodedata
 from pathlib import Path
 
 from app.catalog.tmdb import PLATAFORMAS_COM_CATALOGO
-from app.media.identidade import chave_da_reproducao, de_multiplas_reproducoes
+from app.media.identidade import (
+    chave_da_reproducao,
+    como_temporada_e_episodio,
+    de_multiplas_reproducoes,
+)
 from app.media.now_playing import _titulo_generico
 from app.schemas.platform import Platform
 
@@ -159,6 +163,14 @@ class Assistido:
         if self.multiplas_reproducoes:
             dados["posicao"] = None
             dados["duracao"] = None
+        # "T1 E4" quando o serviço publicou os números, e o nome do episódio
+        # quando não publicou. Pedido em 19/08/2026 — e a honestidade do caso
+        # comum vale dizer: o Max não põe número nenhum na janela, então o que
+        # aparece é o nome. Quem sabe os números é a página, e chegar até ela é
+        # o Browser Media Bridge. Ver `media/identidade.py`.
+        numeros = como_temporada_e_episodio(self.episodio)
+        if numeros is not None:
+            dados["episodio"] = numeros
         return dados
 
 

@@ -613,3 +613,58 @@ def test_o_spotify_continua_de_fora(store: HistoryStore):
     rec.encerrar()
 
     assert store.listar() == []
+
+
+# ── Temporada e episódio ──────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("texto", "esperado"),
+    [
+        ("S1:E4 Enganados", "T1 E4"),
+        ("S01E04", "T1 E4"),
+        ("T01 EP02", "T1 E2"),
+        ("Temporada 2, Episódio 13", "T2 E13"),
+        ("1x04 Piloto", "T1 E4"),
+    ],
+)
+def test_os_numeros_saem_das_grafias_que_os_servicos_usam(texto, esperado):
+    from app.media.identidade import como_temporada_e_episodio
+
+    assert como_temporada_e_episodio(texto) == esperado
+
+
+@pytest.mark.parametrize(
+    "texto",
+    [
+        "Enganados Enganados",   # o que o Max publica de verdade
+        "Loki",
+        "Blade Runner 2049",     # ano, não episódio
+        "Duna 2049",
+        "T0 E0",                 # não existe temporada zero
+        None,
+        "",
+    ],
+)
+def test_sem_numero_nao_se_inventa_numero(texto):
+    """O caso COMUM, e o mais importante deste bloco.
+
+    Medido em 19/08/2026: a janela do Max publica "⁨Enganados Enganados⁩ • HBO
+    Max" e nada mais. Um "T1 E1" inventado seria pior do que número nenhum — a
+    pessoa acreditaria nele.
+    """
+    from app.media.identidade import como_temporada_e_episodio
+
+    assert como_temporada_e_episodio(texto) is None
+
+
+def test_a_tela_mostra_os_numeros_quando_eles_existem(store: HistoryStore):
+    store.registrar("Uma Série", "MAX", 600, None, None, episodio="S2:E5", agora=1)
+
+    assert store.listar()[0].como_obra()["episodio"] == "T2 E5"
+
+
+def test_e_o_nome_do_episodio_quando_nao_existem(store: HistoryStore):
+    store.registrar("Uma Série", "MAX", 600, None, None, episodio="Enganados", agora=1)
+
+    assert store.listar()[0].como_obra()["episodio"] == "Enganados"
