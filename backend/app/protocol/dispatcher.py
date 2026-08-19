@@ -372,6 +372,7 @@ class Dispatcher:
             positionSeconds=atual.position_seconds,
             durationSeconds=atual.duration_seconds,
             positionStale=atual.position_stale,
+            titleIsWork=atual.trustworthy,
             thumbnailId=atual.thumbnail_id,
             posterUrl=self._poster_para(atual),
         )).model_dump()

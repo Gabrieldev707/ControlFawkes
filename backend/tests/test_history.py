@@ -112,24 +112,28 @@ def test_music_is_controlled_but_never_counted_as_watched(store: HistoryStore):
 
 
 def test_a_youtube_video_never_keeps_a_movie_poster(store: HistoryStore):
-    """Todo pôster daqui veio do TMDB, que é catálogo de filme e série. Para o
-    nome de um vídeo do YouTube ele devolve a capa de outra coisa — medido, o
-    vlog "CHEGUEI NA SÍRIA..." apareceu em "continuar assistindo" com pôster de
-    filme. Descartar na leitura tira da tela o que já ficou gravado."""
-    store.registrar(
-        "CHEGUEI NA SÍRIA", "YOUTUBE", 240, None, None,
-        poster_url="https://image.tmdb.org/t/p/w342/filme-errado.jpg", agora=2,
-    )
-    store.registrar(
-        "Batman: Caped Crusader", "PRIME_VIDEO", 3530, 480, 1680,
-        poster_url="https://image.tmdb.org/t/p/w342/batman.jpg", agora=1,
-    )
+    """A regra ficou MAIS forte do que era, e por isso este teste mudou.
 
-    capas = {item.titulo: item.poster_url for item in store.listar()}
+    Ela nasceu assim: o TMDB é catálogo de filme e série, então perguntar a ele
+    pelo nome de um vídeo devolve a capa de outra coisa — medido, o vlog
+    "CHEGUEI NA SÍRIA" apareceu em "continuar assistindo" com pôster de filme.
+    A resposta era descartar a capa.
 
-    assert capas["CHEGUEI NA SÍRIA"] is None
-    # E quem tem catálogo de verdade não perde a capa certa.
-    assert capas["Batman: Caped Crusader"].endswith("/batman.jpg")
+    Em 18/08/2026 o YouTube saiu do histórico inteiro, a pedido. A capa errada
+    deixa de ser possível porque a linha deixa de existir — e é isso que se
+    verifica agora, porque testar a capa de algo que não aparece testaria nada.
+    """
+    store.registrar(
+        "CHEGUEI NA SÍRIA", "YOUTUBE", 600, None, None,
+        poster_url="https://image.tmdb.org/t/p/w342/errado.jpg", agora=1,
+    )
+    store.registrar("Duna", "MAX", 600, None, None,
+                    poster_url="https://image.tmdb.org/t/p/w342/duna.jpg", agora=2)
+
+    titulos = {item.titulo for item in store.listar()}
+    assert "CHEGUEI NA SÍRIA" not in titulos
+    # E o que É catálogo de filme continua com a capa dele.
+    assert titulos == {"Duna"}
 
 
 def test_a_wrong_poster_is_removed_from_the_file_and_not_just_hidden(
@@ -302,8 +306,12 @@ def test_what_reached_the_end_stops_being_something_to_continue(store: HistorySt
 
 
 def test_live_content_never_counts_as_finished(store: HistoryStore):
-    """Sem duração não há fim: transmissão ao vivo fica em "continuar"."""
-    store.registrar("Jogo ao vivo", "YOUTUBE", 3000, 3000, None, agora=1)
+    """Sem duração não há fim: transmissão ao vivo fica em "continuar".
+
+    Num serviço que conta como histórico — o YouTube saiu dele em 18/08/2026, e
+    usá-lo aqui testaria a exclusão em vez da regra da duração.
+    """
+    store.registrar("Jogo ao vivo", "MAX", 3000, 3000, None, agora=1)
 
     assert store.listar()[0].terminado is False
 

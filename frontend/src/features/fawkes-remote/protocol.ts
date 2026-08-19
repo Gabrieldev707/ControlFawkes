@@ -176,11 +176,15 @@ function isNowPlayingSession(value: unknown): boolean {
       // lista, então um campo novo no backend que não passe por aqui derruba a
       // mensagem INTEIRA — e o cartão fica em "nada tocando" para sempre, sem
       // erro nenhum na tela nem no log. Foi o que aconteceu com `episode`.
-      ['posterUrl', 'episode', 'positionStale'],
+      ['posterUrl', 'episode', 'positionStale', 'titleIsWork'],
     )
     && (
       value.positionStale === undefined
       || typeof value.positionStale === 'boolean'
+    )
+    && (
+      value.titleIsWork === undefined
+      || typeof value.titleIsWork === 'boolean'
     )
     // O pôster vira o `src` de uma imagem: aceitar qualquer texto deixaria um
     // `javascript:` entrar na página.

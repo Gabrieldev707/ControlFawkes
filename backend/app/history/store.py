@@ -38,6 +38,15 @@ SEGUNDOS_PARA_CONTAR = 90.0
 # "do que eu gosto"; nenhuma das duas melhora com dois anos de registro.
 MAXIMO_DE_ITENS = 120
 
+# Serviços que o controle opera mas não registra como assistidos.
+#
+# Mora aqui e não no gravador porque a LEITURA também precisa dela: barrar na
+# gravação não basta, já que o que entrou antes da regra continua no arquivo, e
+# uma correção que só valesse para o futuro deixaria a tela errada até alguém
+# apagar o histórico. Ver `listar` e `podar_fora_do_historico`, e o gravador
+# para o porquê de cada serviço.
+PLATAFORMAS_FORA_DO_HISTORICO: frozenset[str] = frozenset({"SPOTIFY", "YOUTUBE"})
+
 
 def _chave(titulo: str, platform: Platform | None) -> str:
     """Mesma obra no mesmo serviço é a mesma linha, escrita como for."""
@@ -398,6 +407,10 @@ class HistoryStore:
         for item in itens:
             if item is None or _titulo_generico(item.titulo, None, item.platform):
                 continue
+            # O que não é para virar histórico não vira, nem se já estiver
+            # gravado. Descartar na leitura tira da tela também o passado.
+            if item.platform in PLATAFORMAS_FORA_DO_HISTORICO:
+                continue
             if (
                 item.poster_url
                 and item.platform is not None
@@ -550,6 +563,29 @@ class HistoryStore:
         if podadas == 0:
             return 0
         return podadas if self._gravar(dados) else 0
+
+    def podar_fora_do_historico(self) -> int:
+        """Apaga do arquivo os serviços que não são para virar histórico.
+
+        `listar` já os descarta na leitura, e isso basta para a tela. Mas eles
+        continuam ocupando o teto de `MAXIMO_DE_ITENS` e aparecendo para quem
+        abrir o arquivo — e quando o pedido foi "pode tirar do histórico", meia
+        remoção não é o que foi pedido.
+
+        Devolve quantas linhas saíram.
+        """
+        dados = self._ler()
+        sobreviventes = {
+            chave: bruto for chave, bruto in dados.items()
+            if not (
+                isinstance(bruto, dict)
+                and bruto.get("platform") in PLATAFORMAS_FORA_DO_HISTORICO
+            )
+        }
+        removidas = len(dados) - len(sobreviventes)
+        if removidas <= 0:
+            return 0
+        return removidas if self._gravar(sobreviventes) else 0
 
     def limpar(self) -> bool:
         try:

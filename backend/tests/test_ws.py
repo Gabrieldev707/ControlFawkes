@@ -2870,6 +2870,7 @@ def test_the_now_playing_fields_are_a_contract_with_the_phone():
         "positionSeconds",
         "durationSeconds",
         "positionStale",
+        "titleIsWork",
         "thumbnailId",
         "posterUrl",
     }

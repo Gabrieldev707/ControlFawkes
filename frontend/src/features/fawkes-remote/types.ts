@@ -418,6 +418,8 @@ export interface NowPlayingSession {
   title: string
   /** O episódio, quando `title` é o nome da série. */
   episode?: string | null
+  /** `false` quando o nome lido é o do episódio e a obra não foi identificada. */
+  titleIsWork?: boolean
   artist: string | null
   app: string | null
   platform: Platform | null

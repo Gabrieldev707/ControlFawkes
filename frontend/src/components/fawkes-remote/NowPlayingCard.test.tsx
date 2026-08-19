@@ -314,3 +314,60 @@ describe('o tempo decorrido não passa do fim', () => {
     }
   })
 })
+
+describe('quando o nome lido não é o da obra', () => {
+  beforeEach(() => {
+    vi.stubGlobal('fetch', vi.fn(() => Promise.resolve({ ok: false })))
+  })
+
+  /**
+   * Medido em 18/08/2026 com Ben 10 tocando: a janela do Max publica
+   * "⁨Fame⁩ • HBO Max", e "Fame" é o EPISÓDIO — o Max nunca publica o nome da
+   * série. Com a API de mídia do Windows pendurada não sobra ninguém que saiba
+   * dizer "Ben 10", e o cartão mostrava "Fame" no lugar da obra.
+   */
+  it('diz que é episódio em vez de fingir que é a obra', () => {
+    render(
+      <NowPlayingCard
+        session={{ ...sessao, title: 'Fame', platform: 'MAX', titleIsWork: false }}
+        apiBaseUrl="http://192.168.0.1:8100"
+        credentials={null}
+      />,
+    )
+
+    // O nome continua na tela: é a única pista do que está tocando.
+    expect(screen.getByText('Fame')).toBeTruthy()
+    // O que muda é a frase que o cartão monta em volta dele.
+    expect(screen.getByText('Episódio · série não identificada')).toBeTruthy()
+  })
+
+  it('com a obra identificada, o episódio aparece normalmente', () => {
+    render(
+      <NowPlayingCard
+        session={{
+          ...sessao, title: 'Ben 10', episode: 'Fame',
+          platform: 'MAX', titleIsWork: true,
+        }}
+        apiBaseUrl="http://192.168.0.1:8100"
+        credentials={null}
+      />,
+    )
+
+    expect(screen.getByText('Ben 10')).toBeTruthy()
+    expect(screen.getByText('Fame')).toBeTruthy()
+    expect(screen.queryByText('Episódio · série não identificada')).toBeNull()
+  })
+
+  it('sem o campo, nada muda para quem já funcionava', () => {
+    render(
+      <NowPlayingCard
+        session={{ ...sessao, title: 'Duna', episode: null }}
+        apiBaseUrl="http://192.168.0.1:8100"
+        credentials={null}
+      />,
+    )
+
+    expect(screen.getByText('Duna')).toBeTruthy()
+    expect(screen.queryByText('Episódio · série não identificada')).toBeNull()
+  })
+})

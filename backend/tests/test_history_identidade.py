@@ -496,13 +496,14 @@ def test_maratonar_um_servico_nao_enterra_os_outros(store: HistoryStore):
     store.registrar("Série do Max", "MAX", 4501, None, None, agora=1000)
     store.registrar("Filme do Prime", "PRIME_VIDEO", 7850, None, None, agora=1100)
     for numero in range(12):
-        store.registrar(f"Vídeo {numero:02}", "YOUTUBE", 600, None, None, agora=5000 + numero)
+        store.registrar(f"Obra nova {numero:02}", "DISNEY_PLUS", 600, None, None,
+                        agora=5000 + numero)
 
     principal = {i.titulo for i in store.continuar(limite=10)}
     por_servico = dict(store.continuar_por_servico())
 
-    # Na faixa principal os vídeos novos empurraram tudo para fora — e isso é a
-    # lista fazendo o que foi pedida para fazer.
+    # Na faixa principal as obras novas empurraram o resto para fora — e isso é
+    # a lista fazendo o que foi pedida para fazer.
     assert "Série do Max" not in principal
     # Nas faixas por serviço, cada obra volta ao lugar dela.
     assert [i.titulo for i in por_servico["MAX"]] == ["Série do Max"]
@@ -557,3 +558,58 @@ def test_uma_serie_aparece_na_faixa_do_servico_dela(store: HistoryStore):
     )
 
     assert [i.titulo for i in dict(store.continuar_por_servico())["DISNEY_PLUS"]] == ["Loki"]
+
+
+# ── Serviços que não viram histórico ──────────────────────────────────────
+
+
+def test_youtube_nao_entra_no_historico(store: HistoryStore):
+    """Pedido em 18/08/2026, e pelas razões que já estavam medidas: não se
+    retoma um vlog, o TMDB não tem catálogo para ele, e cinco vídeos recentes
+    empurravam para fora da tela tudo o que era de streaming."""
+    rec = HistoryRecorder(store)
+    assistir(rec, tocando("Um vídeo qualquer", platform="YOUTUBE"), 400)
+    rec.encerrar()
+
+    assert store.listar() == []
+
+
+def test_o_que_ja_estava_gravado_tambem_some_da_tela(store: HistoryStore):
+    """Barrar na gravação não basta: o que entrou antes da regra continua no
+    arquivo, e uma correção só para o futuro deixaria a tela errada até alguém
+    apagar o histórico."""
+    store.registrar("Vídeo antigo", "YOUTUBE", 600, None, None, agora=1)
+    store.registrar("Filme", "MAX", 600, None, None, agora=2)
+
+    assert [i.titulo for i in store.listar()] == ["Filme"]
+
+
+def test_e_sai_do_arquivo_de_verdade_quando_se_pede(store: HistoryStore):
+    """"Pode tirar do histórico" pede remoção, não ocultação — eles ocupavam o
+    teto de itens e apareciam para quem abrisse o arquivo."""
+    store.registrar("Vídeo antigo", "YOUTUBE", 600, None, None, agora=1)
+    store.registrar("Faixa", "SPOTIFY", 600, None, None, agora=2)
+    store.registrar("Filme", "MAX", 600, None, None, agora=3)
+
+    assert store.podar_fora_do_historico() == 2
+
+    import json
+    gravado = json.loads(store._caminho.read_text(encoding="utf-8"))
+    assert list(gravado) == ["MAX::filme"]
+
+
+def test_podar_um_arquivo_ja_limpo_nao_reescreve(store: HistoryStore):
+    """Roda a cada partida do servidor: reescrever sem motivo é trocar um risco
+    de escrita por nada."""
+    store.registrar("Filme", "MAX", 600, None, None, agora=1)
+
+    assert store.podar_fora_do_historico() == 0
+
+
+def test_o_spotify_continua_de_fora(store: HistoryStore):
+    """A regra nova não pode ter revogado a antiga sem querer."""
+    rec = HistoryRecorder(store)
+    assistir(rec, tocando("Uma faixa", platform="SPOTIFY"), 400)
+    rec.encerrar()
+
+    assert store.listar() == []

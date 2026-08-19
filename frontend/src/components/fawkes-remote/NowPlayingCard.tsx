@@ -135,7 +135,18 @@ export function NowPlayingCard({
             resposta para "o que você está vendo?" e "Campo dos Sonhos" é a
             resposta para "em qual?". O cartão mostrava só uma das duas — e era
             a segunda, que sozinha não diz nem que série é. */}
-        {session.episode ? (
+        {/* Quando o nome lido NÃO é o da obra, dizer isso.
+
+            Medido em 18/08/2026 com Ben 10 tocando: a janela do Max publica
+            "⁨Fame⁩ • HBO Max", e "Fame" é o episódio — o Max nunca publica o
+            nome da série. O cartão mostrava "Fame" no lugar da obra, e quem
+            lia entendia que estava tocando algo chamado Fame.
+
+            O nome continua na tela, porque ele é a única pista do que está
+            tocando. O que muda é a frase que o cartão monta em volta dele. */}
+        {session.titleIsWork === false ? (
+          <p className="now-playing__artist">Episódio · série não identificada</p>
+        ) : session.episode ? (
           <p className="now-playing__artist" title={session.episode}>{session.episode}</p>
         ) : session.artist ? (
           <p className="now-playing__artist">{session.artist}</p>

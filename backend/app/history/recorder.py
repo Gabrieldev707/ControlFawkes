@@ -18,7 +18,11 @@ meio de um filme não apagar duas horas de sessão.
 
 from __future__ import annotations
 
-from app.history.store import SEGUNDOS_PARA_CONTAR, HistoryStore
+from app.history.store import (
+    PLATAFORMAS_FORA_DO_HISTORICO,
+    SEGUNDOS_PARA_CONTAR,
+    HistoryStore,
+)
 from app.media.now_playing import NowPlaying, _titulo_generico
 
 
@@ -37,7 +41,24 @@ SEGUNDOS_ENTRE_GRAVACOES = 120.0
 # música de fundo viraria dezenas de "títulos assistidos", inflando as horas e
 # disputando o "mais usado" com filme. Sem contar que ninguém retoma uma música
 # de onde parou, e o catálogo de filme não tem gênero para ela.
-PLATAFORMAS_FORA_DO_HISTORICO = frozenset({"SPOTIFY"})
+#
+# O YouTube entrou aqui em 18/08/2026, a pedido, e pelas mesmas razões medidas:
+#
+#   Não se retoma. "Continuar assistindo" existe para voltar ao ponto de um
+#   filme ou de uma série; um vlog ou um jogo ao vivo ou se assiste inteiro ou
+#   não se volta a ele.
+#
+#   Não está no catálogo. O TMDB é catálogo de filme e série, e perguntar a ele
+#   pelo nome de um vídeo devolve a capa de outra coisa — o vlog "CHEGUEI NA
+#   SÍRIA" apareceu com pôster de filme. `podar_capas` existe por causa disso.
+#
+#   Enterrava o resto. Três vídeos de 16/08 empurraram para fora do corte de
+#   "continuar assistindo" tudo o que era de 14/08, incluindo Família Soprano e
+#   A Casa do Dragão.
+#
+# Continua inteiro em todo o resto: abre, controla, aparece em "tocando agora".
+# A lista mora em `store.py`: a leitura precisa dela tanto quanto a gravação.
+__all__ = ["HistoryRecorder", "PLATAFORMAS_FORA_DO_HISTORICO"]
 
 
 class HistoryRecorder:

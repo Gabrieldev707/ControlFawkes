@@ -332,6 +332,18 @@ class NowPlayingSession(BaseModel):
     # minutagem sumia inteira, ou ela avançava inventando um tempo que não
     # passou. Ver `RelogioDaMidia`.
     positionStale: bool = False
+    # O `title` acima é o nome da OBRA, ou é só o que deu para ler?
+    #
+    # Medido em 18/08/2026 com Ben 10 tocando: a janela do Max publica
+    # "⁨Fame⁩ • HBO Max", e "Fame" é o nome do EPISÓDIO — o Max nunca publica o
+    # nome da série. Com a API de mídia do Windows pendurada, não sobra
+    # ninguém que saiba dizer "Ben 10".
+    #
+    # O cartão mostrava "Fame" no lugar da obra, como se fosse o nome do que
+    # está tocando. O número está certo e a frase é que era falsa. Com este
+    # campo o celular pode dizer a verdade: este é o episódio, e a série não
+    # foi identificada.
+    titleIsWork: bool = True
     # Identidade da capa publicada pelo próprio aplicativo — o Spotify manda,
     # o Chrome não. A imagem vem por HTTP, porque alguns milhares de bytes em
     # base64 estourariam o limite de mensagem.
