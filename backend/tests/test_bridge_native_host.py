@@ -19,6 +19,7 @@ import struct
 import pytest
 
 from app.bridge import framing
+from app.bridge import native_host
 from app.bridge.native_host import PROTOCOL_VERSION, responder, servir
 
 
@@ -370,3 +371,183 @@ def test_o_host_continua_sem_saber_o_que_o_evento_significa():
     fonte = Path(host.__file__).read_text(encoding="utf-8")
     for proibido in ("historico", "history", "merger", "RelogioDaMidia", "NowPlaying"):
         assert proibido not in fonte
+
+
+def test_o_log_rotaciona_em_vez_de_crescer_para_sempre(tmp_path, monkeypatch):
+    """Medido em 25/08/2026: 61.006 linhas, 7,5 MB, e nada apagava nada.
+
+    Cada batimento de cada aba vira uma linha, e o batimento não para enquanto
+    houver vídeo aberto. Num computador que fica ligado, isso não tem fim.
+    """
+    from app.bridge import native_host
+
+    log = tmp_path / "host.log"
+    log.write_text("o que havia antes", encoding="utf-8")
+
+    monkeypatch.setattr(native_host, "TAMANHO_MAXIMO_DO_LOG", 10)
+    monkeypatch.setattr(native_host, "caminho_do_log", lambda: log)
+    monkeypatch.delenv(native_host.VARIAVEL_SEM_LOG, raising=False)
+
+    native_host.anotar("TESTE", "depois da rotacao")
+
+    assert "depois da rotacao" in log.read_text(encoding="utf-8")
+    # A geração anterior é PRESERVADA: o diagnóstico mais útil costuma ser o
+    # que aconteceu ANTES de parar.
+    anterior = log.with_suffix(".log.anterior")
+    assert anterior.exists()
+    assert anterior.read_text(encoding="utf-8") == "o que havia antes"
+
+
+def test_o_log_pequeno_nao_rotaciona(tmp_path, monkeypatch):
+    """Rotacionar cedo demais jogaria fora o rastro que interessa."""
+    from app.bridge import native_host
+
+    log = tmp_path / "host.log"
+    monkeypatch.setattr(native_host, "caminho_do_log", lambda: log)
+    monkeypatch.delenv(native_host.VARIAVEL_SEM_LOG, raising=False)
+
+    native_host.anotar("UM", "primeiro")
+    native_host.anotar("DOIS", "segundo")
+
+    assert not log.with_suffix(".log.anterior").exists()
+    conteudo = log.read_text(encoding="utf-8")
+    assert "primeiro" in conteudo and "segundo" in conteudo
+
+
+# ── O sentido inverso — Fase 16 ───────────────────────────────────────────
+#
+# O host passou a ter DUAS bocas no stdout: a resposta do laço de `servir()` e
+# o comando do laço de comandos, de outra thread. stdout É o canal do Native
+# Messaging — duas escritas entrelaçadas desalinham o enquadramento e derrubam
+# a conexão sem nenhuma mensagem de erro.
+
+class TestResultadoQueSobe:
+    def test_o_resultado_da_pagina_vai_para_a_rota_de_resultado(self):
+        """E NÃO para a de eventos: um resultado não é um evento de mídia."""
+        entregues = []
+        resposta = native_host.responder(
+            {
+                "protocolVersion": 1,
+                "messageType": "RESULTADO",
+                "payload": {"id": "abc123", "ok": True, "detalhe": None},
+            },
+            resultado_padrao=entregues.append,
+        )
+
+        assert resposta["messageType"] == "ACK"
+        assert entregues == [{"id": "abc123", "ok": True, "detalhe": None}]
+
+    def test_um_resultado_sem_id_e_recusado(self):
+        resposta = native_host.responder(
+            {"protocolVersion": 1, "messageType": "RESULTADO", "payload": {}},
+            resultado_padrao=lambda _: None,
+        )
+
+        assert resposta["messageType"] == "ERROR"
+        assert resposta["code"] == "INVALID_MESSAGE"
+
+    def test_o_servidor_fora_do_ar_vira_dado_e_nao_silencio(self):
+        """O Chrome pode abrir antes do ControlFawkes. É estado normal."""
+        def explodir(_payload):
+            raise ConnectionError("recusou")
+
+        resposta = native_host.responder(
+            {
+                "protocolVersion": 1,
+                "messageType": "RESULTADO",
+                "payload": {"id": "abc", "ok": True},
+            },
+            resultado_padrao=explodir,
+        )
+
+        assert resposta["code"] == "CONTROLFAWKES_UNREACHABLE"
+
+
+class TestLacoDeComandos:
+    def test_o_comando_encontrado_e_escrito_para_a_extensao(self):
+        import io
+        import threading
+
+        saida = io.BytesIO()
+        parar = threading.Event()
+        entregues = [{"id": "c1", "acao": "PAUSE", "tabId": 7}]
+
+        def buscar():
+            if entregues:
+                return entregues.pop()
+            parar.set()
+            return None
+
+        native_host.laco_de_comandos(saida, parar, buscar=buscar)
+
+        escrito = saida.getvalue()
+        assert b'"COMANDO"' in escrito
+        assert b'"PAUSE"' in escrito
+
+    def test_nenhum_comando_nao_escreve_nada(self):
+        import io
+        import threading
+
+        saida = io.BytesIO()
+        parar = threading.Event()
+        voltas = {"n": 0}
+
+        def buscar():
+            voltas["n"] += 1
+            if voltas["n"] >= 3:
+                parar.set()
+            return None
+
+        native_host.laco_de_comandos(saida, parar, buscar=buscar)
+
+        assert saida.getvalue() == b""
+
+    def test_o_servidor_fora_do_ar_nao_vira_laco_apertado(self):
+        """Sem pausa, um ControlFawkes fora do ar viraria milhares de
+        tentativas por minuto — o mesmo defeito que a enxurrada de
+        `ERR_BLOCKED_BY_CLIENT` do player do Max mostrou ao vivo: cinquenta e
+        três mil tentativas, sem limite nenhum."""
+        import io
+        import threading
+        import time as _time
+
+        saida = io.BytesIO()
+        parar = threading.Event()
+        tentativas = {"n": 0}
+
+        original = native_host.SEGUNDOS_ANTES_DE_TENTAR_DE_NOVO
+        native_host.SEGUNDOS_ANTES_DE_TENTAR_DE_NOVO = 0.05
+
+        def buscar():
+            tentativas["n"] += 1
+            if tentativas["n"] >= 3:
+                parar.set()
+            raise ConnectionError("fora do ar")
+
+        try:
+            comeco = _time.monotonic()
+            native_host.laco_de_comandos(saida, parar, buscar=buscar)
+            gasto = _time.monotonic() - comeco
+        finally:
+            native_host.SEGUNDOS_ANTES_DE_TENTAR_DE_NOVO = original
+
+        # Três tentativas com pausa entre elas, e não três mil sem pausa.
+        assert tentativas["n"] == 3
+        assert gasto >= 0.08
+
+    def test_o_cano_fechado_encerra_o_laco(self):
+        """Escrever num cano fechado não pode virar laço infinito de erro."""
+        import threading
+
+        class CanoFechado:
+            def write(self, _dados):
+                raise BrokenPipeError("cano fechado")
+
+            def flush(self):
+                pass
+
+        parar = threading.Event()
+        native_host.laco_de_comandos(
+            CanoFechado(), parar, buscar=lambda: {"id": "c", "acao": "PLAY"},
+        )
+        # Se ele não tivesse retornado, o teste não chegaria aqui.

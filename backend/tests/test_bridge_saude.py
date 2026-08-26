@@ -65,8 +65,10 @@ def test_a_confiabilidade_semantica_continua_nas_capabilities():
     from app.media.now_playing import PLATAFORMAS_COM_OBRA_NA_JANELA
 
     assert "DISNEY_PLUS" in PLATAFORMAS_COM_OBRA_NA_JANELA
+    # O Max continua fora, e é ele que sustenta o princípio: a janela dele
+    # SEMPRE tem título e ele SEMPRE é o do episódio. Não é falta de frescor,
+    # é falta de capacidade — esperar mais não melhora.
     assert "MAX" not in PLATAFORMAS_COM_OBRA_NA_JANELA
-    assert "NETFLIX" not in PLATAFORMAS_COM_OBRA_NA_JANELA
     # E nada disso aparece no modelo de saúde.
     assert "platform" not in SaudeDoWindowTitle.__dataclass_fields__
 

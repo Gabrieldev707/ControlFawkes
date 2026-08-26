@@ -270,3 +270,89 @@ def test_a_rota_aceita_e_para_por_ai(client, segredo):
     ).json()
 
     assert corpo == {"ok": True, "accepted": "POSITION_SYNC", "sessionId": "sessao-1"}
+
+
+# ── As rotas de COMANDO — Fase 16 ─────────────────────────────────────────
+#
+# O sentido inverso da ponte. Elas têm as MESMAS três trancas, e a credencial
+# importa mais aqui do que na entrada: quem lê `/bridge/comandos` recebe o
+# comando que ia para a aba, e poderia consumi-lo no lugar dela.
+
+class TestRotasDeComando:
+    def test_sem_comando_a_rota_responde_nada(self, client, segredo):
+        """Silêncio é resposta normal, e não erro."""
+        from app.bridge import comandos as modulo
+
+        # Espera curta: o padrão de vinte e cinco segundos é para o host real.
+        original = modulo.SEGUNDOS_DE_ESPERA
+        try:
+            modulo.SEGUNDOS_DE_ESPERA = 0.05
+            from app.api import bridge as rota
+
+            rota.SEGUNDOS_DE_ESPERA = 0.05
+            resposta = client.get("/bridge/comandos", headers={CABECALHO: segredo})
+        finally:
+            modulo.SEGUNDOS_DE_ESPERA = original
+
+        assert resposta.status_code == 200
+        assert resposta.json() == {"comando": None}
+
+    def test_o_comando_enfileirado_desce(self, client, segredo):
+        from app.bridge.comandos import fila_de_comandos
+
+        fila_de_comandos.enfileirar("PAUSE", tabId=42, sessionId="ep-3")
+
+        resposta = client.get("/bridge/comandos", headers={CABECALHO: segredo})
+
+        payload = resposta.json()["comando"]
+        assert payload["acao"] == "PAUSE"
+        assert payload["tabId"] == 42
+        assert payload["sessionId"] == "ep-3"
+
+    def test_a_rota_de_comandos_exige_credencial(self, client):
+        assert client.get("/bridge/comandos").status_code == 401
+
+    def test_a_rota_de_comandos_nao_existe_de_fora(self, client_remoto, segredo):
+        """404 e não 403: para quem está fora da máquina, ela não existe."""
+        resposta = client_remoto.get("/bridge/comandos", headers={CABECALHO: segredo})
+
+        assert resposta.status_code == 404
+
+    def test_uma_pagina_do_navegador_nao_alcanca_os_comandos(self, client, segredo):
+        """Todo `fetch` de página carrega `Origin`. O host não carrega."""
+        resposta = client.get(
+            "/bridge/comandos",
+            headers={CABECALHO: segredo, "Origin": "https://www.netflix.com"},
+        )
+
+        assert resposta.status_code == 404
+
+    def test_o_resultado_volta_pela_rota(self, client, segredo):
+        from app.bridge.comandos import fila_de_comandos
+
+        comando = fila_de_comandos.enfileirar("PLAY", tabId=1, sessionId="s")
+
+        resposta = client.post(
+            f"/bridge/comandos/{comando.id}/resultado",
+            json={"ok": True},
+            headers={CABECALHO: segredo},
+        )
+
+        assert resposta.status_code == 202
+        assert resposta.json()["ok"] is True
+
+    def test_o_resultado_tambem_exige_credencial(self, client):
+        resposta = client.post("/bridge/comandos/qualquer/resultado", json={"ok": True})
+
+        assert resposta.status_code == 401
+
+    def test_um_resultado_de_id_desconhecido_nao_explode(self, client, segredo):
+        """Chegar atrasado não é erro: quem pediu já caiu para a tecla."""
+        resposta = client.post(
+            "/bridge/comandos/nao-existe/resultado",
+            json={"ok": True},
+            headers={CABECALHO: segredo},
+        )
+
+        assert resposta.status_code == 202
+        assert resposta.json()["aguardado"] is False
