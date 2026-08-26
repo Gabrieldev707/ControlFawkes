@@ -153,6 +153,19 @@ function criarObservador(aoMudar) {
 
   return {
     ler: () => (atual !== null && atual.isConnected ? lerElemento(atual) : null),
+    /**
+     * O elemento que está sendo observado, ou `null`. Fase 16.
+     *
+     * Existe para os COMANDOS acertarem exatamente o `<video>` que este
+     * observador escolheu — o maior da página, o mesmo de onde sai a posição.
+     * Um `document.querySelector('video')` do lado de quem executa poderia
+     * pegar outro elemento, e aí o cartão descreveria um vídeo e o botão
+     * comandaria outro.
+     *
+     * Só devolve o elemento; quem sabe o que fazer com ele é `index.js`. Este
+     * módulo continua sabendo só LER.
+     */
+    elemento: () => (atual !== null && atual.isConnected ? atual : null),
     parar: () => {
       mutacoes.disconnect()
       clearInterval(periodica)

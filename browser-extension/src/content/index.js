@@ -79,10 +79,82 @@ async function enviar(messageType, payload) {
 
 /** O que a aba sempre sabe de si. Sem `href`: não coletamos navegação. */
 function contexto() {
-  return { provider: location.hostname }
+  return {
+    provider: location.hostname,
+    // O titulo da ABA, cru. O backend ja sabe limpar cada servico.
+    //
+    // A janela do Chrome publica so o titulo da aba ATIVA, e por isso quatro
+    // dos cinco servicos ficavam sem nome assim que a pessoa trocava de aba —
+    // Prime Video, Disney+, Max e YouTube nao capturavam nada em segundo
+    // plano. A extensao esta DENTRO de cada aba e le o titulo dela sempre.
+    //
+    // Cru de proposito: `limpar_titulo_de_janela` no backend conhece o formato
+    // de cada servico, custou caro para acertar e tem teste para cada caso.
+    // Limpar aqui seria uma segunda verdade sobre a mesma string.
+    documentTitle: document.title || null,
+    ...telemetriaDaPagina(),
+    ...metadataAtual(),
+  }
 }
 
+/** Quando o último `play` aconteceu, e quando qualquer evento de mídia. */
+let ultimoPlay = null
+let ultimoEventoDeMidia = null
+
+/**
+ * O que só a PÁGINA sabe de si — Fase 14.
+ *
+ * Aba ativa, audível e muda vêm do `sender` no worker, porque o Chrome é quem
+ * pode afirmá-las. Estas três não têm equivalente lá:
+ *
+ *   pictureInPicture   o vídeo saiu para a janelinha flutuante. A aba pode
+ *                      estar em segundo plano e a pessoa assistindo mesmo
+ *                      assim — é o caso que quebra "aba ativa = quem assiste".
+ *   visible            a aba está sendo desenhada? Diferente de `active`:
+ *                      uma aba ativa numa janela minimizada não é visível.
+ *   lastPlay           há quanto tempo alguém mandou tocar. É o desempate
+ *                      mais honesto entre duas abas que dizem estar tocando.
+ *
+ * Em MILISSEGUNDOS desde o evento, e não como carimbo absoluto: o relógio da
+ * aba pode estar torto, e o backend não tem como corrigir um carimbo que não é
+ * dele. Um intervalo, ele consegue usar.
+ */
+function telemetriaDaPagina() {
+  const desde = (marca) => (marca === null ? null : Math.max(0, Date.now() - marca))
+  return {
+    pictureInPicture: document.pictureInPictureElement !== null
+      && document.pictureInPictureElement !== undefined,
+    visible: document.visibilityState === 'visible',
+    msDesdeUltimoPlay: desde(ultimoPlay),
+    msDesdeUltimoEvento: desde(ultimoEventoDeMidia),
+  }
+}
+
+/**
+ * A metadata do serviço, quando existe adapter para ele.
+ *
+ * `provider-adapter` é a fonte de MAIOR autoridade para nome de obra na tabela
+ * do Merger, e é a única saída para a Netflix: lá a SMTC publica "Netflix" e a
+ * janela publica "Netflix", então nenhuma fonte do Windows sabe o que está
+ * tocando. Ver `providers/netflix.js`.
+ *
+ * Sem adapter para o host, devolve vazio — e vazio é diferente de errado: os
+ * serviços que nomeiam a obra na janela seguem pelo caminho de sempre.
+ */
+function metadataAtual() {
+  if (typeof lerMetadata !== 'function') return {}
+  const lida = lerMetadata(document, location)
+  return lida === null ? {} : lida
+}
+
+let ultimaMetadata = null
+
 const observador = criarObservador((tipo, leitura) => {
+  // Os carimbos são atualizados para TODO evento, inclusive os que não geram
+  // envio imediato — é o que faz `msDesdeUltimoEvento` medir atividade real da
+  // aba, e não só a atividade que por acaso atravessou a ponte.
+  ultimoEventoDeMidia = Date.now()
+  if (tipo === 'play') ultimoPlay = Date.now()
   // Elemento trocado é reprodução nova: episódio seguinte, ou outra obra. A
   // identidade tem de virar ANTES do evento sair, ou o `MEDIA_CHANGED` chegaria
   // marcado com a identidade do que acabou.
@@ -96,19 +168,163 @@ const observador = criarObservador((tipo, leitura) => {
   void enviar(messageType, { ...contexto(), ...(leitura ?? {}) })
 })
 
+/**
+ * A metadata muda sem o `<video>` trocar.
+ *
+ * O autoplay do próximo episódio às vezes reaproveita o mesmo elemento: o
+ * `detached` não dispara, o observador não vê nada, e o sistema seguiria
+ * reportando o episódio anterior. Quem percebe é a página, e olhar para ela é
+ * barato — um `querySelector`, sem atravessar fronteira nenhuma.
+ *
+ * Só o ENVIO custa, e ele só acontece quando algo mudou de verdade.
+ */
+function olharAMetadata() {
+  if (typeof mesmaMetadata !== 'function') return
+  const agora = typeof lerMetadata === 'function' ? lerMetadata(document, location) : null
+  if (mesmaMetadata(agora, ultimaMetadata)) return
+  ultimaMetadata = agora
+  const leitura = observador.ler()
+  void enviar('MEDIA_CHANGED', { ...contexto(), ...(leitura ?? {}) })
+}
+
+/**
+ * Os COMANDOS que descem — Fase 16.
+ *
+ * Até aqui a ponte só falava para cima. O play/pause era uma TECLA: o
+ * ControlFawkes focava a janela do Chrome e apertava a barra de espaço. Isso
+ * funciona e continua sendo o plano B, mas tem três limites medidos:
+ *
+ *   rouba o foco       focar a janela tira o foco de onde a pessoa estava.
+ *   erra de aba        a barra de espaço vai para a aba ATIVA, e a ativa nem
+ *                      sempre é a que toca. Medido na Fase 14: em 6 dos 18
+ *                      instantes com duas abas tocando havia MAIS DE UMA aba
+ *                      ativa — janelas diferentes, cada uma com a sua.
+ *   não sabe posição   não existe tecla para "pular para 1h23".
+ *
+ * Comandar o elemento resolve os três. E o elemento é o do OBSERVADOR, não um
+ * `querySelector` novo: se fossem dois elementos diferentes, o cartão
+ * descreveria um vídeo e o botão comandaria outro.
+ *
+ * `sessionId` é conferido antes de executar. Um comando é sobre o AGORA, e se
+ * a aba já trocou de reprodução entre o pedido e a chegada, executá-lo
+ * pausaria o episódio seguinte porque o anterior foi pedido.
+ */
+const ACOES = {
+  PLAY: (video) => video.play(),
+  PAUSE: (video) => video.pause(),
+  SEEK_TO: (video, valor) => { video.currentTime = valor },
+  SEEK_BY: (video, valor) => { video.currentTime = video.currentTime + valor },
+}
+
+function executarComando(payload) {
+  if (payload === null || typeof payload !== 'object') {
+    return { ok: false, detalhe: 'comando sem payload' }
+  }
+  // A reprodução mudou entre o pedido e a chegada.
+  if (payload.sessionId != null && payload.sessionId !== sessionId) {
+    return { ok: false, detalhe: 'outra reprodução' }
+  }
+  const executar = ACOES[payload.acao]
+  if (executar === undefined) return { ok: false, detalhe: `ação desconhecida: ${payload.acao}` }
+
+  const video = observador.elemento()
+  if (video === null) return { ok: false, detalhe: 'sem elemento' }
+
+  const numero = typeof payload.valor === 'number' && Number.isFinite(payload.valor)
+    ? payload.valor
+    : null
+  if ((payload.acao === 'SEEK_TO' || payload.acao === 'SEEK_BY') && numero === null) {
+    return { ok: false, detalhe: 'seek sem valor' }
+  }
+
+  try {
+    // `play()` devolve uma promessa que rejeita quando o navegador bloqueia o
+    // autoplay. Não dá para esperar por ela aqui — a resposta ao worker é
+    // síncrona —, e o batimento seguinte conta o estado real de qualquer jeito.
+    const talvez = executar(video, numero)
+    if (talvez && typeof talvez.catch === 'function') talvez.catch(() => {})
+  } catch (erro) {
+    return { ok: false, detalhe: String(erro) }
+  }
+  return { ok: true }
+}
+
+chrome.runtime.onMessage.addListener((mensagem, _remetente, responder) => {
+  if (mensagem?.messageType !== 'COMANDO') return false
+  responder(executarComando(mensagem.payload))
+  return false
+})
+
+let vigiaDaMetadata = setInterval(olharAMetadata, 2000)
+
 // O relógio. Sobrevive ao worker reiniciar porque não é o worker que o mantém.
-const relogio = setInterval(() => {
+let relogio = null
+
+function baterAgora() {
   const leitura = observador.ler()
   // Sem elemento não há o que sincronizar. Mandar um batimento vazio faria o
   // backend achar que a aba tem mídia parada, em vez de mídia nenhuma.
   if (leitura === null) return
   void enviar('POSITION_SYNC', { ...contexto(), ...leitura })
-}, SEGUNDOS_ENTRE_BATIMENTOS * 1000)
+}
 
-// A aba indo embora encerra a sessão de forma explícita, em vez de deixar o
-// backend adivinhar por silêncio.
-addEventListener('pagehide', () => {
-  clearInterval(relogio)
-  observador.parar()
-  void enviar('SESSION_ENDED', { ...contexto(), motivo: 'pagehide' })
-}, { once: true })
+function ligarRelogio() {
+  if (relogio === null) relogio = setInterval(baterAgora, SEGUNDOS_ENTRE_BATIMENTOS * 1000)
+}
+
+function desligarRelogio() {
+  if (relogio !== null) clearInterval(relogio)
+  relogio = null
+}
+
+ligarRelogio()
+
+/**
+ * A aba indo embora — e as DUAS formas de ir embora.
+ *
+ * `pagehide` dispara em duas situações que exigem tratamento oposto, e tratá-las
+ * igual deixava a aba surda para sempre:
+ *
+ *   persisted === false   a página está sendo DESTRUÍDA. Navegou para outro
+ *                         lugar, fechou a aba, fechou o navegador. Desmontar é
+ *                         o certo, e o `SESSION_ENDED` avisa o backend em vez
+ *                         de deixá-lo adivinhar por silêncio.
+ *
+ *   persisted === true    a página está indo para o BFCACHE. Ela é congelada,
+ *                         não destruída, e volta inteira quando a pessoa aperta
+ *                         "voltar" — SEM reexecutar script nenhum.
+ *
+ * A versão anterior desmontava nos dois casos, e com `{ once: true }`. No
+ * segundo, a aba voltava viva, com vídeo tocando, e o content script já tinha
+ * parado o relógio, o vigia e o observador — para sempre, porque o listener
+ * também já tinha sido removido. Nada acusava: nem erro, nem log, nem porta
+ * caída. Só silêncio.
+ *
+ * É o candidato mais forte para os silêncios medidos em 25/08/2026, em que a
+ * ponte parava de mandar eventos sem motivo aparente e voltava só depois de um
+ * F5 na aba.
+ */
+addEventListener('pagehide', (evento) => {
+  // Congelada não deve bater: um batimento de página congelada descreveria um
+  // instante que não está acontecendo.
+  desligarRelogio()
+  clearInterval(vigiaDaMetadata)
+  void enviar('SESSION_ENDED', {
+    ...contexto(),
+    motivo: evento.persisted ? 'bfcache' : 'pagehide',
+  })
+  // Só solta o observador quando a página não volta. No bfcache o `<video>`
+  // continua lá, e reencontrá-lo depois seria trabalho à toa.
+  if (!evento.persisted) observador.parar()
+})
+
+// E a volta. Sem isto, tudo acima é despedida sem reencontro.
+addEventListener('pageshow', (evento) => {
+  if (!evento.persisted) return
+  vigiaDaMetadata = setInterval(olharAMetadata, 2000)
+  ligarRelogio()
+  // Um batimento imediato: esperar dez segundos para dizer "voltei" deixaria o
+  // cartão mostrando o que estava tocando antes da congelada.
+  ultimaMetadata = null
+  baterAgora()
+})

@@ -24,6 +24,32 @@ const LIMITE_DO_DIARIO = 100
 
 let porta = null
 
+/**
+ * Qual janela do Chrome está em foco. Fase 14.
+ *
+ * Por EVENTO e não por consulta: `chrome.windows.get` é assíncrono, e o
+ * caminho da mensagem é síncrono — pendurar uma consulta ali atrasaria toda
+ * mensagem de toda aba para responder algo que muda raramente.
+ *
+ * `WINDOW_ID_NONE` é o Chrome inteiro perdendo o foco, e é um dado, não um
+ * erro: é exatamente o caso "janela não focada" que a Fase 14 quer medir.
+ */
+let janelaEmFoco = null
+
+chrome.windows?.onFocusChanged?.addListener((windowId) => {
+  janelaEmFoco = windowId === chrome.windows.WINDOW_ID_NONE ? null : windowId
+})
+
+// O foco atual no start do worker: sem isto, toda mensagem até o primeiro
+// `onFocusChanged` diria "nenhuma janela focada", que é falso.
+try {
+  chrome.windows?.getLastFocused?.({}, (janela) => {
+    if (!chrome.runtime.lastError && janela?.focused) janelaEmFoco = janela.id
+  })
+} catch {
+  // Sem a API de janelas, o campo fica `null` — ausente, não errado.
+}
+
 async function registrar(evento, detalhe) {
   const linha = { evento, detalhe: detalhe ?? null, em: new Date().toISOString() }
   console.log('[fawkes-bridge]', evento, detalhe ?? '')
@@ -52,7 +78,8 @@ function conectar() {
   void registrar(CicloDeVida.TRANSPORT_CONNECTED, { host: HOST })
 
   porta.onMessage.addListener((mensagem) => {
-    void registrar('HOST_MESSAGE', mensagem)
+    void registrar('HOST_MESSAGE', { messageType: mensagem?.messageType })
+    if (mensagem?.messageType === 'COMANDO') void entregarComando(mensagem.payload)
   })
 
   porta.onDisconnect.addListener(() => {
@@ -94,12 +121,27 @@ chrome.runtime.onMessage.addListener((mensagem, sender, responder) => {
     return false
   }
 
+  // Fase 14 — telemetria de aba. Tudo daqui sai do `sender`, que é o Chrome
+  // falando, e NÃO do payload: se a aba declarasse isto, uma página poderia
+  // dizer que está ativa e audível para ganhar a disputa da Fase 15.
+  //
+  // `audible` é a novidade que mais vale: é por ABA, enquanto a Core Audio do
+  // ControlFawkes só sabe responder por PROCESSO — e o Chrome agrupa todas as
+  // abas num processo só. É a limitação que `audio_activity.py` documenta como
+  // herdada, e este campo é o que a desfaz.
+  const aba = sender.tab ?? null
   const enriquecida = {
     ...mensagem,
     payload: {
       ...(mensagem.payload ?? {}),
-      tabId: sender.tab?.id ?? null,
-      windowId: sender.tab?.windowId ?? null,
+      tabId: aba?.id ?? null,
+      windowId: aba?.windowId ?? null,
+      active: aba?.active ?? null,
+      audible: aba?.audible ?? null,
+      tabMuted: aba?.mutedInfo?.muted ?? null,
+      windowFocused: janelaEmFoco === null || aba?.windowId === undefined
+        ? null
+        : aba.windowId === janelaEmFoco,
     },
   }
 
@@ -114,8 +156,105 @@ chrome.runtime.onMessage.addListener((mensagem, sender, responder) => {
   return false
 })
 
+/**
+ * Entrega um comando à aba certa e devolve o resultado ao host. Fase 16.
+ *
+ * O worker é o ÚNICO lado que sabe endereçar uma aba: `chrome.tabs.sendMessage`
+ * não existe dentro da página. Por isso o comando desce por aqui mesmo o
+ * worker não podendo guardar estado — ele não guarda nada; só encaminha.
+ *
+ * O `tabId` vem do ControlFawkes, escolhido pelo árbitro da Fase 15. Aqui não
+ * se escolhe aba nenhuma: mandar para "a aba ativa" desfaria a decisão que foi
+ * tomada com os dados da Fase 14 e recriaria o defeito da barra de espaço.
+ *
+ * Toda falha vira um resultado com motivo, nunca silêncio. Quem apertou o botão
+ * está olhando para a tela, e o ControlFawkes precisa saber que por aqui não
+ * deu para cair no plano B — a tecla — em vez de ficar esperando.
+ */
+async function entregarComando(payload) {
+  const responder = (ok, detalhe) => enviarAoHost({
+    protocolVersion: 1,
+    messageType: 'RESULTADO',
+    timestamp: Date.now(),
+    payload: { id: payload?.id, ok, detalhe },
+  })
+
+  if (payload === null || typeof payload !== 'object' || typeof payload.id !== 'string') {
+    void registrar('COMANDO_INVALIDO')
+    return
+  }
+  if (typeof payload.tabId !== 'number') {
+    responder(false, 'sem tabId')
+    return
+  }
+  try {
+    const resposta = await chrome.tabs.sendMessage(payload.tabId, {
+      messageType: 'COMANDO',
+      payload,
+    })
+    responder(resposta?.ok === true, resposta?.detalhe ?? null)
+  } catch (erro) {
+    // Aba fechada, content script órfão depois de recarregar a extensão,
+    // página que não aceita injeção. São todos o mesmo caso para quem espera:
+    // por aqui não deu.
+    responder(false, String(erro))
+  }
+}
+
+/**
+ * Reinjeta os content scripts nas abas que ja estavam abertas.
+ *
+ * Recarregar a extensao troca o service worker na hora e NAO troca os content
+ * scripts das abas abertas: eles ficam orfaos — vivos na pagina, com as APIs
+ * `chrome.*` mortas — ate alguem dar F5. O sintoma e sempre o mesmo e sempre
+ * enganoso: o worker aparece atualizado nos logs, o dado novo nunca chega, e
+ * nada acusa.
+ *
+ * Medido em 26/08/2026: `active` e `audible` chegavam (worker novo) e
+ * `documentTitle` nao (content script velho), na mesma mensagem. Foram varias
+ * rodadas de depuracao perdidas nisso.
+ *
+ * A ordem dos arquivos e a MESMA do manifesto, e tem de ser: `index.js` usa o
+ * que os dois anteriores deixam no escopo.
+ */
+const ARQUIVOS_DO_CONTENT_SCRIPT = [
+  'src/content/video-observer.js',
+  'src/content/providers/disney.js',
+  'src/content/providers/prime.js',
+  'src/content/providers/max.js',
+  'src/content/providers/netflix.js',
+  'src/content/index.js',
+]
+
+async function reinjetarNasAbasAbertas() {
+  if (chrome.scripting === undefined) return
+  let abas = []
+  try {
+    abas = await chrome.tabs.query({ url: ['http://*/*', 'https://*/*'] })
+  } catch (erro) {
+    void registrar('REINJECAO_FALHOU', { erro: String(erro) })
+    return
+  }
+  let injetadas = 0
+  for (const aba of abas) {
+    if (aba.id === undefined) continue
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId: aba.id },
+        files: ARQUIVOS_DO_CONTENT_SCRIPT,
+      })
+      injetadas += 1
+    } catch {
+      // Aba do proprio Chrome, PDF, pagina de erro: nao da para injetar, e
+      // tentar nao pode derrubar o resto.
+    }
+  }
+  void registrar('REINJETADO', { abas: injetadas })
+}
+
 chrome.runtime.onInstalled.addListener(() => {
   void registrar('INSTALLED')
+  void reinjetarNasAbasAbertas()
   enviarAoHost(envelope('PING'))
 })
 

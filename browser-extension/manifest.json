@@ -10,8 +10,17 @@
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
-      "js": ["src/content/video-observer.js", "src/content/index.js"],
+      "matches": [
+        "<all_urls>"
+      ],
+      "js": [
+        "src/content/video-observer.js",
+        "src/content/providers/disney.js",
+        "src/content/providers/prime.js",
+        "src/content/providers/max.js",
+        "src/content/providers/netflix.js",
+        "src/content/index.js"
+      ],
       "run_at": "document_idle",
       "all_frames": false
     }
@@ -19,7 +28,8 @@
   "permissions": [
     "nativeMessaging",
     "storage",
-    "tabs"
+    "tabs",
+    "scripting"
   ],
   "action": {
     "default_title": "ControlFawkes Bridge"
