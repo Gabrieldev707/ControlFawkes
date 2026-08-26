@@ -19,6 +19,8 @@ interface ProfileScreenProps {
   statusMessage: string
   statusError: boolean
   credentials: { deviceId: string; token: string } | null
+  /** Muda quando o que está tocando muda — dispara uma recarga. */
+  recarregarQuando?: string | null
   /** Retomar: manda a busca do título para a plataforma onde ele estava. */
   onResume: (platform: Platform | null, title: string) => void
   onBack: () => void
@@ -34,6 +36,15 @@ interface Assistido {
   /** Onde a pessoa parou, quando é série. Sem isto o cartão não dizia de ONDE
    *  continuar — só o nome da obra e mais nada. */
   episodio: string | null
+  /** Posição e duração do EPISÓDIO, quando a linha junta várias reproduções.
+   *
+   *  Separados de `posicao`/`duracao` de propósito: aqueles respondem pela
+   *  obra, e numa série eles não respondem por nada — é o bug do Batman, em que
+   *  484 de 1680 segundos de um episódio viravam "faltam 20 min" para uma
+   *  série já terminada. Estes respondem pelo episódio, e a tela os rotula
+   *  como tal. */
+  posicaoDoEpisodio: number | null
+  duracaoDoEpisodio: number | null
 }
 
 interface Contagem {
@@ -100,6 +111,24 @@ function restanteDe(
   }
 }
 
+/** "37:08 de 48:41" — onde a pessoa parou DENTRO do episódio.
+ *
+ * Uma pergunta diferente de "quanto falta", e por isso num lugar diferente da
+ * tela, colada no nome do episódio. Sem esse rótulo os dois números leriam como
+ * progresso da série, que foi exatamente o defeito que tirou a posição daqui.
+ */
+function ondeParou(posicao: number | null, duracao: number | null): string | null {
+  if (posicao === null || posicao < 0) return null
+  const relogio = (total: number) => {
+    const s = Math.floor(total % 60).toString().padStart(2, '0')
+    const m = Math.floor((total / 60) % 60)
+    const h = Math.floor(total / 3600)
+    return h > 0 ? `${h}:${m.toString().padStart(2, '0')}:${s}` : `${m}:${s}`
+  }
+  if (duracao === null || duracao <= 0) return relogio(posicao)
+  return `${relogio(posicao)} de ${relogio(duracao)}`
+}
+
 function horas(segundos: number): string {
   if (segundos < 3600) return `${Math.max(1, Math.round(segundos / 60))} min`
   const total = segundos / 3600
@@ -127,6 +156,24 @@ function FaixaDeObras({
     <div className="profile-screen__faixa">
       {itens.map((item) => {
         const restante = restanteDe(item.posicao, item.duracao)
+        // Numa série, "quanto falta" não tem resposta — a obra não tem
+        // duração. O que tem resposta é "onde parei", DENTRO DE UM EPISÓDIO.
+        //
+        // E o nome do episódio é obrigatório para mostrar o tempo, não
+        // decorativo. Medido em 25/08/2026: o cartão do Invincible anunciava
+        // "37:08 de 48:41" enquanto a pessoa assistia OUTRO episódio. Os dois
+        // números estavam certos — descreviam a última reprodução gravada — e a
+        // frase que a tela montava com eles era falsa, porque não dizia de qual
+        // episódio falava.
+        //
+        // É o bug do Batman de novo: lá, a posição de um episódio lida como
+        // progresso da série; aqui, a posição de um episódio lida como progresso
+        // do episódio ATUAL. A regra que resolve os dois é a mesma e já estava
+        // escrita em `restanteDe`: vazio diz "não sei"; um número que responde
+        // outra pergunta diz algo errado.
+        const tempoDoEpisodio = restante === null && item.episodio !== null
+          ? ondeParou(item.posicaoDoEpisodio, item.duracaoDoEpisodio)
+          : null
         return (
           <button
             key={`${item.platform}-${item.titulo}`}
@@ -171,8 +218,11 @@ function FaixaDeObras({
                 mesmo lugar, e quem lê não sabe qual está lendo — foi um defeito
                 já corrigido uma vez, e o teste que o protege continua de pé. */}
             {item.episodio !== null ? (
-              <span className="continuar-card__episodio" title={item.episodio}>
-                {item.episodio}
+              <span
+                className="continuar-card__episodio"
+                title={[item.episodio, tempoDoEpisodio].filter(Boolean).join(' · ')}
+              >
+                {[item.episodio, tempoDoEpisodio].filter(Boolean).join(' · ')}
               </span>
             ) : null}
             {/* A barra e o texto aparecem juntos ou não aparecem: os dois saem
@@ -222,6 +272,12 @@ function comoPerfil(dados: unknown): Perfil | null {
           segundos: typeof dado.segundos === 'number' ? dado.segundos : 0,
           posicao: typeof dado.posicao === 'number' ? dado.posicao : null,
           duracao: typeof dado.duracao === 'number' ? dado.duracao : null,
+          posicaoDoEpisodio: typeof dado.posicaoDoEpisodio === 'number'
+            ? dado.posicaoDoEpisodio
+            : null,
+          duracaoDoEpisodio: typeof dado.duracaoDoEpisodio === 'number'
+            ? dado.duracaoDoEpisodio
+            : null,
           posterUrl: poster,
           episodio: typeof dado.episodio === 'string' && dado.episodio
             ? dado.episodio
@@ -330,6 +386,7 @@ export function ProfileScreen({
   statusMessage,
   statusError,
   credentials,
+  recarregarQuando = null,
   onResume,
   onBack,
 }: ProfileScreenProps) {
@@ -350,13 +407,79 @@ export function ProfileScreen({
     if (credentials === null) return
     try {
       const resposta = await fetch(`${apiBaseUrl()}/profile`, { headers: cabecalhos() })
-      setPerfil(resposta.ok ? comoPerfil(await resposta.json()) : null)
+      if (!resposta.ok) {
+        // Erro do servidor não apaga o que já está na tela. Ver abaixo.
+        setPerfil((anterior) => anterior ?? null)
+        return
+      }
+      const lido = comoPerfil(await resposta.json())
+      // `comoPerfil` devolve `null` quando o corpo não tem a forma esperada —
+      // e isso é uma resposta ruim, não um perfil vazio.
+      setPerfil((anterior) => lido ?? anterior)
     } catch {
-      setPerfil(null)
+      // A rede falhou. NÃO apagar o que já está na tela.
+      //
+      // Isto virou perigoso no momento em que a tela ganhou recarga
+      // automática: antes, uma falha acontecia uma vez, na abertura, e a tela
+      // nascia vazia — ruim e honesto. Agora ela recarrega a cada minuto, e um
+      // único tropeço de rede apagaria um perfil inteiro que estava correto na
+      // tela, sem a pessoa ter feito nada.
+      //
+      // Manter o anterior é o lado certo do erro: dado de um minuto atrás é
+      // muito melhor do que "você não assistiu nada".
+      setPerfil((anterior) => anterior)
     }
   }, [cabecalhos, credentials])
 
   useEffect(() => { void carregar() }, [carregar])
+
+  /**
+   * A tela buscava UMA vez e nunca mais.
+   *
+   * Numa tela chamada "continuar assistindo" isso é pior do que parece: a
+   * pessoa deixa o celular ao lado enquanto assiste, olha de novo mais tarde, e
+   * lê o que era verdade quando abriu. Medido em 25/08/2026 — um episódio
+   * inteiro depois, o cartão ainda anunciava "37:08 de 48:41" do episódio
+   * anterior, e não havia como saber que aquilo era um retrato velho.
+   *
+   * Duas recargas, porque são dois momentos diferentes:
+   *
+   *   ao voltar para a aba   é quando a pessoa OLHA. Se algo mudou enquanto ela
+   *                          estava fora, é agora que ela precisa ver.
+   *   de tempos em tempos    para quem deixa a tela aberta e à vista.
+   *
+   * Um minuto, e não um segundo: o histórico do servidor só grava a cada dois
+   * minutos de reprodução, então recarregar mais rápido gastaria rede para
+   * mostrar exatamente o mesmo.
+   */
+  /**
+   * Uma recarga quando o que está tocando muda.
+   *
+   * É o momento EXATO em que o histórico muda, e é infinitamente mais preciso
+   * do que qualquer intervalo: trocar de obra manda o sinal, e a tela responde
+   * na hora em vez de esperar o ciclo.
+   *
+   * Medido em 26/08/2026: a pessoa trocou de série e esperou três minutos para
+   * a tela admitir — o ciclo de um minuto somado ao tempo que o servidor leva
+   * para gravar — e ainda teve de recarregar a página na mão.
+   */
+  useEffect(() => {
+    if (credentials === null || recarregarQuando === null) return
+    void carregar()
+  }, [carregar, credentials, recarregarQuando])
+
+  useEffect(() => {
+    if (credentials === null) return
+    const aoVoltar = () => {
+      if (document.visibilityState === 'visible') void carregar()
+    }
+    document.addEventListener('visibilitychange', aoVoltar)
+    const relogio = window.setInterval(() => { void carregar() }, 60_000)
+    return () => {
+      document.removeEventListener('visibilitychange', aoVoltar)
+      window.clearInterval(relogio)
+    }
+  }, [carregar, credentials])
 
   // As recomendações custam várias idas ao catálogo; chegam depois, sem
   // segurar o resto da tela.

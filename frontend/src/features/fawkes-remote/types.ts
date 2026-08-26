@@ -432,6 +432,15 @@ export interface NowPlayingSession {
    * anterior, e aí o padrão é a contagem normal.
    */
   positionStale?: boolean
+  /**
+   * Quantas vezes o servidor escreveu no histórico nesta execução.
+   *
+   * O valor não significa nada sozinho: o que importa é ele MUDAR. Quando
+   * muda, a tela de "continuar assistindo" está desatualizada e recarrega.
+   * Antes disso ela dependia de um relógio de sessenta segundos, e uma obra
+   * recém-gravada levava até dois minutos e meio para aparecer.
+   */
+  historyRevision?: number
   /** Identidade da capa publicada pelo próprio aplicativo (Spotify manda). */
   thumbnailId: string | null
   /** Pôster do catálogo, para quando o aplicativo não publica capa. */
@@ -464,6 +473,16 @@ export interface NeedsPlatformMessage {
    * pergunta em vez de adivinhar.
    */
   availabilityAlternative?: TitleAvailability | null
+  /**
+   * Tudo o que o catálogo achou, em ordem — os dois campos acima são os dois
+   * primeiros dela.
+   *
+   * Dois slots era o formato de "adivinhar a obra e oferecer a alternativa".
+   * Para BUSCAR é pouco: medido em 25/08/2026, "capitão américa" tinha os
+   * quatro filmes da Marvel entre os resultados e a tela mostrava o de 1990,
+   * que não está em serviço nenhum.
+   */
+  availabilityOptions?: TitleAvailability[]
 }
 
 export interface PointerCommandData {

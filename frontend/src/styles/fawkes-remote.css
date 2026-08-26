@@ -2886,6 +2886,53 @@ textarea {
   margin-top: 0.85rem;
 }
 
+/* Os outros resultados da busca.
+   
+   Lista e não grade: o que decide o toque é o TEXTO — nome, ano e onde
+   assistir —, e texto em grade vira duas colunas de reticências. */
+.platform-choice__outras {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0 0 0.85rem;
+  padding: 0;
+  list-style: none;
+}
+
+.platform-choice__outras button {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 0.5rem 0.7rem;
+  border: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.08));
+  border-radius: 10px;
+  background: var(--surface-raised, rgba(255, 255, 255, 0.03));
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.platform-choice__outras button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.platform-choice__outra-nome {
+  font-size: 0.82rem;
+  font-weight: 600;
+  /* Uma linha: o nome longo não pode empurrar o "onde assistir" para fora. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.platform-choice__outra-onde {
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+}
+
 .platform-choice__option--open {
   border-style: dashed;
   border-color: rgba(255, 255, 255, 0.2);

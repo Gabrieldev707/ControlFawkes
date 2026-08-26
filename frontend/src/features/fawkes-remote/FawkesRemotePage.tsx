@@ -110,6 +110,7 @@ export const FawkesRemotePage: React.FC = () => {
     openOnly: Platform[]
     availability: TitleAvailability | null
     alternative: TitleAvailability | null
+    opcoes: TitleAvailability[]
   } | null>(null)
   const [volumeLevel, setVolumeLevel] = useState<number | null>(null)
   const [volumeMuted, setVolumeMuted] = useState(false)
@@ -208,6 +209,7 @@ export const FawkesRemotePage: React.FC = () => {
         openOnly: message.openOnlyPlatforms ?? [],
         availability: message.availability ?? null,
         alternative: message.availabilityAlternative ?? null,
+        opcoes: message.availabilityOptions ?? [],
       })
       setOrbState('needs_selection')
       const encontrado = message.availability
@@ -958,6 +960,7 @@ export const FawkesRemotePage: React.FC = () => {
                     openOnlyPlatforms={pendingChoice.openOnly}
                     availability={pendingChoice.availability}
                     availabilityAlternative={pendingChoice.alternative}
+                    availabilityOptions={pendingChoice.opcoes}
                     disabled={controlsDisabled}
                     onChoose={handleChoosePlatform}
                     onOpenPlatform={handleOpenPlatformForQuery}
@@ -1053,6 +1056,35 @@ export const FawkesRemotePage: React.FC = () => {
               statusMessage={statusMessage}
               statusError={statusError}
               credentials={credenciaisEstaveis}
+              /* Recarrega quando o que está tocando muda — OU quando o
+                 servidor escreve no histórico.
+
+                 Trocar de obra é UM dos momentos em que o histórico muda, e
+                 era o único que esta tela enxergava. Esperar o ciclo de um
+                 minuto fazia a pessoa trocar de série e ver a anterior —
+                 medido em 26/08/2026: três minutos até a tela admitir a troca,
+                 e só depois de recarregar a página na mão.
+
+                 Só que ele NÃO é o único, e o caso que faltava é o mais comum
+                 de todos: começar a assistir. A obra entra no histórico aos 90
+                 segundos, e até lá o título já era o mesmo — então a chave não
+                 mudava e sobrava o relógio. Medido no mesmo dia, com Gavião
+                 Arqueiro: a linha estava no disco às 15:16 e a tela ainda não
+                 a mostrava.
+
+                 `historyRevision` é um contador que o servidor incrementa a
+                 cada gravação bem-sucedida. Com ele a tela recarrega UMA vez,
+                 no instante certo, em vez de perguntar de minuto em minuto se
+                 mudou alguma coisa. */
+              recarregarQuando={
+                // `null` continua querendo dizer "não recarregar": é assim que
+                // `ProfileScreen` distingue "nada tocando" de uma chave nova, e
+                // uma string sempre presente dispararia um carregamento a mais
+                // toda vez que a tela montasse.
+                nowPlaying === null
+                  ? null
+                  : `${nowPlaying.title}|${nowPlaying.historyRevision ?? ''}`
+              }
               onResume={handleResume}
               onBack={goBack}
             />

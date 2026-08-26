@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react'
+import { act, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ProfileScreen } from './ProfileScreen'
@@ -226,5 +226,72 @@ describe('continuar assistindo diz DE ONDE continuar', () => {
 
     await screen.findByText('Loki')
     expect(container.querySelector('.continuar-card__episodio')).toBeNull()
+  })
+
+  it('recarrega ao voltar para a aba', async () => {
+    // Medido em 25/08/2026: a tela buscava uma vez e nunca mais. Um episódio
+    // inteiro depois, o cartão ainda anunciava a posição do anterior — e nada
+    // dizia que aquilo era um retrato velho.
+    responder([{
+      titulo: 'A Casa do Dragão',
+      platform: 'MAX',
+      segundos: 4700,
+      posicao: 2058,
+      duracao: 4928,
+      posterUrl: null,
+    }])
+    const chamadas = () => (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls
+      .filter(([url]) => String(url).endsWith('/profile')).length
+
+    renderizar()
+    await screen.findByText('A Casa do Dragão')
+    const antes = chamadas()
+
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'))
+    })
+
+    expect(chamadas()).toBeGreaterThan(antes)
+  })
+
+  it('não mostra tempo de episódio sem dizer QUAL episódio', async () => {
+    // Medido em 25/08/2026: o cartão do Invincible anunciava "37:08 de 48:41"
+    // enquanto a pessoa assistia outro episódio. Os números descreviam a última
+    // reprodução gravada; a frase montada com eles é que era falsa.
+    responder([{
+      titulo: 'INVINCIBLE',
+      platform: 'PRIME_VIDEO',
+      segundos: 6890,
+      posicao: null,
+      duracao: null,
+      posicaoDoEpisodio: 2228,
+      duracaoDoEpisodio: 2921,
+      episodio: null,
+      posterUrl: null,
+    }])
+
+    renderizar()
+
+    expect(await screen.findByText('INVINCIBLE')).toBeTruthy()
+    expect(screen.queryByText(/37:08/)).toBeNull()
+  })
+
+  it('mostra o tempo quando o episódio tem nome', async () => {
+    // O par: com o episódio identificado, os números têm dono e valem.
+    responder([{
+      titulo: 'INVINCIBLE',
+      platform: 'PRIME_VIDEO',
+      segundos: 6890,
+      posicao: null,
+      duracao: null,
+      posicaoDoEpisodio: 2228,
+      duracaoDoEpisodio: 2921,
+      episodio: 'T1 E4',
+      posterUrl: null,
+    }])
+
+    renderizar()
+
+    expect(await screen.findByText('T1 E4 · 37:08 de 48:41')).toBeTruthy()
   })
 })

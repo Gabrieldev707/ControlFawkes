@@ -72,6 +72,33 @@ export function NowPlayingCard({
     ? PLATFORM_BRANDS[session.platform].logo
     : null
   const { positionSeconds, durationSeconds, playing } = session
+
+  // O estado otimista do play/pause.
+  //
+  // O ícone desenhava `session.playing` puro, e esse booleano vem da API de
+  // mídia do Windows — que na Netflix está congelada, e no caminho de socorro
+  // `da_janela` é `True` chumbado. Nos dois casos ele NUNCA vira `false`.
+  // Medido pelo usuário em 25/08/2026: "quando eu aperto botão de pause ele
+  // não muda pro play". O ícone era fisicamente incapaz de mudar.
+  //
+  // O palpite vale até o servidor contradizer. Ele não expira sozinho de
+  // propósito: na Netflix o servidor pode nunca confirmar, e reverter por
+  // silêncio traria de volta exatamente o ícone errado que isto conserta.
+  // Comando que falha de verdade já aparece em `RemoteStatusText`, que é onde
+  // um erro deve aparecer.
+  const [otimista, setOtimista] = useState<boolean | null>(null)
+  const servidorRef = useRef(playing)
+  useEffect(() => {
+    if (playing === servidorRef.current) return
+    // O servidor mudou de ideia: ele manda, e o palpite sai de cena.
+    servidorRef.current = playing
+    setOtimista(null)
+  }, [playing])
+  // Uma sessão nova zera o palpite: ele era sobre a reprodução anterior.
+  useEffect(() => {
+    setOtimista(null)
+  }, [session.title])
+  const tocando = otimista ?? playing
   // O servidor avisa quando o número que mandou é desta reprodução mas parou de
   // ser atualizado pelo site. Antes ele não avisava: mandava `null`, e a
   // minutagem sumia inteira no meio do filme. Agora o número continua na tela —
@@ -86,13 +113,13 @@ export function NowPlayingCard({
   }, [positionSeconds])
 
   useEffect(() => {
-    if (!playing || positionSeconds === null || travada) return
+    if (!tocando || positionSeconds === null || travada) return
     const timer = window.setInterval(() => {
       const { posicao, em } = ancoraRef.current
       setDecorrido(posicao + (Date.now() - em) / 1000)
     }, 500)
     return () => window.clearInterval(timer)
-  }, [playing, positionSeconds, travada])
+  }, [tocando, positionSeconds, travada])
 
   // Quatro combinações possíveis, e cada uma merece uma resposta diferente.
   // Antes só existia "tem duração": sem ela a minutagem sumia inteira, mesmo
@@ -121,13 +148,13 @@ export function NowPlayingCard({
         ) : logo !== null ? (
           <img className="now-playing__logo" src={logo} alt="" />
         ) : (
-          <Disc3 size={22} className={playing ? 'now-playing__spin' : undefined} />
+          <Disc3 size={22} className={tocando ? 'now-playing__spin' : undefined} />
         )}
       </div>
 
       <div className="now-playing__body">
         <p className="now-playing__eyebrow">
-          {playing ? 'Tocando agora' : 'Pausado'}
+          {tocando ? 'Tocando agora' : 'Pausado'}
           {nomeDoServico(session) !== null ? ` · ${nomeDoServico(session)}` : ''}
         </p>
         <p className="now-playing__title" title={session.title}>{session.title}</p>
@@ -188,10 +215,15 @@ export function NowPlayingCard({
         <button
           type="button"
           className="now-playing__toggle"
-          aria-label={playing ? 'Pausar' : 'Continuar'}
-          onClick={onTogglePlay}
+          aria-label={tocando ? 'Pausar' : 'Continuar'}
+          onClick={() => {
+            // O palpite entra ANTES do comando sair: o toque tem de responder
+            // agora, e não daqui a uma volta do laço do servidor.
+            setOtimista(!tocando)
+            onTogglePlay()
+          }}
         >
-          {playing
+          {tocando
             ? <Pause size={17} aria-hidden="true" fill="currentColor" />
             : <Play size={17} aria-hidden="true" fill="currentColor" />}
         </button>

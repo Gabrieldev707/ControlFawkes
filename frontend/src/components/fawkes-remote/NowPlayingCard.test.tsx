@@ -370,4 +370,84 @@ describe('quando o nome lido não é o da obra', () => {
     expect(screen.getByText('Duna')).toBeTruthy()
     expect(screen.queryByText('Episódio · série não identificada')).toBeNull()
   })
+
+  it('vira o ícone assim que o dedo sai, sem esperar o servidor', () => {
+    // Medido em 25/08/2026: na Netflix o `playing` do servidor nunca vira
+    // false — a API de mídia do Windows congela e o socorro pela janela manda
+    // `true` chumbado. O ícone ficava em "Pausar" para sempre.
+    const onTogglePlay = vi.fn()
+    render(
+      <NowPlayingCard
+        session={{ ...sessao, playing: true }}
+        apiBaseUrl="http://192.168.0.1:8100"
+        credentials={null}
+        onTogglePlay={onTogglePlay}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Pausar' }))
+
+    expect(onTogglePlay).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('button', { name: 'Continuar' })).toBeTruthy()
+    expect(screen.getByText(/Pausado/)).toBeTruthy()
+  })
+
+  it('o servidor manda: quando ele contradiz, o palpite sai', () => {
+    const { rerender } = render(
+      <NowPlayingCard
+        session={{ ...sessao, playing: true }}
+        apiBaseUrl="http://192.168.0.1:8100"
+        credentials={null}
+        onTogglePlay={vi.fn()}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Pausar' }))
+    expect(screen.getByRole('button', { name: 'Continuar' })).toBeTruthy()
+
+    // O servidor responde que continua tocando: ele é a autoridade.
+    rerender(
+      <NowPlayingCard
+        session={{ ...sessao, playing: false }}
+        apiBaseUrl="http://192.168.0.1:8100"
+        credentials={null}
+        onTogglePlay={vi.fn()}
+      />,
+    )
+    rerender(
+      <NowPlayingCard
+        session={{ ...sessao, playing: true }}
+        apiBaseUrl="http://192.168.0.1:8100"
+        credentials={null}
+        onTogglePlay={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: 'Pausar' })).toBeTruthy()
+  })
+
+  it('o palpite não atravessa a troca de obra', () => {
+    const { rerender } = render(
+      <NowPlayingCard
+        session={{ ...sessao, playing: true }}
+        apiBaseUrl="http://192.168.0.1:8100"
+        credentials={null}
+        onTogglePlay={vi.fn()}
+      />,
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Pausar' }))
+    expect(screen.getByRole('button', { name: 'Continuar' })).toBeTruthy()
+
+    rerender(
+      <NowPlayingCard
+        session={{ ...sessao, title: 'Outra obra', playing: true }}
+        apiBaseUrl="http://192.168.0.1:8100"
+        credentials={null}
+        onTogglePlay={vi.fn()}
+      />,
+    )
+
+    expect(screen.getByRole('button', { name: 'Pausar' })).toBeTruthy()
+  })
 })

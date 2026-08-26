@@ -154,19 +154,20 @@ describe('PlatformChoice com catálogo', () => {
       })
     }
 
-    it('mostra os dois tipos e começa pelo melhor resultado', () => {
+    it('começa pelo melhor resultado e oferece o outro na lista', () => {
+      // O botão binário virou lista quando a busca passou a devolver oito
+      // resultados. A intenção do caso original continua: as duas leituras de
+      // "O Justiceiro" precisam estar alcançáveis, e a melhor vem primeiro.
       renderDuplo()
 
-      const escolha = screen.getByRole('group', { name: 'Filme ou série' })
-      expect(within(escolha).getByRole('button', { name: 'Filme' })).toBeTruthy()
-      expect(within(escolha).getByRole('button', { name: 'Série' })).toBeTruthy()
       expect(screen.getByRole('heading', { level: 3 }).textContent).toBe('O Justiceiro (2004)')
+      expect(screen.getByText(/Marvel - O Justiceiro/)).toBeTruthy()
     })
 
-    it('troca o título e a plataforma ao escolher o outro tipo', () => {
+    it('troca o título e a plataforma ao escolher outro resultado', () => {
       renderDuplo()
 
-      fireEvent.click(screen.getByRole('button', { name: 'Série' }))
+      fireEvent.click(screen.getByText(/Marvel - O Justiceiro/))
 
       expect(screen.getByRole('heading', { level: 3 }).textContent)
         .toBe('Marvel - O Justiceiro (2017)')
@@ -176,10 +177,36 @@ describe('PlatformChoice com catálogo', () => {
       expect(screen.queryByRole('button', { name: 'Assistir no Max' })).toBeNull()
     })
 
+    it('a lista diz onde assistir cada opção', () => {
+      // Sem isto a pessoa teria de abrir um por um para descobrir onde está —
+      // e é justamente essa informação que decide o toque.
+      renderDuplo()
+
+      expect(screen.getByText(/Série · Disney\+/)).toBeTruthy()
+    })
+
     it('não oferece escolha nenhuma quando só existe uma leitura', () => {
       renderChoice({ availability: { ...filme, platforms: [...filme.platforms] } })
 
-      expect(screen.queryByRole('group', { name: 'Filme ou série' })).toBeNull()
+      expect(screen.queryByText('Não é esse?')).toBeNull()
+    })
+
+    it('mostra todos os resultados quando o servidor manda a lista', () => {
+      // Medido em 25/08/2026: "capitão américa" tinha os quatro filmes da
+      // Marvel entre os resultados e a tela mostrava dois.
+      const opcoes = [1, 2, 3, 4, 5].map((i) => ({
+        title: `Opção ${i}`,
+        year: 2000 + i,
+        posterUrl: null,
+        platforms: ['MAX' as const],
+        kind: 'MOVIE' as const,
+      }))
+      renderChoice({ availability: opcoes[0], availabilityOptions: opcoes })
+
+      expect(screen.getByRole('heading', { level: 3 }).textContent).toBe('Opção 1 (2001)')
+      for (const i of [2, 3, 4, 5]) {
+        expect(screen.getByText(new RegExp(`Opção ${i}`))).toBeTruthy()
+      }
     })
   })
 })

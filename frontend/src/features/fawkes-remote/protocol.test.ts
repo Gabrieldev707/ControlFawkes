@@ -526,6 +526,35 @@ describe('NOW_PLAYING — o cartão de tocando agora', () => {
     expect(isServerMessage(mensagem({ positionStale: 'sim' }))).toBe(false)
   })
 
+  // ── A revisão do histórico ──────────────────────────────────────────────
+  //
+  // Um contador que o servidor incrementa a cada gravação. O celular não usa o
+  // valor: quando ele MUDA, a tela de "continuar assistindo" recarrega. Antes
+  // ela dependia de um relógio de sessenta segundos e de o título mudar — e
+  // quem começa a assistir não muda o título, então a linha nova levava até
+  // dois minutos e meio para aparecer.
+
+  it('aceita a revisão do histórico', () => {
+    expect(isServerMessage(mensagem({ historyRevision: 7 }))).toBe(true)
+  })
+
+  it('aceita zero, que é o servidor recém-iniciado', () => {
+    expect(isServerMessage(mensagem({ historyRevision: 0 }))).toBe(true)
+  })
+
+  it('aceita a sessão SEM a revisão, que é como um servidor anterior responde', () => {
+    expect(isServerMessage(mensagem({}))).toBe(true)
+  })
+
+  it.each([['texto', 'sim'], ['fracionado', 1.5], ['negativo', -1], ['NaN', Number.NaN]])(
+    'recusa uma revisão %s',
+    (_nome, valor) => {
+      // Um NaN passaria por qualquer comparação e a tela pararia de recarregar
+      // para sempre, sem nada acusar.
+      expect(isServerMessage(mensagem({ historyRevision: valor }))).toBe(false)
+    },
+  )
+
   it('aceita "nada tocando", que precisa chegar para o cartão sumir', () => {
     expect(isServerMessage({
       protocolVersion: 1, type: 'NOW_PLAYING', session: null,

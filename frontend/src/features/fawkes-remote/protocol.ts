@@ -176,7 +176,7 @@ function isNowPlayingSession(value: unknown): boolean {
       // lista, então um campo novo no backend que não passe por aqui derruba a
       // mensagem INTEIRA — e o cartão fica em "nada tocando" para sempre, sem
       // erro nenhum na tela nem no log. Foi o que aconteceu com `episode`.
-      ['posterUrl', 'episode', 'positionStale', 'titleIsWork'],
+      ['posterUrl', 'episode', 'positionStale', 'titleIsWork', 'historyRevision'],
     )
     && (
       value.positionStale === undefined
@@ -185,6 +185,13 @@ function isNowPlayingSession(value: unknown): boolean {
     && (
       value.titleIsWork === undefined
       || typeof value.titleIsWork === 'boolean'
+    )
+    // Um contador, e por isso um inteiro não-negativo. Só o "mudou" é usado,
+    // mas aceitar qualquer coisa aqui deixaria um NaN entrar e a comparação
+    // nunca mais bater — a tela pararia de recarregar sem nada acusar.
+    && (
+      value.historyRevision === undefined
+      || (Number.isInteger(value.historyRevision) && (value.historyRevision as number) >= 0)
     )
     // O pôster vira o `src` de uma imagem: aceitar qualquer texto deixaria um
     // `javascript:` entrar na página.
@@ -287,10 +294,14 @@ export function isServerMessage(value: unknown): value is ServerMessage {
       return hasOnlyKeys(
         value,
         ['protocolVersion', 'type', 'requestId', 'query', 'suggestedPlatforms'],
-        ['openOnlyPlatforms', 'availability', 'availabilityAlternative'],
+        ['openOnlyPlatforms', 'availability', 'availabilityAlternative',
+          'availabilityOptions'],
       )
         && isAvailability(value.availability)
         && isAvailability(value.availabilityAlternative)
+        && (value.availabilityOptions === undefined
+          || (Array.isArray(value.availabilityOptions)
+            && value.availabilityOptions.every(isAvailability)))
         && isRequestId(value.requestId)
         && typeof value.query === 'string'
         && value.query.length > 0
