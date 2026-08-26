@@ -66,6 +66,15 @@ DERIVA_MAXIMA_SEGUNDOS = 600.0
 # Meio segundo cobre isso sem deixar passar leitura de outra reprodução.
 FOLGA_NO_FIM = 0.5
 
+# Teto de texto vindo do adapter. Um nome de obra não tem 500 caracteres; um
+# `textContent` de DOM hostil tem. Corta em vez de recusar: o resto da mensagem
+# continua valendo, e um nome truncado ainda é melhor do que nenhum.
+LIMITE_DE_TEXTO = 300
+
+# Temporada e episódio não passam disto. Acima é ano, ou pedaço do nome que
+# virou número por acidente.
+LIMITE_DE_CONTAGEM = 999
+
 
 @dataclass(frozen=True)
 class Recusa:
@@ -93,6 +102,63 @@ class EventoDeMidia:
     audible: bool | None
     muted: bool | None
     timestamp: float
+    # Fase 10: o que só a página sabe. `None` quando o serviço não tem adapter
+    # — que é o caso de cinco dos seis, e não é falta: eles nomeiam a obra na
+    # janela. Ver `providers/netflix.js`.
+    workTitle: str | None = None
+    episodeTitle: str | None = None
+    seasonNumber: int | None = None
+    episodeNumber: int | None = None
+    #: A ordem em que a ABA emitiu esta mensagem. Fase 17.
+    #:
+    #: O content script já numerava (`seq: sequencia++` em `index.js`) e o
+    #: backend ignorava por completo — o campo existia e não era lido. Sem ele,
+    #: uma mensagem que chegasse fora de ordem rebobinava a posição em
+    #: silêncio: um `POSITION_SYNC` antigo sobrescrevendo um recente faz a
+    #: barra andar para trás sem nada ter acontecido na tela.
+    #:
+    #: Por SESSÃO, e não global: cada aba tem o seu contador, e comparar entre
+    #: abas não significa nada.
+    seq: int | None = None
+    #: Identidade de reprodução da própria página ("/watch/81234567").
+    pageId: str | None = None
+    # Fase 10 — o tempo que o `<video>` da página NÃO sabe.
+    #
+    # Existe porque num serviço o elemento de mídia pode ser cego para o
+    # próprio conteúdo. Medido no Disney+, no mesmo instante:
+    #
+    #     slider do player   146s de 3043s   ("2:26 of 50:43")
+    #     video.currentTime  50.8
+    #     video.duration     Infinity
+    #     video.seekable     [0, 62]
+    #
+    # O `seekable` inteiro cabia em 62 segundos, num episódio de cinquenta
+    # minutos: o `<video>` só conhece a janela DASH que está montando. A
+    # posição do Disney+ nunca esteve certa — não por regressão, mas porque a
+    # única fonte que existia era a errada.
+    #
+    # Campos SEPARADOS de `currentTime`/`duration`, e não substituindo-os: são
+    # outra fonte, com outra autoridade, e quem escolhe entre elas é o Merger.
+    # Sobrescrever aqui seria decidir autoridade dentro da validação.
+    adapterPosition: float | None = None
+    adapterDuration: float | None = None
+    #: O título da ABA, cru. Vale para TODO serviço, com ou sem adapter — a
+    #: janela do Chrome só publica o título da aba ativa, e a extensão vê o da
+    #: aba dela sempre.
+    documentTitle: str | None = None
+    # Fase 14 — telemetria de aba. `active`, `windowFocused` e `tabMuted` vêm do
+    # `sender` no service worker, que é o Chrome falando; `pictureInPicture`,
+    # `visible` e os dois intervalos vêm da própria página.
+    active: bool | None = None
+    windowFocused: bool | None = None
+    tabMuted: bool | None = None
+    pictureInPicture: bool | None = None
+    visible: bool | None = None
+    #: Milissegundos desde o último `play` e desde qualquer evento de mídia.
+    #: Intervalo e não carimbo: o relógio da aba pode estar torto, e um
+    #: intervalo continua utilizável mesmo assim.
+    msDesdeUltimoPlay: float | None = None
+    msDesdeUltimoEvento: float | None = None
 
 
 def _numero(valor: object) -> float | None:
@@ -177,6 +243,29 @@ def validar(mensagem: object, agora: float) -> EventoDeMidia | Recusa:
             f"currentTime {posicao} além de duration {duracao}.",
         )
 
+    # O tempo do adapter, pelas MESMAS regras do tempo do elemento — e apurado
+    # em separado, porque as duas fontes podem discordar sem que nenhuma esteja
+    # com defeito. No Disney+ elas discordam sempre: 146 contra 50.8, no mesmo
+    # instante, e a certa é a do adapter.
+    duracao_do_adapter = _numero(payload.get("adapterDuration"))
+    if duracao_do_adapter is not None and duracao_do_adapter <= 0:
+        duracao_do_adapter = None
+
+    posicao_do_adapter = _numero(payload.get("adapterPosition"))
+    if posicao_do_adapter is not None and posicao_do_adapter < 0:
+        posicao_do_adapter = None
+    if (
+        posicao_do_adapter is not None
+        and duracao_do_adapter is not None
+        and posicao_do_adapter > duracao_do_adapter + FOLGA_NO_FIM
+    ):
+        # Aqui o par vira ausente em vez de recusar a mensagem inteira: o
+        # `currentTime` do elemento e a metadata continuam utilizáveis, e
+        # descartá-los junto deixaria o serviço sem cartão nenhum por causa de
+        # uma leitura de DOM ruim.
+        posicao_do_adapter = None
+        duracao_do_adapter = None
+
     ritmo = _numero(payload.get("playbackRate"))
     if ritmo is not None and not (RATE_MINIMO <= ritmo <= RATE_MAXIMO):
         ritmo = None
@@ -184,6 +273,43 @@ def validar(mensagem: object, agora: float) -> EventoDeMidia | Recusa:
     def booleano(nome: str) -> bool | None:
         valor = payload.get(nome)
         return valor if isinstance(valor, bool) else None
+
+    # A metadata do adapter é entrada como qualquer outra, e é validada como
+    # qualquer outra. Ela vem do DOM de um serviço que ninguém aqui controla:
+    # ser nossa a extensão não a torna confiável.
+    def texto(nome: str) -> str | None:
+        valor = payload.get(nome)
+        if not isinstance(valor, str):
+            return None
+        limpo = valor.strip()
+        # Vazio é ausente, e não uma obra chamada "". O teto existe porque um
+        # DOM hostil pode devolver um documento inteiro como `textContent`.
+        return limpo[:LIMITE_DE_TEXTO] if limpo else None
+
+    def intervalo(nome: str) -> float | None:
+        """Milissegundos desde alguma coisa. Negativo é relógio torto."""
+        valor = _numero(payload.get(nome))
+        return valor if valor is not None and valor >= 0 else None
+
+    def contagem_livre(nome: str) -> int | None:
+        """Um inteiro não-negativo, sem o teto de `contagem`.
+
+        A sequência da aba não é temporada nem episódio: ela cresce sem limite
+        enquanto a aba viver, e cortá-la em 999 faria toda mensagem depois da
+        milésima parecer ausente.
+        """
+        valor = payload.get(nome)
+        if isinstance(valor, bool) or not isinstance(valor, int):
+            return None
+        return valor if valor >= 0 else None
+
+    def contagem(nome: str) -> int | None:
+        valor = payload.get(nome)
+        if isinstance(valor, bool) or not isinstance(valor, int):
+            return None
+        # Zero não existe em nenhuma das duas contagens; número alto demais é
+        # ano ou pedaço do nome que virou número por acidente.
+        return valor if 1 <= valor <= LIMITE_DE_CONTAGEM else None
 
     return EventoDeMidia(
         messageType=tipo,
@@ -198,4 +324,20 @@ def validar(mensagem: object, agora: float) -> EventoDeMidia | Recusa:
         audible=booleano("audible"),
         muted=booleano("muted"),
         timestamp=marca_em_segundos,
+        workTitle=texto("workTitle"),
+        episodeTitle=texto("episodeTitle"),
+        seasonNumber=contagem("seasonNumber"),
+        episodeNumber=contagem("episodeNumber"),
+        pageId=texto("pageId"),
+        seq=contagem_livre("seq"),
+        adapterPosition=posicao_do_adapter,
+        adapterDuration=duracao_do_adapter,
+        documentTitle=texto("documentTitle"),
+        active=booleano("active"),
+        windowFocused=booleano("windowFocused"),
+        tabMuted=booleano("tabMuted"),
+        pictureInPicture=booleano("pictureInPicture"),
+        visible=booleano("visible"),
+        msDesdeUltimoPlay=intervalo("msDesdeUltimoPlay"),
+        msDesdeUltimoEvento=intervalo("msDesdeUltimoEvento"),
     )

@@ -128,9 +128,49 @@ def _pagina_do_servico(window: DesktopWindow) -> bool:
     return _titulo_generico(limpo, None, platform_of(window))
 
 
+# Onde um serviço de streaming PODE estar. Fora daqui, o nome dele num título
+# de janela é assunto, não reprodução.
+#
+# Medido em 25/08/2026, no `historico.json` deste computador:
+#
+#     NETFLIX::netflix problemas de int... - fawkes-control - visual studio code
+#
+# É a janela do VS Code. O título tinha a palavra "netflix" — um arquivo aberto
+# sobre o assunto — e o padrão casava em qualquer janela, sem perguntar de quem
+# ela era. O estrago não parou no histórico: como esse título PARECE um nome de
+# obra, `media_window` o preferia à aba de verdade, e o cartão anunciava o
+# editor de código como o que estava tocando.
+#
+# E não é só o editor. Qualquer janela com o nome de um serviço no título entra:
+# um bloco de notas, um cliente de e-mail, uma pasta chamada "Netflix" no
+# Explorer, esta própria conversa aberta num terminal.
+#
+# A regra que fecha isso não é uma lista de exceções — seria uma corrida
+# perdida, e faltaria sempre uma. É a inversa: um serviço de navegador só existe
+# DENTRO de um navegador. O Spotify já era identificado pelo processo dele
+# próprio, e este é o mesmo princípio aplicado ao resto.
+NAVEGADORES: frozenset[str] = frozenset({
+    "chrome.exe",
+    "msedge.exe",
+    "firefox.exe",
+    "brave.exe",
+    "opera.exe",
+    "vivaldi.exe",
+    "arc.exe",
+})
+
+
 def platform_of(window: DesktopWindow) -> Platform | None:
     if window.process == PLATFORM_PROCESSES["SPOTIFY"]:
         return "SPOTIFY"
+
+    # Processo desconhecido (string vazia) NÃO é motivo para recusar: a
+    # consulta pode falhar por permissão, e recusar aí calaria uma janela
+    # legítima. O que se recusa é o processo conhecido que não é navegador —
+    # aí a resposta não é "não sei", é "não é".
+    if window.process and window.process.lower() not in NAVEGADORES:
+        return None
+
     title = _normalize(window.title)
     for platform, pattern in PLATFORM_TITLE_PATTERNS:
         if pattern.search(title):
@@ -148,13 +188,21 @@ class WindowFocuser:
         A janela do próprio controle é ignorada: com a página aberta no
         computador, o título "Control Fawkes" nunca pode ser confundido com uma
         plataforma, e focá-la roubaria o foco de quem está assistindo.
+
+        MESMO seletor que `media_window`, e é aí que estava o defeito. Este
+        método escolhia "a primeira da ordem do `EnumWindows`" enquanto o
+        cartão de "tocando agora" usava `media_window`, que prefere a janela
+        que NOMEIA alguma coisa. Dois seletores diferentes para a mesma
+        pergunta — e a ordem do `EnumWindows` é a ordem Z, que muda toda vez
+        que alguma coisa ganha o foco.
+
+        O sintoma medido: apertar "tela cheia" foca uma janela, a ordem Z vira,
+        e o play/pause seguinte mandava o `SPACE` para OUTRA aba do mesmo
+        serviço. Sem erro nenhum, porque a tecla foi enviada de verdade — só
+        não para onde o cartão dizia que estava tocando. "Funciona e depois não
+        funciona mais" é isso, e não é intermitência: é o desempate mudando.
         """
-        for window in self._list_windows():
-            if "control fawkes" in _normalize(window.title):
-                continue
-            if platform_of(window) == platform:
-                return window
-        return None
+        return self.media_window(platform)
 
     def focus(self, window: DesktopWindow) -> bool:
         """Traz a janela para frente.
@@ -215,6 +263,12 @@ class WindowFocuser:
             janela for janela in self._list_windows()
             if platform_of(janela) is not None
             and (platform is None or platform_of(janela) == platform)
+            # A janela do próprio controle nunca é candidata. `find` já a
+            # excluía e `media_window` não — e agora que os dois são o mesmo
+            # seletor, a exclusão precisa valer para os dois. Sem isto, a
+            # página do controle aberta no computador podia virar o alvo do
+            # play/pause, roubando o foco de quem está assistindo.
+            and "control fawkes" not in _normalize(janela.title)
         ]
         for janela in candidatas:
             if not _pagina_do_servico(janela):

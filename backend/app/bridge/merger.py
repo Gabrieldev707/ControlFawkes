@@ -67,9 +67,28 @@ from app.bridge.contratos import Fonte, MediaField, SessaoCanonica
 # inteira vence" deixa de ser uma regra que alguém precisa lembrar e passa a ser
 # uma coisa que a estrutura não permite escrever.
 FIELD_AUTHORITY: dict[str, tuple[Fonte, ...]] = {
-    # Tempo e estado técnico: o elemento da página é quem está lá.
-    "currentTime": ("html-media-element", "smtc"),
-    "duration": ("html-media-element", "smtc"),
+    # Tempo: o adapter primeiro, o elemento depois.
+    #
+    # A ordem era `html-media-element` na frente, com o argumento de que "o
+    # elemento da página é quem está lá". Ele está — e num serviço pode estar
+    # lá sem saber onde está. Medido no Disney+, no mesmo instante:
+    #
+    #     slider do player   146s de 3043s   ("2:26 of 50:43")
+    #     video.currentTime  50.8
+    #     video.duration     Infinity
+    #     video.seekable     [0, 62]
+    #
+    # O elemento reporta a janela DASH que está montando, não o episódio, e o
+    # `seekable` inteiro cabia em 62 segundos num episódio de cinquenta
+    # minutos. O adapter lê o número que o próprio player desenha na tela.
+    #
+    # A troca é segura porque `provider-adapter` só declara tempo quando
+    # SABE — nos serviços cujo `<video>` já responde, ele não declara nada e a
+    # ordem não muda nada. E declarar velho não passa: tempo é campo dinâmico,
+    # e `dinamicos_frescos` derruba o adapter parado antes de ele vencer.
+    "currentTime": ("provider-adapter", "html-media-element", "smtc"),
+    "duration": ("provider-adapter", "html-media-element", "smtc"),
+    # Estado técnico continua com o elemento: `paused` ele sabe de si.
     "playbackState": ("html-media-element", "smtc"),
     "playbackRate": ("html-media-element", "smtc"),
     "audible": ("html-media-element", "smtc"),
