@@ -9,7 +9,12 @@ from fastapi.testclient import TestClient
 
 from app.api import websocket as websocket_module
 from app.history.recorder import SEGUNDOS_ENTRE_GRAVACOES, HistoryRecorder
-from app.history.store import MAXIMO_DE_ITENS, Assistido, HistoryStore
+from app.history.store import (
+    MAXIMO_DE_ITENS,
+    SEGUNDOS_PARA_CONTAR,
+    Assistido,
+    HistoryStore,
+)
 from app.main import app
 from app.media.now_playing import NowPlaying
 
@@ -349,10 +354,16 @@ def test_what_the_catalog_discovers_is_not_lost_on_the_next_update(store: Histor
 
 
 def test_passing_through_a_title_does_not_enter_the_history(store: HistoryStore):
-    """Trinta segundos é procurar, não assistir."""
+    """Abrir e fechar não é assistir.
+
+    Preso a `SEGUNDOS_PARA_CONTAR` e não a um número escrito à mão: o piso já
+    mudou de 90 para 30 quando os adapters passaram a barrar prévia de catálogo
+    por CAMINHO em vez de por relógio, e um literal aqui teria falhado sem
+    dizer nada sobre a regra — só sobre o valor.
+    """
     gravador = HistoryRecorder(store)
 
-    for _ in range(30):
+    for _ in range(int(SEGUNDOS_PARA_CONTAR) - 5):
         gravador.observar(tocando("Trailer qualquer"), 1.0)
     gravador.encerrar()
 
@@ -494,8 +505,17 @@ def test_the_history_is_recorded_even_with_no_phone_connected(store: HistoryStor
     from unittest.mock import AsyncMock
 
     from app.protocol.dispatcher import Dispatcher
+    from app.windows.focus import WindowFocuser
 
-    dispatcher = Dispatcher(history_recorder=HistoryRecorder(store))
+    # Sem janela nenhuma no desktop, de propósito. Sem isto o teste consultava
+    # a Core Audio da máquina de verdade e passava ou falhava conforme houvesse
+    # som saindo na hora — e o que ele quer provar é sobre autenticação, não
+    # sobre áudio. Sem janela não há processo a quem perguntar, a política da
+    # Fase 9 fica INDETERMINADO, e INDETERMINADO conta.
+    dispatcher = Dispatcher(
+        history_recorder=HistoryRecorder(store),
+        window_focuser=WindowFocuser(window_lister=lambda: []),
+    )
     assert dispatcher._authenticated == {}
 
     leitura = tocando("Batman: Caped Crusader", "PRIME_VIDEO")
@@ -864,3 +884,154 @@ def test_the_old_serviceless_batman_line_absorbs_the_new_one(store: HistoryStore
     assert len(linhas) == 1
     assert linhas[0].platform == "PRIME_VIDEO"
     assert linhas[0].segundos == 4130
+
+
+# ── A revisão que a tela usa para saber que ficou desatualizada ───────────
+#
+# A tela de "continuar assistindo" recarregava por relógio de sessenta segundos
+# e por mudança de título. Assistindo o mesmo episódio, o título não muda —
+# então a linha nova levava os 90 segundos da gravação MAIS até 60 do relógio.
+#
+# Medido em 26/08/2026, com Gavião Arqueiro: a linha estava no disco às
+# 15:16:35, com temporada, episódio e posição certos, e a tela ainda mostrava o
+# estado anterior. Não era dado faltando; era a tela sem saber que devia olhar.
+
+class TestRevisaoDoHistorico:
+    def test_comeca_em_zero(self, store):
+        assert HistoryRecorder(store).revisao == 0
+
+    def test_uma_gravacao_incrementa(self, store):
+        gravador = HistoryRecorder(store)
+        for _ in range(200):
+            gravador.observar(tocando("Gavião Arqueiro", "DISNEY_PLUS"), 1.0, "ASSISTINDO")
+
+        assert gravador.revisao >= 1
+
+    def test_nao_incrementa_antes_de_a_obra_contar(self, store):
+        """Abaixo do mínimo nada é escrito, e nada há a avisar."""
+        gravador = HistoryRecorder(store)
+        for _ in range(int(SEGUNDOS_PARA_CONTAR) - 5):
+            gravador.observar(tocando("Gavião Arqueiro", "DISNEY_PLUS"), 1.0, "ASSISTINDO")
+
+        assert gravador.revisao == 0
+
+    def test_uma_gravacao_que_falha_NAO_incrementa(self, store, monkeypatch):
+        """Avisar de uma escrita que falhou faria a tela buscar o que não está lá."""
+        gravador = HistoryRecorder(store)
+
+        def explodir(**_):
+            raise OSError("disco cheio")
+
+        monkeypatch.setattr(gravador.store, "registrar", explodir)
+        for _ in range(200):
+            gravador.observar(tocando("Gavião Arqueiro", "DISNEY_PLUS"), 1.0, "ASSISTINDO")
+
+        assert gravador.revisao == 0
+
+    def test_so_cresce(self, store):
+        """A tela compara com o valor anterior: um número que volta a cair
+        faria duas gravações diferentes parecerem a mesma."""
+        gravador = HistoryRecorder(store)
+        vistos = []
+        for _ in range(600):
+            gravador.observar(tocando("Gavião Arqueiro", "DISNEY_PLUS"), 1.0, "ASSISTINDO")
+            vistos.append(gravador.revisao)
+
+        assert vistos == sorted(vistos)
+        assert vistos[-1] > 0
+
+
+# ── O empacotamento que o serviço pendura no nome ─────────────────────────
+#
+# Medido em 26/08/2026, com o adapter do Prime recém-ligado:
+#
+#     "Batman: The Animated Series"            90s     ep="T3 E8"
+#     "Batman: The Animated Series: Volume 3"  9413s   ep=None
+#
+# A mesma série em duas linhas. A de baixo tem quase três horas — é tudo que
+# foi assistido antes de existir adapter, quando a única fonte era o
+# `document.title` e ele trazia o empacotamento da Amazon junto.
+#
+# `consolidar` não alcança: ela reaplica a limpeza de título, e "Volume 3" não
+# é ruído de navegador — é texto que a Amazon põe no nome da obra.
+
+class TestUnificarEmpacotamento:
+    def test_o_volume_entra_na_serie(self, store: HistoryStore):
+        store.registrar("Batman: The Animated Series", "PRIME_VIDEO", 90, 258, 1334,
+                        agora=2, episodio="T3 E8 · Fire from Olympus")
+        store.registrar("Batman: The Animated Series: Volume 3", "PRIME_VIDEO",
+                        9413, 164, None, agora=1)
+
+        assert store.unificar_empacotamento() == 1
+
+        itens = store.listar()
+        assert [i.titulo for i in itens] == ["Batman: The Animated Series"]
+        # O tempo SOMA: é a mesma pessoa assistindo a mesma série, e a divisão
+        # em duas linhas foi acidente de nomenclatura.
+        assert itens[0].segundos == pytest.approx(9503.0)
+        assert itens[0].episodio == "T3 E8 · Fire from Olympus"
+
+    def test_KILL_BILL_sobrevive(self, store: HistoryStore):
+        """A regressão proibida, e ela tem nome.
+
+        Cortar ": Volume N" de todo mundo somaria dois filmes diferentes numa
+        linha só, em silêncio. Só que aqui não existe linha "Kill Bill" com
+        episódio — filme não tem episódio —, então nada casa.
+        """
+        store.registrar("Kill Bill: Volume 1", "NETFLIX", 6000, 100, 6000, agora=1)
+        store.registrar("Kill Bill: Volume 2", "NETFLIX", 7000, 200, 7000, agora=2)
+
+        assert store.unificar_empacotamento() == 0
+        assert len(store.listar()) == 2
+
+    def test_a_base_precisa_ser_SERIE(self, store: HistoryStore):
+        """Uma linha de base sem episódio não recebe nada.
+
+        Sem esta condição, "Kill Bill" e "Kill Bill: Volume 1" no mesmo serviço
+        virariam uma linha só — e são obras diferentes.
+        """
+        store.registrar("Kill Bill", "NETFLIX", 500, None, None, agora=1)
+        store.registrar("Kill Bill: Volume 1", "NETFLIX", 6000, 100, 6000, agora=2)
+
+        assert store.unificar_empacotamento() == 0
+        assert len(store.listar()) == 2
+
+    def test_servicos_diferentes_nao_se_juntam(self, store: HistoryStore):
+        """"O Justiceiro" é filme no Max e série no Disney+: obras diferentes."""
+        store.registrar("Alguma Série", "PRIME_VIDEO", 90, 10, 100, agora=2,
+                        episodio="T1 E1")
+        store.registrar("Alguma Série: Volume 2", "NETFLIX", 500, 10, 100, agora=1)
+
+        assert store.unificar_empacotamento() == 0
+        assert len(store.listar()) == 2
+
+    @pytest.mark.parametrize("sufixo", [
+        ": Volume 3", ": Vol. 2", " - Season 4", ": Temporada 2", ": VOLUME 10",
+    ])
+    def test_as_grafias_do_empacotamento(self, store: HistoryStore, sufixo: str):
+        store.registrar("Uma Série", "PRIME_VIDEO", 90, 10, 100, agora=2,
+                        episodio="T1 E1")
+        store.registrar(f"Uma Série{sufixo}", "PRIME_VIDEO", 500, 10, 100, agora=1)
+
+        assert store.unificar_empacotamento() == 1
+        assert [i.titulo for i in store.listar()] == ["Uma Série"]
+
+    def test_PARTE_nao_e_empacotamento(self, store: HistoryStore):
+        """"Duna: Parte Dois" é o nome do filme.
+
+        A lista curta é o que impede a regra de crescer para cima de casos que
+        ninguém mediu.
+        """
+        store.registrar("Duna", "MAX", 90, 10, 100, agora=2, episodio="T1 E1")
+        store.registrar("Duna: Parte 2", "MAX", 8000, 10, 9000, agora=1)
+
+        assert store.unificar_empacotamento() == 0
+
+    def test_sem_nada_a_fundir_nao_reescreve(self, store: HistoryStore):
+        store.registrar("Duna", "MAX", 8000, 10, 9000, agora=1)
+
+        assert store.unificar_empacotamento() == 0
+        assert [i.titulo for i in store.listar()] == ["Duna"]
+
+    def test_historico_vazio(self, store: HistoryStore):
+        assert store.unificar_empacotamento() == 0

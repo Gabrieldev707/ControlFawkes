@@ -142,6 +142,102 @@ def test_the_focuser_can_name_the_media_window():
     assert focuser.media_window_title() == "Duna - Netflix - Google Chrome"
 
 
+def test_o_editor_de_codigo_nunca_e_um_servico():
+    """Medido em 25/08/2026, no `historico.json` real deste computador:
+
+        NETFLIX::netflix problemas de int... - fawkes-control - visual studio code
+
+    A janela do VS Code, com "netflix" no título porque havia um arquivo aberto
+    sobre o assunto. O padrão casava em qualquer janela; e como esse título
+    PARECE um nome de obra, `media_window` ainda o preferia à aba de verdade —
+    o cartão anunciava o editor como o que estava tocando, e o play/pause mirava
+    nele.
+    """
+    from app.windows.focus import DesktopWindow, WindowFocuser, platform_of
+
+    editor = DesktopWindow(
+        handle=1,
+        process="code.exe",
+        title="netflix problemas de int... - Fawkes-Control - Visual Studio Code",
+    )
+    assert platform_of(editor) is None
+
+    aba = DesktopWindow(handle=2, process="chrome.exe", title="Duna - Netflix")
+    focuser = WindowFocuser(window_lister=lambda: [editor, aba])
+    assert focuser.media_window("NETFLIX") == aba
+    # E o botão mira no mesmo lugar que o cartão mostra.
+    assert focuser.find("NETFLIX") == aba
+
+
+def test_so_o_editor_aberto_nao_inventa_servico_nenhum():
+    """O par: sem aba de verdade, a resposta é "nada", e não "o editor"."""
+    from app.windows.focus import DesktopWindow, WindowFocuser
+
+    focuser = WindowFocuser(window_lister=lambda: [
+        DesktopWindow(handle=1, process="code.exe", title="netflix.md - Visual Studio Code"),
+    ])
+
+    assert focuser.media_window("NETFLIX") is None
+    assert focuser.find("NETFLIX") is None
+
+
+def test_processo_desconhecido_nao_e_motivo_para_recusar():
+    """A consulta do processo pode falhar por permissão e devolver "".
+
+    Recusar aí calaria uma janela legítima. O que se recusa é o processo
+    CONHECIDO que não é navegador — aí não é "não sei", é "não é".
+    """
+    from app.windows.focus import DesktopWindow, platform_of
+
+    assert platform_of(DesktopWindow(handle=1, process="", title="Duna - Netflix")) == "NETFLIX"
+
+
+def test_o_spotify_continua_pelo_processo_dele():
+    """Regressão proibida do Master Loop: o Spotify não é navegador."""
+    from app.windows.focus import DesktopWindow, platform_of
+
+    janela = DesktopWindow(handle=1, process="spotify.exe", title="Artista - Música")
+    assert platform_of(janela) == "SPOTIFY"
+
+
+def test_sem_winsdk_a_janela_ainda_socorre(monkeypatch):
+    """A SMTC AUSENTE é o mesmo caso da SMTC pendurada, e o código só conhecia um.
+
+    Medido em 25/08/2026: o servidor subiu pelo Python do sistema, sem `winsdk`
+    instalado. `read()` devolvia None na hora — o ImportError é engolido de
+    propósito — então a chamada nunca chegava a pendurar e `travada` ficava
+    False. O socorro pela janela exigia `travada`, não entrava, e o resultado
+    era "nada tocando" para sempre: nenhum cartão, nenhum histórico, nenhum
+    erro. Três reinícios não mudaram nada, porque não era o servidor.
+    """
+    import asyncio
+    from unittest.mock import AsyncMock
+
+    from app.protocol import dispatcher as modulo
+    from app.protocol.dispatcher import Dispatcher
+    from app.windows.focus import DesktopWindow, WindowFocuser
+
+    # Esta máquina TEM `winsdk` no venv; o caso a reproduzir é o de quem não tem.
+    monkeypatch.setattr(modulo, "smtc_disponivel", lambda: False)
+
+    janelas = [DesktopWindow(
+        handle=1, process="chrome.exe",
+        title="Duna - Netflix - Google Chrome",
+    )]
+    dispatcher = Dispatcher(window_focuser=WindowFocuser(window_lister=lambda: janelas))
+    # A SMTC não respondeu e NÃO está pendurada: ela simplesmente não existe.
+    dispatcher._leitura = AsyncMock()
+    dispatcher._leitura.ler = AsyncMock(return_value=None)
+    dispatcher._leitura.travada = False
+
+    mensagem = asyncio.run(dispatcher._read_now_playing())
+
+    # Fora do Windows (e num Windows sem `winsdk`) o socorro tem de entrar.
+    assert mensagem["session"] is not None
+    assert mensagem["session"]["title"] == "Duna"
+    assert mensagem["session"]["platform"] == "NETFLIX"
+
+
 def test_no_media_window_is_a_clean_none():
     from app.windows.focus import DesktopWindow, WindowFocuser
 
@@ -571,6 +667,64 @@ def test_the_media_window_is_the_one_naming_something():
     focuser = WindowFocuser(window_lister=lambda: janelas)
 
     assert focuser.media_window_title() == "Família Soprano • HBO Max"
+
+
+def test_find_and_the_card_choose_the_same_window():
+    """O botão e o cartão têm de falar da MESMA janela.
+
+    Medido pelo usuário em 25/08/2026: "botões em determinado streaming
+    funciona e depois não funciona mais". Não era intermitência — eram dois
+    seletores. `find` pegava a primeira da ordem do `EnumWindows` (que é a
+    ordem Z) e `media_window` pegava a que nomeia alguma coisa. Bastava algo
+    ganhar o foco para os dois discordarem, e o `SPACE` do play/pause ia para a
+    aba de catálogo enquanto o cartão mostrava o episódio da outra.
+    """
+    from app.windows.focus import DesktopWindow, WindowFocuser
+
+    janelas = [
+        DesktopWindow(handle=1, process="chrome.exe", title="Home - Netflix"),
+        DesktopWindow(handle=2, process="chrome.exe", title="Duna - Netflix"),
+    ]
+    focuser = WindowFocuser(window_lister=lambda: janelas)
+
+    assert focuser.find("NETFLIX") == focuser.media_window("NETFLIX")
+    assert focuser.find("NETFLIX").title == "Duna - Netflix"
+
+
+def test_the_window_choice_survives_the_z_order_changing():
+    """A ordem do `EnumWindows` muda quando algo ganha o foco; a escolha não.
+
+    É o mecanismo exato do "funciona e depois para": apertar tela cheia foca
+    uma janela, a ordem vira, e o comando seguinte mudava de alvo sozinho.
+    """
+    from app.windows.focus import DesktopWindow, WindowFocuser
+
+    catalogo = DesktopWindow(handle=1, process="chrome.exe", title="Home - Netflix")
+    tocando = DesktopWindow(handle=2, process="chrome.exe", title="Duna - Netflix")
+
+    antes = WindowFocuser(window_lister=lambda: [catalogo, tocando])
+    depois = WindowFocuser(window_lister=lambda: [tocando, catalogo])
+
+    assert antes.find("NETFLIX") == depois.find("NETFLIX") == tocando
+
+
+def test_the_control_page_is_never_the_target():
+    """A página do controle aberta no computador não pode virar alvo.
+
+    `find` já a excluía; `media_window` não. Agora que os dois são o mesmo
+    seletor, a exclusão vale para os dois — senão unificar teria dado à
+    `media_window` uma candidata que ela nunca teve.
+    """
+    from app.windows.focus import DesktopWindow, WindowFocuser
+
+    janelas = [
+        DesktopWindow(handle=1, process="chrome.exe", title="Control Fawkes - Netflix"),
+        DesktopWindow(handle=2, process="chrome.exe", title="Duna - Netflix"),
+    ]
+    focuser = WindowFocuser(window_lister=lambda: janelas)
+
+    assert focuser.find("NETFLIX").title == "Duna - Netflix"
+    assert focuser.media_window("NETFLIX").title == "Duna - Netflix"
 
 
 def test_the_media_window_can_be_asked_for_one_service():

@@ -23,6 +23,7 @@ import sys
 import time
 import unicodedata
 
+from app.media.identidade import separar_obra_e_episodio
 from app.schemas.ws import Platform
 
 
@@ -138,6 +139,15 @@ class NowPlaying:
     # A posição é desta reprodução, mas parou de ser atualizada. Continua
     # valendo para mostrar; não vale para avançar sozinha. Ver `RelogioDaMidia`.
     position_stale: bool = False
+    # O `<video>` disparou `ended`. Só a ponte sabe disso — a SMTC não publica
+    # "acabou", ela publica "pausado", que é o que um filme no meio também é.
+    # É a única evidência DIRETA de que uma reprodução terminou.
+    ended: bool = False
+    # Fase 11 — QUAL reprodução é esta, quando a página sabe dizer. Separado do
+    # título de propósito: o título identifica a OBRA e não muda entre
+    # episódios; isto muda a cada episódio e é o que autoriza (ou proíbe)
+    # herdar a posição de uma leitura para a seguinte.
+    playback_id: str | None = None
 
     @property
     def thumbnail_id(self) -> str | None:
@@ -193,7 +203,48 @@ def _sem_marca_de_travado(titulo: str) -> str:
     return titulo
 
 
+def _episodio_no_proprio_titulo(titulo: str) -> str | None:
+    """O episódio quando ele está DENTRO do título, e não em outra fonte.
+
+    `episodio_da_janela` responde ao caso de duas fontes dizendo coisas
+    diferentes — a SMTC nomeia a série, a janela nomeia o episódio. Ele exige
+    que a SMTC tenha nomeado, e por isso devolvia `None` sempre que o título
+    veio da própria janela.
+
+    Só que Prime Video e Disney+ publicam os dois no MESMO título:
+    "Invincible - S1 E4 - Neil Armstrong". Não há duas fontes para comparar;
+    há uma só, com tudo dentro. Ver `separar_obra_e_episodio`.
+    """
+    return obra_e_episodio_do_titulo(titulo)[1]
+
+
+def obra_e_episodio_do_titulo(titulo: str) -> tuple[str, str | None]:
+    """(obra, episódio) de um título de janela ou de aba.
+
+    As duas camadas em ordem, e a ordem importa:
+
+        1. tirar o RUÍDO — o navegador, o serviço, a contagem de notificações
+        2. separar a OBRA do EPISÓDIO, no que sobrou
+
+    Fazer a segunda antes da primeira contaminaria o nome do episódio com o
+    sufixo do serviço: "Demolidor: Renascido - T1 E5 - Com Sangue | Disney+"
+    daria "Com Sangue | Disney+". Fazer só a primeira é o que estava sendo
+    feito, e o marcador ficava dentro do nome da obra.
+    """
+    limpo = _limpar_o_ruido(titulo)
+    separado = separar_obra_e_episodio(limpo)
+    if separado is None:
+        return limpo.strip(" -–—|·") or titulo.strip(), None
+    obra, episodio = separado
+    return obra.strip(" -–—|·") or titulo.strip(), episodio
+
+
 def limpar_titulo_de_janela(titulo: str) -> str:
+    """Só a OBRA. Ver `obra_e_episodio_do_titulo` para as duas metades."""
+    return obra_e_episodio_do_titulo(titulo)[0]
+
+
+def _limpar_o_ruido(titulo: str) -> str:
     """Tira do título da janela o que é do navegador e do serviço.
 
     "(2) Nome do Episódio - Netflix - Google Chrome" vira "Nome do Episódio".
@@ -249,12 +300,52 @@ def limpar_titulo_de_janela(titulo: str) -> str:
                     limpo = sobra
                 break
 
-    # "- Season 1" e "- Temporada 2" dizem menos que o nome da série, e
-    # atrapalham a busca no catálogo.
-    limpo = re.sub(
-        r"\s*[-–—]\s*(season|temporada)\s*\d+\s*$", "", limpo, flags=re.IGNORECASE,
+    # "Obra: Season 2: Nome do Episódio" — a forma que a Netflix usa quando
+    # publica tudo no título da janela.
+    #
+    # Isto vem ANTES do corte no fim, porque aqui a temporada está no MEIO e
+    # aquele padrão só pega o fim. Sem este trecho a string inteira virava o
+    # nome da obra — e como a Netflix passou a ser fonte confiável para obra em
+    # 25/08/2026, isso significaria UMA LINHA DE HISTÓRICO POR EPISÓDIO. É o
+    # mesmo defeito do "sherlock season 2" (27175 segundos numa linha sem
+    # pôster), entrando por outra porta.
+    #
+    # Só corta quando um pedaço inteiro É a temporada. "Duna: Parte Dois" e
+    # "Batman: Caped Crusader" não têm pedaço assim e passam intactos — o que
+    # importa aqui é não transformar um subtítulo legítimo em outra obra.
+    pedacos = [p.strip() for p in limpo.split(":")]
+    if len(pedacos) >= 3:
+        so_temporada = re.compile(r"^(?:season|temporada)\s*\d{1,2}$", re.IGNORECASE)
+        sem_temporada = [p for p in pedacos if p and not so_temporada.match(p)]
+        if len(sem_temporada) < len([p for p in pedacos if p]) and sem_temporada:
+            # O primeiro pedaço é a obra; o resto é onde ela está.
+            limpo = sem_temporada[0]
+
+    # "Season 1" no fim diz menos que o nome da série, e atrapalha a busca no
+    # catálogo.
+    #
+    # O separador é OPCIONAL, e essa é a correção. A versão antiga exigia
+    # traço, e o Prime Video não usa traço. Medido no histórico real deste
+    # computador, em 23/08/2026:
+    #
+    #     PRIME_VIDEO::sherlock season 2   27175 segundos, posicao None
+    #
+    # Sete horas e meia de série numa linha só chamada "Sherlock Season 2" —
+    # que não é obra nenhuma, então o TMDB não achou pôster e a linha ficou
+    # sem capa. A janela dizia "Prime Video: Sherlock Season 2", sem traço
+    # nenhum, e o corte passava batido.
+    #
+    # Os dois-pontos entram junto porque é como a Netflix escreve
+    # ("Sherlock: Season 2"). O `\s+` depois do separador opcional é o que
+    # impede "Preseason 2" de virar "Pre".
+    sem_temporada = re.sub(
+        r"\s*[-–—:]?\s+(?:season|temporada)\s*\d+\s*$", "", limpo, flags=re.IGNORECASE,
     ).strip()
-    return limpo.strip(" -–—|·") or titulo.strip()
+    # Só corta se sobrar nome. "Temporada 2" sozinho continua como estava: é
+    # tudo o que a janela sabe dizer, e devolver vazio seria pior.
+    if sem_temporada:
+        limpo = sem_temporada
+    return limpo
 
 
 # Páginas do próprio serviço, não obras. O título da janela é o nome da PÁGINA
@@ -454,7 +545,7 @@ class WindowsNowPlayingReader:
             episode=(
                 episodio_da_janela(titulo, da_janela_limpo, app, plataforma)
                 if smtc_nomeia else None
-            ),
+            ) or _episodio_no_proprio_titulo(titulo),
             position_stale=parada,
         )
 
@@ -484,7 +575,8 @@ class WindowsNowPlayingReader:
 #   YouTube      "CHEGUEI NA SÍRIA …"                    o vídeo, que é a obra
 #   Disney+      "O Justiceiro | Disney+"                a obra
 #   Max          "⁨46 Long⁩ • HBO Max"                     o EPISÓDIO
-#   Netflix      "Netflix - Home - Netflix"              nada, nunca o conteúdo
+#   Netflix      "Spider-Man: Across the Spider-Verse    a obra — na página de
+#                 - Netflix - Google Chrome"             REPRODUÇÃO
 #
 # É o que decide se uma leitura sem a SMTC pode virar histórico. Tratar todos
 # igual custou os dois lados: com tudo confiável, uma tarde de Rick and Morty no
@@ -502,10 +594,32 @@ class WindowsNowPlayingReader:
 # `da_janela` existe para socorrer. Fora da lista, esse socorro devolvia uma
 # leitura que o gravador descartava — e uma série inteira assistida no Disney+
 # não aparecia em "continuar assistindo", nem contava para nada.
+# A Netflix entrou em 25/08/2026, e a medição anterior estava incompleta, não
+# errada. Ela dizia "Netflix - Home - Netflix — nada, nunca o conteúdo", e isso
+# é verdade da página de CATÁLOGO. A de REPRODUÇÃO é outra coisa: medido com o
+# filme tocando, a janela dizia
+#
+#     "Spider-Man: Across the Spider-Verse - Netflix - Google Chrome"
+#
+# e `limpar_titulo_de_janela` já extraía "Spider-Man: Across the Spider-Verse"
+# perfeitamente. O nome estava certo, disponível, e era jogado fora — porque
+# `trustworthy` vinha falso, e o gravador descarta título não confiável quando
+# não há obra conhecida do serviço. Foi ESSA a razão de a Netflix nunca ter
+# entrado no histórico, e não a falta do adapter.
+#
+# O que protege contra a medição antiga continua de pé, e é por isso que esta
+# entrada é segura: `_titulo_generico` barra "Netflix", "Home", "Shows", "My
+# List" e endereços crus ANTES de qualquer coisa chegar aqui. A página de
+# catálogo nunca alcança este booleano.
+#
+# E a Netflix nomeia a OBRA, não o episódio — é o caso do Prime Video, não o do
+# Max. Numa série a janela publica o nome da série; o número do episódio quem
+# sabe é a página, e é o que o adapter da Fase 10 acrescenta por cima.
 PLATAFORMAS_COM_OBRA_NA_JANELA: frozenset[Platform] = frozenset({
     "PRIME_VIDEO",
     "YOUTUBE",
     "DISNEY_PLUS",
+    "NETFLIX",
 })
 
 

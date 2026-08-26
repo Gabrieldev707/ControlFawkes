@@ -18,6 +18,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 import json
 import os
+import re
 import time
 import unicodedata
 from pathlib import Path
@@ -36,7 +37,40 @@ ARQUIVO_PADRAO = Path(__file__).resolve().parent.parent.parent / "data" / "histo
 
 # Abaixo disso não foi assistido, foi passado. Sem um piso, passar por três
 # títulos encheria o histórico de coisas que ninguém viu.
-SEGUNDOS_PARA_CONTAR = 90.0
+#
+# ## Por que 30 e não 90, desde 26/08/2026
+#
+# Eram 90, e eles foram escritos quando o RELÓGIO era a única defesa contra
+# trailer. Naquele momento a defesa fazia sentido: a vitrine da home da Netflix
+# toca uma prévia de uns quarenta segundos sozinha, o Prime abre prévia na
+# página de detalhe, e nada no sistema sabia distinguir isso de reprodução de
+# verdade. Esperar era a única evidência disponível.
+#
+# Hoje há evidência melhor, e ela é categórica em vez de temporal. Os quatro
+# serviços que entram no histórico têm adapter, e todos os quatro se RECUSAM a
+# nomear obra fora de uma página de reprodução:
+#
+#     Netflix     só em `/watch` ou `/title` — a vitrine devolvia "Home"
+#     Disney+     só em `/play`
+#     Max         só em `/video/watch`
+#     Prime       exige um `<video>` com imagem e o SDK do player na página
+#
+# E `PLATAFORMAS_COM_OBRA_NA_JANELA` continua barrando o Max de nomear obra
+# pelo título da janela, que lá é o do episódio.
+#
+# Uma prévia de catálogo não passa por nenhum desses caminhos: ela não vira
+# título de obra, então não vira linha de histórico — em 30 segundos ou em 90.
+# O piso deixou de ser a defesa e passou a ser só um filtro de "abriu e
+# fechou". Para isso, 30 segundos bastam.
+#
+# O que a espera custava era real e medido: o usuário relatou três minutos até
+# a obra aparecer em "continuar assistindo". Metade disso era a tela, e já foi
+# resolvido pelo `historyRevision`; a outra metade era este número.
+#
+# Se um dia uma prévia de catálogo virar linha de histórico, o conserto NÃO é
+# subir este número de volta: é descobrir qual adapter deixou passar. Voltar ao
+# relógio seria trocar uma evidência boa por uma ruim.
+SEGUNDOS_PARA_CONTAR = 30.0
 
 # Teto de itens guardados. O histórico serve para "o que eu estava vendo" e
 # "do que eu gosto"; nenhuma das duas melhora com dois anos de registro.
@@ -62,6 +96,20 @@ def _chave(titulo: str, platform: Platform | None) -> str:
 # O serviço que não foi reconhecido. Não é um serviço: é a ausência de um, e a
 # diferença importa na hora de decidir se duas linhas são a mesma obra.
 SEM_SERVICO = "-"
+
+
+# O empacotamento que os serviços penduram no fim do nome da obra.
+#
+# "Batman: The Animated Series: Volume 3" é como o Prime Video nomeia a aba —
+# medido em 26/08/2026. "Volume 3" é embalagem, não obra.
+#
+# A lista é curta de propósito, e "Parte" NÃO está nela: "Duna: Parte Dois" é o
+# nome do filme. Ver `unificar_empacotamento`, que é quem usa isto e onde mora
+# o resto do raciocínio — inclusive por que "Kill Bill: Volume 1" sobrevive.
+_EMPACOTAMENTO = re.compile(
+    r"^(.+?)\s*[:\-–—]\s*(?:volume|vol\.?|season|temporada)\s*\d{1,2}\s*$",
+    re.IGNORECASE,
+)
 
 
 def _mesma_obra(uma: str, outra: str) -> bool:
@@ -105,6 +153,10 @@ class Assistido:
     #: Esta linha já juntou mais de uma reprodução? Gruda uma vez descoberto:
     #: uma série não deixa de ser série porque a leitura seguinte foi pobre.
     multiplas_reproducoes: bool = False
+    #: A reprodução ATUAL chegou ao fim — o `<video>` disparou `ended` e a ponte
+    #: contou. É a única evidência DIRETA de que algo acabou; todo o resto é
+    #: inferência a partir de uma posição que quase nunca alcança o fim.
+    concluida: bool = False
 
     @property
     def terminado(self) -> bool:
@@ -119,6 +171,19 @@ class Assistido:
         Numa linha que junta várias reproduções, a posição não responde por
         obra nenhuma, e a resposta honesta é "não terminou".
         """
+        # A evidência DIRETA vem primeiro, e ela vale até para série: o
+        # `ended` do `<video>` é o fim de uma reprodução, e numa série a
+        # reprodução que acabou é o episódio. Quem decide se a SÉRIE acabou não
+        # é este campo — é a pessoa, tirando-a da lista. O que importa aqui é
+        # parar de oferecer "retomar" um filme que já rolou os créditos.
+        #
+        # Medido pelo usuário em 25/08/2026: "filmes que já terminei não saem
+        # dai, ele só fala faltam x horas". A razão nunca chegava a 0,94 porque
+        # a última posição gravada é a de alguns segundos antes do fim — e no
+        # fim o player costuma pular para a tela seguinte, onde a posição é
+        # outra coisa.
+        if self.concluida and not self.multiplas_reproducoes:
+            return True
         if self.multiplas_reproducoes:
             return False
         if self.duracao is None or self.posicao is None or self.duracao <= 0:
@@ -139,6 +204,7 @@ class Assistido:
             "episodio": self.episodio,
             "reproducao": self.reproducao,
             "multiplasReproducoes": self.multiplas_reproducoes,
+            "concluida": self.concluida,
         }
 
     def como_obra(self) -> dict:
@@ -161,6 +227,21 @@ class Assistido:
         """
         dados = self.como_dicionario()
         if self.multiplas_reproducoes:
+            # `posicao` e `duracao` continuam saindo de cena como resposta
+            # sobre a OBRA — é o conserto do Batman, e ele continua de pé: 484
+            # de 1680 descrevem um episódio, e lidos como série viram um
+            # "faltam 20 min" para algo que a pessoa já terminou.
+            #
+            # O que muda é que eles não são mais JOGADOS FORA. Eles voltam com
+            # o nome do que de fato descrevem.
+            #
+            # Medido pelo usuário em 25/08/2026: "continuar assistindo, ex:
+            # invincible nao mostra onde parei". Não mostrava porque a linha era
+            # multi-reprodução e os dois números viravam `None` — a tela ficava
+            # sem resposta nenhuma para "onde parei", que é a única pergunta que
+            # uma lista chamada "continuar assistindo" faz.
+            dados["posicaoDoEpisodio"] = self.posicao
+            dados["duracaoDoEpisodio"] = self.duracao
             dados["posicao"] = None
             dados["duracao"] = None
         # "T1 E4" quando o serviço publicou os números, e o nome do episódio
@@ -179,11 +260,47 @@ class HistoryStore:
         self._caminho = caminho or ARQUIVO_PADRAO
 
     def _ler(self) -> dict[str, dict]:
+        """O arquivo, ou vazio.
+
+        Arquivo AUSENTE e arquivo CORROMPIDO davam o mesmo resultado silencioso:
+        "você não assistiu nada". O primeiro é o estado normal de quem nunca
+        usou; o segundo é perda de dados, e merecia barulho.
+
+        Pior: `registrar` lê, funde e regrava. Um arquivo ilegível lido como
+        vazio seria SOBRESCRITO por uma linha só na gravação seguinte — o
+        histórico inteiro apagado por um JSON truncado, sem uma palavra.
+
+        Então o corrompido é avisado e preservado: a cópia fica ao lado com um
+        sufixo, e a gravação seguinte não a alcança.
+        """
+        if not self._caminho.exists():
+            return {}
         try:
             dados = json.loads(self._caminho.read_text(encoding="utf-8"))
-        except (OSError, ValueError):
+        except OSError as erro:
+            print(f"[historico] nao consegui ler {self._caminho}: {erro}", flush=True)
             return {}
-        return dados if isinstance(dados, dict) else {}
+        except ValueError as erro:
+            self._salvar_corrompido(erro)
+            return {}
+        if not isinstance(dados, dict):
+            self._salvar_corrompido(ValueError(f"raiz e {type(dados).__name__}, nao objeto"))
+            return {}
+        return dados
+
+    def _salvar_corrompido(self, erro: BaseException) -> None:
+        """Guarda o arquivo ilegível antes que a próxima gravação o cubra."""
+        destino = self._caminho.with_suffix(".json.corrompido")
+        try:
+            if not destino.exists():
+                destino.write_bytes(self._caminho.read_bytes())
+        except OSError:
+            destino = None  # type: ignore[assignment]
+        print(
+            f"[historico] {self._caminho} esta ilegivel ({erro}). "
+            + (f"Copia preservada em {destino}." if destino else "Nao consegui copiar."),
+            flush=True,
+        )
 
     def _gravar(self, dados: dict[str, dict]) -> bool:
         try:
@@ -231,6 +348,7 @@ class HistoryStore:
             multiplas_reproducoes=bool(bruto.get("multiplasReproducoes")) or de_multiplas_reproducoes(
                 segundos, duracao, isinstance(episodio, str) and bool(episodio),
             ),
+            concluida=bool(bruto.get("concluida")),
         )
 
     def _linha_da_obra(
@@ -272,6 +390,8 @@ class HistoryStore:
         generos: tuple[str, ...] = (),
         agora: float | None = None,
         episodio: str | None = None,
+        concluida: bool = False,
+        reproducao_id: str | None = None,
     ) -> Assistido | None:
         """Soma este trecho ao que já havia deste título.
 
@@ -296,7 +416,10 @@ class HistoryStore:
         anterior = anteriores[0] if anteriores else None
 
         # De qual reprodução esta leitura fala, e se é a mesma de antes.
-        reproducao = chave_da_reproducao(episodio, duracao)
+        # Fase 11: a identidade que a página forneceu vence a inferida. O
+        # `pageId` da Netflix diz qual reprodução é sem depender de nome nem de
+        # duração — duas coisas que a leitura frequentemente não tem.
+        reproducao = reproducao_id or chave_da_reproducao(episodio, duracao)
         mesma_reproducao = (
             anterior is not None
             and reproducao is not None
@@ -357,6 +480,12 @@ class HistoryStore:
                 or de_multiplas_reproducoes(
                     segundos_finais, duracao_final, bool(episodio),
                 )
+            ),
+            # Herda de quem falava da MESMA reprodução. Uma reprodução nova
+            # começa não-concluída, e é isso que faz "assistir de novo" trazer
+            # o filme de volta para a lista sem ninguém precisar mexer em nada.
+            concluida=concluida or (
+                anterior.concluida if mesma_reproducao and anterior else False
             ),
             visto_em=agora if agora is not None else time.time(),
             # O pôster e os gêneros chegam depois, pelo catálogo: uma vez
@@ -530,6 +659,99 @@ class HistoryStore:
                 return 0
         self._gravar(refeito)
         return removidas
+
+    def unificar_empacotamento(self) -> int:
+        """Junta "X: Volume 3" em "X" quando X é uma SÉRIE do mesmo serviço.
+
+        ## O que aconteceu
+
+        O Prime Video empacota séries em volumes, e o título da aba carrega o
+        empacotamento junto com a obra. Medido em 26/08/2026, com o adapter do
+        Prime recém-ligado, o histórico ficou assim:
+
+            "Batman: The Animated Series"            90s     ep="T3 E8"
+            "Batman: The Animated Series: Volume 3"  9413s   ep=None
+
+        A mesma série em duas linhas. A de baixo tem quase três horas
+        acumuladas — é tudo que foi assistido antes de existir adapter, quando
+        a única fonte era o `document.title`. A de cima nasceu limpa, porque o
+        `.atvwebplayersdk-title-text` nomeia a obra sem o empacotamento.
+
+        `consolidar` não resolve: ela reaplica a limpeza de título, e
+        "Volume 3" não é ruído de navegador — é texto que a Amazon põe no nome.
+        Nenhum limpador genérico tem como saber que aquilo não é a obra.
+
+        ## Por que a regra é ESTREITA, e precisa ser
+
+        Cortar ": Volume N" de todo mundo quebraria "Kill Bill: Volume 1", que
+        é um filme de verdade com esse nome — e o quebraria em silêncio,
+        somando dois filmes diferentes numa linha só.
+
+        Então a fusão só acontece quando as TRÊS condições valem:
+
+            1. existe uma linha com exatamente o título de base
+            2. no mesmo serviço
+            3. e essa linha de base é uma SÉRIE — tem episódio conhecido
+
+        "Kill Bill: Volume 1" nunca casa: não existe linha "Kill Bill" com
+        episódio, porque filme não tem episódio. Se um dia existir, alguma
+        outra coisa já estará errada antes disto.
+
+        Só "Volume", "Vol", "Season" e "Temporada" — o empacotamento que os
+        serviços de fato usam. "Parte" fica de fora de propósito: "Duna: Parte
+        Dois" é o nome do filme, e a lista curta é o que impede a regra de
+        crescer para cima de casos que ninguém mediu.
+
+        Devolve quantas linhas desapareceram na fusão.
+        """
+        dados = self._ler()
+        if not dados:
+            return 0
+
+        itens = {}
+        for chave, bruto in dados.items():
+            item = self._do_dicionario(chave, bruto)
+            if item is not None:
+                itens[chave] = item
+
+        # As linhas que PODEM receber: séries, indexadas pelo título de base.
+        bases: dict[str, str] = {}
+        for chave, item in itens.items():
+            if item.episodio:
+                bases[_chave(item.titulo, item.platform)] = chave
+
+        fundidas = 0
+        for chave, item in list(itens.items()):
+            achado = _EMPACOTAMENTO.match(item.titulo.strip())
+            if achado is None:
+                continue
+            base = bases.get(_chave(achado.group(1), item.platform))
+            if base is None or base == chave:
+                continue
+
+            alvo = itens[base]
+            recente = alvo if alvo.visto_em >= item.visto_em else item
+            # O tempo SOMA — é a mesma pessoa assistindo a mesma série, e a
+            # divisão em duas linhas foi acidente de nomenclatura. O resto vem
+            # da leitura mais recente, que é a que descreve onde ela parou.
+            dados[base] = {
+                **recente.como_dicionario(),
+                # O título da base sempre: ele é o nome da obra, e o outro é o
+                # nome mais o empacotamento.
+                "titulo": alvo.titulo,
+                "platform": alvo.platform or item.platform,
+                "segundos": round(alvo.segundos + item.segundos, 1),
+                "posterUrl": alvo.poster_url or item.poster_url,
+                "generos": list(alvo.generos or item.generos),
+            }
+            dados.pop(chave, None)
+            itens.pop(chave, None)
+            itens[base] = self._do_dicionario(base, dados[base]) or alvo
+            fundidas += 1
+
+        if fundidas:
+            self._gravar(dados)
+        return fundidas
 
     def podar_capas(self) -> int:
         """Apaga do arquivo as capas que o catálogo não tinha como acertar.

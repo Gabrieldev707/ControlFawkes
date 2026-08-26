@@ -1,5 +1,7 @@
 import asyncio
+from dataclasses import replace
 import json
+import time
 
 from fastapi import WebSocket
 from pydantic import TypeAdapter, ValidationError
@@ -86,6 +88,13 @@ from app.windows.app_volume import (
     WindowsAppVolumeAdapter,
 )
 from app.windows.audio_activity import processo_esta_tocando
+from app.bridge.consumo import EstadoDeConsumo, avaliar as avaliar_consumo
+from app.bridge.estado import FOLGA_DA_DURACAO, EstadoDaPonte, estado_da_ponte
+from app.bridge.saude import smtc_disponivel
+from app.bridge.comandos import fila_de_comandos
+from app.bridge.telemetria import ColetorDeAbas
+from app.media.fusao import fundir_com_a_ponte
+from app.media.identidade import como_temporada_e_episodio
 from app.windows.focus import WindowFocuser, platform_of
 from app.windows.screen import WindowCapture, ponto_na_tela
 from app.profiles.store import ProfileStore
@@ -131,6 +140,11 @@ HEARTBEAT_INTERVAL_SECONDS = 10.0
 # A contagem local do celular acumula erro; a cada 15s ela é ancorada de
 # novo no valor real, sem virar um envio por segundo.
 POSITION_RESYNC_SECONDS = 15.0
+
+# A Core Audio custa COM + enumeração de todas as sessões de áudio. A resposta
+# não muda a cada segundo, e o laço roda uma vez por segundo — perguntar toda
+# volta seria pagar caro por um dado que se repete. Ver `_audivel_agora`.
+SEGUNDOS_ENTRE_SONDAS_DE_AUDIO = 5.0
 
 WS_POLICY_VIOLATION = 1008
 WS_TRY_AGAIN_LATER = 1013
@@ -191,6 +205,7 @@ class Dispatcher:
         message_rate_limiter: PointerRateLimiter | None = None,
         navigation_rate_limiter: PointerRateLimiter | None = None,
         intent_service: IntentFallbackService | None = None,
+        bridge_state: EstadoDaPonte | None = None,
     ) -> None:
         self.device_store = device_store or DeviceStore()
         self.pairing_service = pairing_service or PairingService(self.device_store)
@@ -225,6 +240,26 @@ class Dispatcher:
         self.navigation_rate_limiter = navigation_rate_limiter or navigation_limiter()
         self.navigation_repeat_guard = non_repeatable_navigation_limiter()
         self.intent_service = intent_service or build_intent_service_from_env()
+        # O MESMO objeto que a rota `/bridge/eventos` alimenta. Injetável para
+        # que teste nenhum dependa do singleton do módulo.
+        self.bridge_state = bridge_state if bridge_state is not None else estado_da_ponte
+        # Última resposta da Core Audio, e quando ela veio. Ver `_audivel`.
+        self._audivel: bool | None = None
+        self._audivel_em: float | None = None
+        # Fase 14: observa abas simultâneas e grava. Não decide nada — quem
+        # decide é a Fase 15, e ela não pode ser escrita antes destes dados.
+        self._coletor = ColetorDeAbas()
+        #: Falhas de histórico já reportadas, para não afogar o terminal.
+        self._falhas_do_historico: set[tuple[str, str, str]] = set()
+        #: Tarefas de pôster em voo. Ver `_poster_para`.
+        self._buscas_de_poster: set[asyncio.Task] = set()
+        #: Temporada por (obra, número do episódio, nome do episódio). Guarda
+        #: inclusive o "não deu para saber": a consulta custa seis requisições.
+        self._temporadas: dict[tuple, int | None] = {}
+        self._temporadas_em_busca: set[tuple] = set()
+        #: (última duração vista, já cresceu?) por obra. Ver
+        #: `_sem_duracao_de_buffer`.
+        self._duracoes: dict[tuple, tuple[float, bool]] = {}
         self._client_adapter = TypeAdapter(ClientMessage)
         self._authenticated: dict[WebSocket, str] = {}
         self._held_pointer_buttons: set[WebSocket] = set()
@@ -240,6 +275,13 @@ class Dispatcher:
             # linhas do mesmo filme, cada uma com um pedaço do tempo.
             try:
                 self.history_recorder.store.consolidar(limpar_titulo_de_janela)
+                # E junta "X: Volume 3" em "X" quando X é uma série do mesmo
+                # serviço. `consolidar` não alcança isso: "Volume 3" não é
+                # ruído de navegador, é texto que a Amazon põe no nome da aba,
+                # e nenhum limpador genérico tem como saber que aquilo não é a
+                # obra. Ver `unificar_empacotamento` para a regra estreita —
+                # inclusive por que "Kill Bill: Volume 1" não é tocado.
+                self.history_recorder.store.unificar_empacotamento()
                 # E tira as capas que o catálogo não tinha como acertar. Filtrar
                 # na leitura escondia a capa errada da tela, mas ela continuava
                 # no arquivo — e enquanto estiver lá, a busca de capa considera
@@ -280,8 +322,8 @@ class Dispatcher:
                 if not self._authenticated:
                     try:
                         await self._read_now_playing(contar=True)
-                    except Exception:  # noqa: BLE001
-                        pass
+                    except Exception as erro:  # noqa: BLE001
+                        self._anotar_falha_da_leitura(erro)
                     continue
 
                 desde_o_ultimo_sinal += NOW_PLAYING_INTERVAL_SECONDS
@@ -294,7 +336,8 @@ class Dispatcher:
                 # prova ao celular que a conexão está viva.
                 try:
                     mensagem = await self._read_now_playing(contar=True)
-                except Exception:  # noqa: BLE001
+                except Exception as erro:  # noqa: BLE001
+                    self._anotar_falha_da_leitura(erro)
                     continue
 
                 desde_a_ultima_posicao += NOW_PLAYING_INTERVAL_SECONDS
@@ -305,7 +348,8 @@ class Dispatcher:
                 await self._broadcast(mensagem)
             except asyncio.CancelledError:
                 raise
-            except Exception:  # noqa: BLE001 - o laço não pode morrer
+            except Exception as erro:  # noqa: BLE001 - o laço não pode morrer
+                self._anotar_falha_da_leitura(erro)
                 continue
 
     def _vale_enviar(self, mensagem: dict, desde_a_ultima_posicao: float) -> bool:
@@ -332,9 +376,25 @@ class Dispatcher:
         segundos que ninguém assistiu.
         """
         atual = await self._leitura.ler()
-        if atual is None and self._leitura.travada:
-            # A SMTC parou de responder. Em vez de dizer "nada tocando" e
-            # desligar os controles junto, diz o que a janela aberta mostra.
+        if atual is None and (self._leitura.travada or not smtc_disponivel()):
+            # A SMTC não respondeu. Em vez de dizer "nada tocando" e desligar
+            # os controles junto, diz o que a janela aberta mostra.
+            #
+            # `travada` OU `não disponível`, e a segunda metade faltava.
+            # `saude.py` já separava as duas — "a SMTC ESTAVA disponível (o
+            # Windows tem a API, o módulo importa) e não estava respondendo" —
+            # mas esta condição só conhecia a primeira.
+            #
+            # Consequência medida em 25/08/2026: com o servidor subido pelo
+            # Python do sistema, sem `winsdk` instalado, `read()` devolvia None
+            # na hora (ImportError engolido), a chamada nunca chegava a pendurar,
+            # `travada` ficava False — e o socorro não entrava. Resultado: nada
+            # tocando, nunca, e o histórico não crescia um segundo, sem nenhum
+            # erro em lugar nenhum. Três reinícios do servidor não mudaram nada,
+            # porque não era o servidor.
+            #
+            # Uma máquina sem `winsdk` é o mesmo caso de uma com a SMTC
+            # pendurada para sempre. A janela continua sabendo o que está aberto.
             janela = self.window_focuser.media_window()
             if janela is not None:
                 atual = da_janela(
@@ -346,11 +406,45 @@ class Dispatcher:
                     tocando=processo_esta_tocando(janela.process),
                 )
 
+        # Fase 8: o tempo medido dentro da página vence o da SMTC quando ele
+        # está fresco. Aqui, e não depois do `contar`, porque o histórico
+        # precisa da posição BOA — era essa a diferença entre gravar
+        # `posicao 391` e gravar os 2974 segundos que a ponte já sabia.
+        atual = fundir_com_a_ponte(atual, self.bridge_state)
+
+        # A temporada entra ANTES de o histórico contar.
+        #
+        # Ela era acrescentada só na mensagem do cartão, e o gravador recebia o
+        # `atual` cru — então "continuar assistindo" ficava com "E1 · Pilot"
+        # enquanto o cartão dizia "T1 E1 · Pilot". A mesma leitura contando duas
+        # histórias diferentes conforme a tela.
+        atual = self._com_temporada(atual)
+        atual = self._sem_duracao_de_buffer(atual)
+
+        # Fase 14 — o dataset. Só grava quando há mais de uma aba com mídia,
+        # que é o único caso em que existe ambiguidade a estudar.
+        try:
+            self._coletor.observar(self.bridge_state.vivas(), time.monotonic())
+        except Exception:  # noqa: BLE001 - telemetria nunca cala o cartão
+            pass
+
         if contar:
             try:
-                self.history_recorder.observar(atual, NOW_PLAYING_INTERVAL_SECONDS)
-            except Exception:  # noqa: BLE001 - histórico nunca cala o cartão
-                pass
+                self.history_recorder.observar(
+                    atual, NOW_PLAYING_INTERVAL_SECONDS, self._consumo(atual),
+                )
+            except Exception as erro:  # noqa: BLE001 - histórico nunca cala o cartão
+                # Engolir CONTINUA certo — uma falha de histórico não pode
+                # derrubar o cartão nem o laço. O que estava errado era engolir
+                # em SILÊNCIO.
+                #
+                # Custou duas paradas completas em 25/08/2026, e nenhuma das
+                # duas deixou rastro: um `NameError` de import faltando, e uma
+                # política de consumo negando tudo. Nos dois casos o histórico
+                # parou de gravar por horas e o único sintoma foi um arquivo que
+                # não crescia. Um traceback aqui teria respondido as duas em
+                # cinco segundos.
+                self._anotar_falha_do_historico(erro)
 
         if atual is None:
             return NowPlayingMessage(session=None).model_dump()
@@ -387,7 +481,259 @@ class Dispatcher:
             titleIsWork=titulo_e_obra,
             thumbnailId=atual.thumbnail_id,
             posterUrl=self._poster_para(atual, titulo, titulo_e_obra),
+            historyRevision=self.history_recorder.revisao,
         )).model_dump()
+
+    def _sem_duracao_de_buffer(self, atual):
+        """Uma duração que CRESCE é borda de buffer, e não a duração da obra.
+
+        ## O que se mediu
+
+        Disney+, com Demolidor: Renascido tocando, oito leituras seguidas do
+        diagnóstico ao vivo em 26/08/2026:
+
+            660,8 → 676,8 → 692,8 → 700,8 → 708,8 → 732,8 → 740,8 → 748,8
+
+        Sempre alguns segundos à frente da posição, sempre subindo. Não é um
+        vídeo de onze minutos: é MSE. O player monta o vídeo por segmentos e
+        `video.duration` reporta a borda do BUFFER enquanto o resto não chegou.
+
+        Na tela isso é grosseiro e constante: a barra fica sempre quase cheia e
+        um episódio de cinquenta minutos se anuncia como se estivesse acabando.
+
+        ## Por que AQUI, e não na ponte
+
+        Porque o número chega pelas DUAS fontes. A SMTC do Chrome publica a
+        linha do tempo do mesmo `<video>` que a extensão observa — então
+        guardar só a ponte deixava a SMTC entregar o mesmo valor pela outra
+        porta, que foi exatamente o que se mediu depois do primeiro conserto.
+
+        Este é o ponto onde o número final existe, seja qual for a fonte que o
+        supriu. Uma verdade, um lugar.
+
+        ## Por que crescer é a prova, e o tamanho não é
+
+        A primeira tentativa cortou por duração pequena — "menos de 90 segundos
+        é prévia". Errada por dois lados: suprimia reprodução de verdade no
+        primeiro minuto, quando o buffer ainda é curto, e não pegava o caso
+        medido, que já passava de 250 segundos.
+
+        Uma duração que aumenta não pode ser a duração de nada. Uma que fica
+        parada pode ser — e é o que a Netflix publica desde o começo, que é por
+        que só ela estava certa.
+        """
+        if atual is None or atual.duration_seconds is None:
+            return atual
+
+        chave = (atual.platform, atual.title)
+        anterior = self._duracoes.get(chave)
+        cresceu = (
+            anterior is not None
+            and atual.duration_seconds - anterior[0] > FOLGA_DA_DURACAO
+        )
+        # Gruda: depois que a duração se provou borda de buffer, ela não se
+        # redime ao parar de crescer — o vídeo terminou de baixar, e o número
+        # pode até estar certo, mas quem já mentiu não volta a ser fonte sem
+        # outra prova.
+        suspeita = cresceu or (anterior is not None and anterior[1])
+        self._duracoes[chave] = (atual.duration_seconds, suspeita)
+        # Não deixa crescer para sempre: uma entrada por obra vista.
+        if len(self._duracoes) > 64:
+            self._duracoes.pop(next(iter(self._duracoes)), None)
+
+        return replace(atual, duration_seconds=None) if suspeita else atual
+
+    def _com_temporada(self, atual):
+        """"E1 · Pilot" vira "T1 E1 · Pilot" — e "Ozymandias" vira "T5 E14".
+
+        ## Por que o catálogo, e não o serviço
+
+        Nenhum serviço publica as duas coisas. Medido:
+
+            Netflix                 "E1" — falta a temporada, e ela não está em
+                                    lugar nenhum da página
+            Max, Prime, Disney+     só o NOME do episódio, sem número nenhum
+
+        O catálogo conhece a série inteira, e o nome do episódio costuma isolar
+        uma linha só. Achada a linha, temporada e número vêm juntos — então o
+        mesmo lookup serve para os dois casos, e vale para TODO serviço, não só
+        o que tem adapter.
+
+        Ver `TmdbCatalog.numeros_do_episodio`, inclusive para quando ele se
+        recusa a responder — que é o que separa isto de um palpite.
+
+        ## Fora do laço
+
+        A consulta custa uma requisição por temporada. Ela roda uma vez por
+        episódio, em segundo plano, e a resposta fica guardada — inclusive o
+        "não deu para saber". O cartão a usa a partir da volta seguinte, que
+        chega em um segundo.
+        """
+        if atual is None or self.catalog is None or not self.catalog.enabled:
+            return atual
+        # Sem obra confiável não há série para procurar, e sem nada do episódio
+        # não há o que isolar.
+        if not atual.trustworthy or not atual.title:
+            return atual
+
+        sessao = self.bridge_state.atual_de(atual.platform)
+        numero = sessao.episodeNumber if sessao is not None else None
+        # O nome do episódio vem da ponte quando há adapter, e da janela quando
+        # não há — que é o caso de quatro dos cinco serviços.
+        nome = (sessao.episodeTitle if sessao is not None else None) or atual.episode
+        if numero is None and not nome:
+            return atual
+
+        # A temporada já veio publicada: não há o que descobrir, e perguntar
+        # gastaria seis requisições para confirmar o que já se sabe.
+        #
+        # Duas formas de já se saber, e as duas contam: o serviço declarou o
+        # número, ou o rótulo do episódio já começa por "T5". A segunda cobre
+        # inclusive o que chegou pela janela, onde não há campo estruturado
+        # nenhum para consultar.
+        if sessao is not None and sessao.seasonNumber is not None:
+            return atual
+        ja_tem = como_temporada_e_episodio(nome) if nome else None
+        if ja_tem is not None and ja_tem.startswith("T"):
+            return atual
+
+        duracao = atual.duration_seconds
+        chave = (atual.title, numero, nome)
+        if chave in self._temporadas:
+            achado = self._temporadas[chave]
+            return atual if achado is None else replace(
+                atual, episode=self._rotulo_do_episodio(achado, nome),
+            )
+
+        if chave not in self._temporadas_em_busca:
+            self._temporadas_em_busca.add(chave)
+            tarefa = asyncio.create_task(self._buscar_temporada(chave, duracao))
+            self._buscas_de_poster.add(tarefa)
+            tarefa.add_done_callback(self._buscas_de_poster.discard)
+        return atual
+
+    @staticmethod
+    def _rotulo_do_episodio(numeros: tuple[int, int], nome: str | None) -> str:
+        """"T5 E14 · Ozymandias" — e sem o nome quando ele era só "E1".
+
+        O nome do episódio pode ser o próprio rótulo que veio do serviço, e
+        repetir "E1" depois de "T1 E1" diria a mesma coisa duas vezes.
+        """
+        temporada, episodio = numeros
+        rotulo = f"T{temporada} E{episodio}"
+        if not nome or como_temporada_e_episodio(nome) is not None:
+            return rotulo
+        return f"{rotulo} · {nome}"
+
+    async def _buscar_temporada(self, chave: tuple, duracao: float | None) -> None:
+        titulo, numero, nome = chave
+        try:
+            # Guarda inclusive o "não deu para saber": sem isso, uma série que o
+            # catálogo não isola seria consultada a cada volta do laço, e são
+            # seis requisições por consulta.
+            self._temporadas[chave] = await self.catalog.numeros_do_episodio(
+                titulo, nome, numero, duracao,
+            )
+        except Exception:  # noqa: BLE001 - temporada é detalhe, nunca motivo de erro
+            self._temporadas[chave] = None
+        finally:
+            self._temporadas_em_busca.discard(chave)
+
+    def _anotar_falha_da_leitura(self, erro: BaseException) -> None:
+        """A leitura de mídia falhando vai para o terminal, uma vez por tipo.
+
+        O `except` que engolia isto em silêncio é o mesmo padrão que já custou
+        dois apagões em 25/08/2026 — e o conserto daquele dia cobriu só a
+        gravação do histórico. Uma falha na FUSÃO, no catálogo ou na capa
+        continuava invisível, e o sintoma seria idêntico: o cartão para de
+        atualizar e nada aparece em lugar nenhum.
+
+        Engolir continua certo: o laço não pode morrer. Calar é que não.
+        """
+        self._anotar_uma_vez("leitura", "o cartao parou de atualizar", erro)
+
+    def _anotar_falha_do_historico(self, erro: BaseException) -> None:
+        """A falha vai para o terminal, uma vez por tipo.
+
+        Uma vez por TIPO e não uma vez por falha: o laço roda uma vez por
+        segundo, e um defeito permanente imprimiria 3600 tracebacks por hora —
+        que é outra forma de esconder, por afogamento.
+
+        E não é log estruturado nem arquivo: enquanto o projeto imprime o
+        caminho do toque no terminal (ver `_clicar_na_janela`), este é o lugar
+        onde quem está depurando já olha.
+        """
+        self._anotar_uma_vez(
+            "historico", "o historico PAROU de crescer", erro,
+        )
+
+    def _anotar_uma_vez(self, area: str, consequencia: str, erro: BaseException) -> None:
+        """Uma vez por TIPO de falha, e não uma por ocorrência.
+
+        O laço roda uma vez por segundo: um defeito permanente imprimiria 3600
+        tracebacks por hora, que é outra forma de esconder — por afogamento.
+        """
+        import traceback
+
+        assinatura = (area, type(erro).__name__, str(erro)[:200])
+        if assinatura in self._falhas_do_historico:
+            return
+        self._falhas_do_historico.add(assinatura)
+        print(
+            f"[{area}] falhou e {consequencia}: {type(erro).__name__}: {erro}",
+            flush=True,
+        )
+        traceback.print_exc()
+
+    def _consumo(self, atual) -> EstadoDeConsumo:
+        """A política da Fase 9 para esta passagem do laço.
+
+        A TELA continua recebendo `atual.playing`, que é o estado técnico do
+        player — é o que faz o botão dizer "pausado" quando o player está
+        pausado. Só o HISTÓRICO passa por aqui. Duas respostas da mesma
+        leitura, que é literalmente o gate desta fase.
+        """
+        if atual is None:
+            return "NAO_ASSISTINDO"
+        # A sessão DESTE serviço: pedir "a que vence no geral" e depois
+        # recusá-la por ser de outro serviço fazia o `muted` e o `audible` da
+        # Netflix sumirem sempre que o YouTube falava por último.
+        sessao = self.bridge_state.atual_de(atual.platform)
+        mudo = sessao.muted if sessao is not None else None
+        # As duas evidências de áudio vão SEPARADAS, e não fundidas numa só.
+        # A da aba nega; a do processo só confirma. Ver `consumo.avaliar` — e o
+        # dia em que isto foi fundido, o histórico parou de gravar inteiro.
+        return avaliar_consumo(
+            playbackState="playing" if atual.playing else "paused",
+            audible=sessao.audible if sessao is not None else None,
+            muted=mudo,
+            audible_do_processo=self._audivel_agora(atual),
+        )
+
+    def _audivel_agora(self, atual) -> bool | None:
+        """Está saindo som do processo que toca? Com folga entre as perguntas.
+
+        A Core Audio custa caro: inicializar COM e enumerar todas as sessões de
+        áudio, uma vez por segundo, para responder algo que não muda a cada
+        segundo. A resposta vale por alguns segundos, e o intervalo do laço é
+        de um — então a sonda é limitada e a última resposta é reaproveitada.
+
+        `None` é "não deu para medir", e ele se propaga: quem não sabe não nega.
+        """
+        agora = time.monotonic()
+        if (
+            self._audivel_em is not None
+            and (agora - self._audivel_em) < SEGUNDOS_ENTRE_SONDAS_DE_AUDIO
+        ):
+            return self._audivel
+
+        janela = self.window_focuser.media_window(atual.platform)
+        # Sem janela não há processo para perguntar. Não medir não é negar.
+        self._audivel = (
+            processo_esta_tocando(janela.process) if janela is not None else None
+        )
+        self._audivel_em = agora
+        return self._audivel
 
     def _poster_para(self, atual, titulo_da_obra: str, e_a_obra: bool) -> str | None:
         """Pôster do catálogo, quando o aplicativo não publica capa.
@@ -448,7 +794,12 @@ class Dispatcher:
 
         if chave not in self._posters_em_busca:
             self._posters_em_busca.add(chave)
-            asyncio.create_task(self._buscar_poster(titulo, atual.platform))
+            # A referência é GUARDADA: o laço de eventos só mantém referência
+            # fraca a tarefas, e uma tarefa coletada no meio some sem terminar.
+            # Sintoma seria um pôster que às vezes não chega e nunca explica.
+            tarefa = asyncio.create_task(self._buscar_poster(titulo, atual.platform))
+            self._buscas_de_poster.add(tarefa)
+            tarefa.add_done_callback(self._buscas_de_poster.discard)
         return None
 
     async def _buscar_poster(self, titulo: str, plataforma: Platform | None) -> None:
@@ -840,6 +1191,8 @@ class Dispatcher:
     ) -> None:
         # Música não passa pelo catálogo de filmes e séries.
         opcoes = [] if intent.music_hint else await self._availability_options(intent.query)
+        # Os dois primeiros continuam nos campos antigos: cliente que não
+        # conhece a lista segue funcionando como antes.
         availability = opcoes[0] if opcoes else None
         alternativa = opcoes[1] if len(opcoes) > 1 else None
 
@@ -852,6 +1205,7 @@ class Dispatcher:
             openOnlyPlatforms=[] if intent.music_hint else open_only_platforms(),
             availability=availability,
             availabilityAlternative=alternativa,
+            availabilityOptions=opcoes,
         )
         await websocket.send_json(response.model_dump())
 
@@ -865,7 +1219,10 @@ class Dispatcher:
         if self.catalog is None or not self.catalog.enabled:
             return []
         try:
-            achados = await self.catalog.lookup_options(query)
+            # A busca da TELA, e não o resolver: a pergunta aqui é "o que você
+            # quis dizer?", que tem uma lista por resposta. Ver
+            # `TmdbCatalog.buscar_para_escolha`.
+            achados = await self.catalog.buscar_para_escolha(query)
         except Exception:  # noqa: BLE001 - rede, formato, o que for
             return []
         return [
@@ -978,6 +1335,12 @@ class Dispatcher:
 
         if message.type == "MEDIA_FULLSCREEN" and session.platform != "SPOTIFY":
             executed = self._enter_fullscreen(session.platform)
+        elif (pela_ponte := await self._comandar_pela_ponte(
+                message.type, session.platform)) is not None:
+            # Fase 16 — o comando foi direto ao `<video>` da aba que o árbitro
+            # escolheu. Sem roubar foco, sem depender de qual aba está ativa, e
+            # com play e pause SEPARADOS em vez de um toggle cego.
+            executed = pela_ponte
         elif message.type == "MEDIA_PLAY_PAUSE":
             executed = self._toggle_play_pause(session.platform)
         else:
@@ -1104,6 +1467,72 @@ class Dispatcher:
         if not self.pointer_adapter.move_to(*alvo):
             return False
         return self.pointer_adapter.double_click() if duplo else self.pointer_adapter.click()
+
+    #: Quanto os botões de avançar e retroceder pulam. O mesmo dos rótulos em
+    #: `MEDIA_ACTION_LABELS`, e o mesmo que as teclas de mídia já faziam.
+    SEGUNDOS_DE_SALTO = 10.0
+
+    async def _comandar_pela_ponte(self, tipo: str, platform: Platform) -> bool | None:
+        """Comanda o `<video>` pela extensão. `None` quando por ali não deu.
+
+        ## Por que isto vem ANTES da tecla
+
+        O caminho antigo é uma tecla: `_toggle_play_pause` foca a janela do
+        Chrome e aperta a barra de espaço. Ele funciona, e continua sendo o
+        plano B. Mas tem três limites, e dois deles estão medidos:
+
+            rouba o foco       focar a janela tira o foco de onde a pessoa
+                               estava. É visível e é irritante.
+
+            erra de aba        a barra de espaço vai para a aba ATIVA. Medido
+                               na Fase 14: em 6 dos 18 instantes com duas abas
+                               tocando havia MAIS DE UMA aba ativa — janelas
+                               diferentes, cada uma com a sua. A tecla não tem
+                               como escolher; o comando tem, e escolhe a que o
+                               árbitro apontou.
+
+            toggle cego        `MEDIA_PLAY_PAUSE` alterna o que estiver lá. Se o
+                               estado real e o suposto divergirem, o botão faz o
+                               contrário do desenhado — foi a queixa "pausa e
+                               não volta a play". Aqui play e pause são
+                               comandos DIFERENTES, decididos pelo estado que a
+                               própria página acabou de reportar.
+
+        ## E por que ele pode desistir
+
+        `None` significa "por aqui não deu": sem extensão, sem aba conhecida,
+        Chrome fechado, ou a página não respondeu em um segundo e meio. Quem
+        chama cai para a tecla. Um caminho novo que quebrasse o antigo seria
+        pior do que não existir — quem não instalou a extensão continua com o
+        controle que sempre teve.
+        """
+        sessao = self.bridge_state.atual_de(platform)
+        if sessao is None or sessao.tabId is None:
+            return None
+
+        if tipo == "MEDIA_PLAY_PAUSE":
+            acao, valor = ("PAUSE" if sessao.tocando else "PLAY"), None
+        elif tipo == "MEDIA_SEEK_BACK":
+            acao, valor = "SEEK_BY", -self.SEGUNDOS_DE_SALTO
+        elif tipo == "MEDIA_SEEK_FORWARD":
+            acao, valor = "SEEK_BY", self.SEGUNDOS_DE_SALTO
+        else:
+            # Volume, próxima faixa, tela cheia: não são do elemento, ou não
+            # foram medidos. Uma ação sem executor do outro lado é uma promessa
+            # que falha em silêncio.
+            return None
+
+        comando = fila_de_comandos.enfileirar(
+            acao, tabId=sessao.tabId, sessionId=sessao.sessionId, valor=valor,
+        )
+        if comando is None:
+            return None
+        resultado = await fila_de_comandos.esperar(comando)
+        # Resposta negativa também cai para a tecla: "sem elemento" ou "outra
+        # reprodução" são motivos para tentar de outro jeito, não para desistir.
+        if resultado is None or not resultado.ok:
+            return None
+        return True
 
     def _toggle_play_pause(self, platform: Platform) -> bool:
         """Play/pause pela barra de espaço, com a janela em foco.

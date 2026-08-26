@@ -346,6 +346,19 @@ async def test_timeline_que_volta_a_andar_volta_a_ser_confiavel(monkeypatch):
         ("Duna (2021) - Netflix - Google Chrome", "Duna (2021)"),
         # Temporada diz menos que o nome da série e atrapalha o catálogo.
         ("Rick and Morty - Season 1 - Google Chrome", "Rick and Morty"),
+        # Sem traço nenhum, que é como o Prime Video nomeia. Medido no
+        # histórico real: "sherlock season 2" com 27175 segundos numa linha só,
+        # sem pôster, porque esse nome não é obra em catálogo nenhum.
+        ("Prime Video: Sherlock Season 2 - Google Chrome", "Sherlock"),
+        # Com dois-pontos, que é como a Netflix escreve.
+        ("Sherlock: Season 2 - Netflix - Google Chrome", "Sherlock"),
+        # Em português, sem traço.
+        ("Prime Video: Sherlock Temporada 2 - Google Chrome", "Sherlock"),
+        # O separador opcional não pode comer uma palavra: "Preseason" não é
+        # "Pre" + temporada, e o `\s+` obrigatório é o que garante isso.
+        ("Preseason 2 - Netflix - Google Chrome", "Preseason 2"),
+        # Sobrar nada não corta: "Temporada 2" é tudo o que a janela sabe.
+        ("Temporada 2 - Netflix - Google Chrome", "Temporada 2"),
         # Só o nome do serviço sobrevive como está: não há obra ali.
         ("Netflix", "Netflix"),
         # Só espaço vira vazio, não estoura. O `or titulo.strip()` do fim
@@ -386,8 +399,11 @@ def test_plataforma_reconhecida_no_titulo_da_janela(janela, esperado):
         ("DISNEY_PLUS", True),
         # O Max nomeia o EPISÓDIO: mostrável, não afirmável como obra.
         ("MAX", False),
-        # A Netflix nunca nomeia o conteúdo.
-        ("NETFLIX", False),
+        # A Netflix entrou em 25/08/2026. A medição antiga ("nunca nomeia o
+        # conteúdo") era da página de CATÁLOGO; a de REPRODUÇÃO publica a obra:
+        # "Spider-Man: Across the Spider-Verse - Netflix - Google Chrome".
+        # O catálogo continua barrado, e antes daqui, por `_titulo_generico`.
+        ("NETFLIX", True),
         # Sem serviço não dá para saber qual dos dois casos é.
         (None, False),
     ],

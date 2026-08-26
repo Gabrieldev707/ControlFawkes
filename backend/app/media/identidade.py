@@ -67,6 +67,21 @@ class IdentidadeDaObra:
         if not self.titulo.strip():
             raise ValueError("uma obra sem nome não é uma identidade")
 
+    @property
+    def chave(self) -> str:
+        """A chave da OBRA. Não inclui temporada nem episódio, e é esse o ponto.
+
+        Fase 11: "Rick and Morty" S01E01 → S01E02 → S01E03 muda a
+        `IdentidadeDaReproducao` três vezes e NÃO muda esta. Uma obra no
+        histórico, e não três — que é a fragmentação por episódio que o gate da
+        Fase 12 proíbe.
+        """
+        import unicodedata
+
+        limpo = unicodedata.normalize("NFKD", self.titulo.strip().lower())
+        sem_acento = "".join(c for c in limpo if not unicodedata.combining(c))
+        return f"{self.platform or '-'}::{' '.join(sem_acento.split())}"
+
 
 @dataclass(frozen=True)
 class IdentidadeDaReproducao:
@@ -81,9 +96,53 @@ class IdentidadeDaReproducao:
     episodio: str | None = None
     duracao: float | None = None
 
+    #: O que a página disse desta reprodução, quando há adapter.
+    page_id: str | None = None
+    temporada: int | None = None
+    episodio_numero: int | None = None
+
     @property
     def chave(self) -> str | None:
-        return chave_da_reproducao(self.episodio, self.duracao)
+        return identidade_da_reproducao(
+            self.page_id, self.temporada, self.episodio_numero,
+            self.episodio, self.duracao,
+        )
+
+
+def identidade_da_reproducao(
+    page_id: str | None = None,
+    temporada: int | None = None,
+    episodio_numero: int | None = None,
+    episodio: str | None = None,
+    duracao: float | None = None,
+) -> str | None:
+    """A chave da reprodução, do sinal mais forte para o mais fraco.
+
+    Fase 11. A versão anterior tinha uma fonte só — nome do episódio mais
+    duração — porque era tudo o que existia. Agora a página fala, e ela fala
+    melhor do que qualquer inferência:
+
+        page_id                 "/watch/81234567". A própria Netflix dizendo
+                                qual reprodução é. Não depende de nome, não
+                                depende de duração, e muda no episódio seguinte.
+
+        temporada + episódio    "s1e4". Estável entre releituras e legível em
+                                log, o que a duração não é.
+
+        nome + duração          o que já existia. Continua valendo para os
+                                serviços sem adapter, que são a maioria.
+
+    A ordem importa mais do que parece: misturar os sinais numa chave só faria
+    a mesma reprodução gerar chaves diferentes conforme o que a leitura
+    conseguiu ler naquele segundo — e duas chaves para a mesma reprodução é
+    exatamente o que faz o histórico achar que trocou de episódio e recalibrar
+    a posição sem motivo.
+    """
+    if page_id is not None and str(page_id).strip():
+        return f"id:{str(page_id).strip()}"
+    if temporada is not None and episodio_numero is not None:
+        return f"s{temporada}e{episodio_numero}"
+    return chave_da_reproducao(episodio, duracao)
 
 
 def chave_da_reproducao(episodio: str | None, duracao: float | None) -> str | None:
@@ -162,6 +221,68 @@ _PADROES_DE_EPISODIO = (
 )
 
 
+#: O que separa obra, marcador e nome do episódio num título de aba.
+_SEPARADORES_DO_TITULO = " -–—|•·:"
+
+
+def separar_obra_e_episodio(titulo: str | None) -> tuple[str, str | None] | None:
+    """"Invincible - S1 E4 - Neil Armstrong" → ("Invincible", "T1 E4 · Neil Armstrong").
+
+    ## O bug que isto conserta
+
+    Medido em 26/08/2026, contra os formatos reais de Prime Video e Disney+:
+
+        "Prime Video: Invincible - S1 E4 - Neil Armstrong"
+            → obra = "Invincible - S1 E4 - Neil Armstrong"
+
+        "Demolidor: Renascido - T1 E5 - Com Sangue | Disney+"
+            → obra = "Demolidor: Renascido - T1 E5 - Com Sangue"
+
+    O marcador ficava DENTRO do nome da obra. Consequência em três lugares ao
+    mesmo tempo: uma linha de histórico por episódio, nenhum pôster (o catálogo
+    não conhece "Invincible - S1 E4 - Neil Armstrong") e nenhum T/E — que
+    estavam ali, escritos, e eram jogados fora.
+
+    É o mesmo defeito do "sherlock season 2", numa terceira forma. As duas
+    anteriores eram a temporada no fim e a temporada no meio; esta é a
+    temporada COM o nome do episódio depois dela.
+
+    ## Por que só corta quando há algo DEPOIS do marcador
+
+    Porque é isso que distingue as duas leituras possíveis:
+
+        "Obra - S1 E4 - Episódio"   o que vem antes é a obra. Certeza.
+        "Episódio • T5 E14"         o que vem antes pode ser o episódio, e é
+                                    exatamente o que o Max faz.
+
+    Sem nada depois, não há como saber de qual dos dois se trata, e chutar
+    poria o nome de um episódio na linha da obra — o defeito que
+    `PLATAFORMAS_COM_OBRA_NA_JANELA` existe para impedir. Aí só os números são
+    aproveitados, e o texto fica como está.
+
+    `None` quando não há marcador nenhum, que é o caso da maioria dos títulos.
+    """
+    if not titulo or not titulo.strip():
+        return None
+
+    for padrao in _PADROES_DE_EPISODIO:
+        achado = padrao.search(titulo)
+        if achado is None:
+            continue
+        temporada, episodio = int(achado.group("t")), int(achado.group("e"))
+        if not (1 <= temporada <= 50 and 1 <= episodio <= 999):
+            continue
+
+        antes = titulo[: achado.start()].strip(_SEPARADORES_DO_TITULO).strip()
+        depois = titulo[achado.end():].strip(_SEPARADORES_DO_TITULO).strip()
+        if not antes or not depois:
+            return None
+
+        rotulo = f"T{temporada} E{episodio}"
+        return antes, f"{rotulo} · {depois}"
+    return None
+
+
 def temporada_e_episodio(texto: str | None) -> tuple[int, int] | None:
     """Os números da temporada e do episódio, quando o texto os traz.
 
@@ -189,10 +310,33 @@ def temporada_e_episodio(texto: str | None) -> tuple[int, int] | None:
     return None
 
 
+#: "E1" ou "T2" sozinhos, que é como a Netflix escreve na maior parte do tempo.
+_SO_EPISODIO = re.compile(r"^E(?:P)?\s*(\d{1,3})\b", re.IGNORECASE)
+_SO_TEMPORADA = re.compile(r"^T(?:emporada)?\s*(\d{1,2})\b", re.IGNORECASE)
+
+
 def como_temporada_e_episodio(texto: str | None) -> str | None:
-    """"T1 E4", para a tela. `None` quando não dá para afirmar."""
+    """"T1 E4" — ou "E4", quando a temporada não foi publicada.
+
+    A tela precisa da forma curta, e a forma curta tem de ser HONESTA sobre o
+    que se sabe. Medido em 26/08/2026 com Breaking Bad na Netflix: o player
+    publica "E1" e nada mais quando já se sabe em que temporada se está.
+
+    Completar com "T1" seria um palpite, e ele erra justamente para quem mais
+    precisa da informação — quem está na quinta temporada e veria "T1 E1".
+    """
     numeros = temporada_e_episodio(texto)
-    if numeros is None:
+    if numeros is not None:
+        temporada, episodio = numeros
+        return f"T{temporada} E{episodio}"
+
+    if not texto:
         return None
-    temporada, episodio = numeros
-    return f"T{temporada} E{episodio}"
+    # Sem os dois juntos, vale o que houver sozinho.
+    episodio = _SO_EPISODIO.match(texto.strip())
+    if episodio is not None and 1 <= int(episodio.group(1)) <= 999:
+        return f"E{int(episodio.group(1))}"
+    temporada = _SO_TEMPORADA.match(texto.strip())
+    if temporada is not None and 1 <= int(temporada.group(1)) <= 50:
+        return f"T{int(temporada.group(1))}"
+    return None

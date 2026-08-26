@@ -18,6 +18,7 @@ meio de um filme não apagar duas horas de sessão.
 
 from __future__ import annotations
 
+from app.bridge.consumo import EstadoDeConsumo, conta_como_assistido
 from app.history.store import (
     PLATAFORMAS_FORA_DO_HISTORICO,
     SEGUNDOS_PARA_CONTAR,
@@ -29,6 +30,23 @@ from app.media.now_playing import NowPlaying, _titulo_generico
 # Grava a sessão em andamento de vez em quando: sem isto, fechar o servidor no
 # meio de um filme perderia tudo o que foi assistido desde o início dele.
 SEGUNDOS_ENTRE_GRAVACOES = 120.0
+
+# Quanto tempo o gravador segura a obra depois que ela some da leitura.
+#
+# A leitura pisca. A SMTC passa uma volta sem responder, a janela muda de
+# título por um instante, a ponte perde um batimento — e por uma volta o
+# sistema não sabe dizer o que está tocando. Sem esta folga, cada piscada
+# fechava a conta e zerava o acumulado, e uma sessão que pisca a cada poucos
+# segundos NUNCA alcança os 90 segundos que o histórico exige.
+#
+# Medido em 25/08/2026 com a Netflix: o filme aparecia certo no cartão e não
+# entrava no histórico de jeito nenhum. A causa de fundo era outra (ver
+# `EstadoDaPonte.atual_de`), mas a fragilidade é real e independente dela — uma
+# gravação de duas horas não pode depender de nenhuma volta do laço falhar.
+#
+# Oito segundos: mais que qualquer piscada observada, e bem menos que o tempo
+# de trocar de obra de propósito.
+SEGUNDOS_DE_TOLERANCIA_SEM_LEITURA = 8.0
 
 # Serviços que o controle opera mas não registra como assistidos.
 #
@@ -71,6 +89,23 @@ class HistoryRecorder:
         self._posicao: float | None = None
         self._duracao: float | None = None
         self._episodio: str | None = None
+        self._concluida = False
+        self._reproducao: str | None = None
+        # Quantas vezes este gravador escreveu no histórico nesta execução.
+        #
+        # Existe para a TELA, e não para o histórico: a de "continuar
+        # assistindo" recarregava por relógio de sessenta segundos e por
+        # mudança de título. Assistindo o mesmo episódio, o título não muda —
+        # então a linha nova levava os 90 segundos da gravação MAIS até 60 do
+        # relógio para aparecer. Eram os "três minutos" que o usuário mediu.
+        #
+        # Um contador e não um carimbo de tempo: o celular só precisa saber que
+        # MUDOU, e um número que só cresce responde isso sem depender de os
+        # dois relógios concordarem. Zera quando o servidor reinicia, e isso
+        # não custa nada — reiniciar já faz a tela recarregar de qualquer jeito.
+        self._revisao = 0
+        #: Há quanto tempo a obra sumiu da leitura. Ver a tolerância acima.
+        self._sem_leitura = 0.0
         # A última obra que se conseguiu NOMEAR em cada serviço, nesta execução.
         #
         # Existe para o caso do Max: a janela dele publica o nome do EPISÓDIO
@@ -84,8 +119,19 @@ class HistoryRecorder:
         # reinicia, que é quando deixa de haver continuidade para afirmar.
         self._obra_do_servico: dict[str, str] = {}
 
-    def observar(self, atual: NowPlaying | None, intervalo: float) -> None:
-        """Um instante do que está tocando. Chamado a cada volta do laço."""
+    def observar(
+        self,
+        atual: NowPlaying | None,
+        intervalo: float,
+        consumo: EstadoDeConsumo = "INDETERMINADO",
+    ) -> None:
+        """Um instante do que está tocando. Chamado a cada volta do laço.
+
+        `consumo` é a política da Fase 9, e ela é MAIS FORTE do que o
+        `playing` que a tela usa. O padrão é INDETERMINADO para que todo
+        chamador que não a conheça se comporte exatamente como antes — quem
+        decide negar precisa dizer isso em voz alta.
+        """
         titulo = atual.title.strip() if atual and atual.title else None
         platform = atual.platform if atual else None
 
@@ -135,6 +181,21 @@ class HistoryRecorder:
         ):
             self._obra_do_servico[platform] = titulo
 
+        # A obra SUMIU da leitura, em vez de ter sido trocada por outra.
+        #
+        # São coisas diferentes e o código tratava as duas igual. Sumir é a
+        # leitura piscando; trocar é a pessoa mudando de filme. Segurar a obra
+        # por alguns segundos custa, no pior caso, contar alguns segundos a
+        # mais para o título que saiu — e evita perder a sessão inteira, que é
+        # o custo do outro lado.
+        if titulo is None and self._titulo is not None:
+            self._sem_leitura += intervalo
+            if self._sem_leitura < SEGUNDOS_DE_TOLERANCIA_SEM_LEITURA:
+                # Não conta tempo e não fecha a conta: só espera.
+                return
+        elif titulo is not None:
+            self._sem_leitura = 0.0
+
         # Trocou de OBRA: a anterior fecha a conta agora. Trocar de EPISÓDIO
         # não fecha nada — é a mesma obra, e fechar aqui foi o que fazia o
         # tempo de uma série virar vários registros curtos.
@@ -145,32 +206,93 @@ class HistoryRecorder:
             self._acumulado = 0.0
             self._nao_gravado = 0.0
             self._episodio = None
+            self._concluida = False
+            self._reproducao = None
+            self._sem_leitura = 0.0
 
         if atual is None or titulo is None:
             return
 
-        # Mudou o episódio dentro da mesma obra: grava o que houve ATÉ AQUI com
-        # a posição da reprodução que está saindo, senão o trecho do episódio
-        # anterior seria carimbado com a posição do próximo.
-        if episodio != self._episodio and self._nao_gravado > 0 and self._acumulado >= SEGUNDOS_PARA_CONTAR:
+        # Mudou a REPRODUÇÃO dentro da mesma obra: grava o que houve ATÉ AQUI
+        # com a posição da que está saindo, senão o trecho do episódio anterior
+        # seria carimbado com a posição do próximo.
+        #
+        # Fase 11/12: quem responde "mudou?" é a identidade da reprodução,
+        # quando a página a fornece — o `pageId` da Netflix muda no episódio
+        # seguinte mesmo que o nome não tenha sido lido. O nome do episódio
+        # continua respondendo para os serviços sem adapter.
+        #
+        # E isto NÃO abre linha nova: a chave do arquivo continua sendo a da
+        # OBRA. É a proibição literal do gate da Fase 12 —
+        # "EPISODE_CHANGED → nova linha automaticamente" não acontece.
+        reproducao = atual.playback_id
+        mudou = (
+            reproducao != self._reproducao
+            if reproducao is not None or self._reproducao is not None
+            else episodio != self._episodio
+        )
+        if mudou and self._nao_gravado > 0 and self._acumulado >= SEGUNDOS_PARA_CONTAR:
             self._gravar()
+        if mudou:
+            # Reprodução nova começa não-concluída: o `ended` do episódio
+            # anterior não marca o próximo.
+            self._concluida = False
 
+        self._reproducao = reproducao
         self._episodio = episodio
         self._posicao = atual.position_seconds
         self._duracao = atual.duration_seconds
+        # Gruda até a reprodução mudar: o `ended` chega uma vez, e o que vem
+        # depois dele (a tela de "próximo episódio", os créditos) não desfaz o
+        # fato de que aquilo acabou.
+        if atual.ended:
+            self._concluida = True
+            # Um `ended` merece registro na hora. Esperar os 120 segundos do
+            # ciclo normal perderia justamente a evidência que interessa se a
+            # pessoa fechar a aba logo depois — que é o que se faz quando um
+            # filme acaba.
+            if self._acumulado >= SEGUNDOS_PARA_CONTAR and self._nao_gravado > 0:
+                self._gravar()
 
         # Pausado não acumula: o tempo passa, o filme não.
         if not atual.playing:
             return
 
+        # E tocar não basta. Esta é a linha que a Fase 9 existe para escrever:
+        # o histórico soma uma afirmação sobre a PESSOA, e `video.paused ===
+        # false` é uma afirmação sobre o player. Medido: o Chrome com a sessão
+        # de áudio em `Inactive` e "Batman: Caped Crusader" somando um segundo
+        # por segundo até 129 minutos.
+        #
+        # A posição e a duração acima JÁ foram guardadas de propósito: onde a
+        # pessoa parou continua sendo verdade mesmo num intervalo que não
+        # conta. O que não avança é o tempo assistido.
+        if not conta_como_assistido(consumo):
+            return
+
         self._acumulado += intervalo
         self._nao_gravado += intervalo
 
+        # A PRIMEIRA gravação acontece assim que a obra passa a contar; só as
+        # seguintes esperam o ciclo.
+        #
+        # Antes as duas condições valiam desde o começo, e `_nao_gravado` cresce
+        # junto com `_acumulado` — então a linha só aparecia aos 120 segundos,
+        # e não aos 90 que `SEGUNDOS_PARA_CONTAR` promete. Somado à recarga da
+        # tela de perfil, o usuário esperava três minutos para ver que trocou de
+        # obra. Trinta segundos de espera existiam só porque a condição de
+        # "gravar de novo" estava sendo usada como condição de "gravar".
+        primeira = self._nao_gravado == self._acumulado
         if (
             self._acumulado >= SEGUNDOS_PARA_CONTAR
-            and self._nao_gravado >= SEGUNDOS_ENTRE_GRAVACOES
+            and (primeira or self._nao_gravado >= SEGUNDOS_ENTRE_GRAVACOES)
         ):
             self._gravar()
+
+    @property
+    def revisao(self) -> int:
+        """Quantas gravações houve. Muda ⇒ a tela de perfil está desatualizada."""
+        return self._revisao
 
     def obra_conhecida(self, platform: str | None) -> str | None:
         """A obra que uma fonte confiável nomeou neste serviço, nesta execução.
@@ -205,7 +327,12 @@ class HistoryRecorder:
                 posicao=self._posicao,
                 duracao=self._duracao,
                 episodio=self._episodio,
+                concluida=self._concluida,
+                reproducao_id=self._reproducao,
             )
         except Exception:  # noqa: BLE001 - histórico nunca derruba a reprodução
             return
         self._nao_gravado = 0.0
+        # Só depois de a escrita ter dado certo. Avisar a tela de uma gravação
+        # que falhou a faria buscar o que não está lá.
+        self._revisao += 1

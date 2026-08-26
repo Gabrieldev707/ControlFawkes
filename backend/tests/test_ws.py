@@ -2126,7 +2126,7 @@ class CatalogoDeDoisResultados:
 
     enabled = True
 
-    async def lookup_options(self, query: str):
+    async def buscar_para_escolha(self, query: str, limite: int | None = None):
         from app.catalog.tmdb import TitleAvailability
 
         return [
@@ -2154,6 +2154,42 @@ def test_the_choice_carries_the_other_reading_of_the_same_name(client, dispatche
         assert message["availability"]["kind"] == "MOVIE"
         assert message["availabilityAlternative"]["title"] == "Marvel - O Justiceiro"
         assert message["availabilityAlternative"]["kind"] == "TV"
+
+
+def test_the_choice_carries_every_reading_not_just_two(client, dispatcher):
+    """Dois slots era o formato de "adivinhar a obra e oferecer a alternativa".
+
+    Para BUSCAR é pouco, e o quanto ficou medido em 25/08/2026: "capitão
+    américa" tinha os quatro filmes da Marvel entre os candidatos e a tela
+    mostrava o de 1990 — que não está em serviço nenhum — mais um.
+
+    Os dois campos antigos continuam preenchidos com os dois primeiros: um
+    cliente que não conhece a lista segue funcionando.
+    """
+    class CatalogoDeMuitos:
+        enabled = True
+
+        async def buscar_para_escolha(self, query: str, limite: int | None = None):
+            from app.catalog.tmdb import TitleAvailability
+
+            return [
+                TitleAvailability(f"Opção {i}", 2000 + i, None, ["MAX"], "MOVIE")
+                for i in range(1, 7)
+            ]
+
+    dispatcher.catalog = CatalogoDeMuitos()
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+
+        message = ask_where_to_search(websocket, dispatcher, "opcao", "needs-5")
+
+        assert len(message["availabilityOptions"]) == 6
+        # E os dois campos antigos são os dois primeiros da lista.
+        assert message["availability"]["title"] == "Opção 1"
+        assert message["availabilityAlternative"]["title"] == "Opção 2"
+        assert message["availabilityOptions"][0]["title"] == "Opção 1"
 
 
 def test_a_music_request_never_asks_the_movie_catalog(client, dispatcher):
@@ -2881,4 +2917,5 @@ def test_the_now_playing_fields_are_a_contract_with_the_phone():
         "titleIsWork",
         "thumbnailId",
         "posterUrl",
+        "historyRevision",
     }

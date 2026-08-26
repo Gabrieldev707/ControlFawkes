@@ -13,6 +13,7 @@ como antes. Nenhuma funcionalidade existente depende desta chamada, e uma
 falha de rede aqui nunca pode impedir a busca manual.
 """
 
+import asyncio
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 import os
@@ -507,6 +508,430 @@ class TmdbCatalog:
                 i for i in (item.get("genre_ids") or []) if isinstance(i, int)
             ),
         )
+
+    #: Quantas temporadas vale a pena varrer atrás do episódio. Séries com mais
+    #: do que isto são raras, e o custo é uma requisição por temporada.
+    TEMPORADAS_MAXIMAS = 30
+
+    async def temporada_do_episodio(
+        self,
+        serie: str,
+        episodio_nome: str | None = None,
+        episodio_numero: int | None = None,
+        duracao: float | None = None,
+    ) -> int | None:
+        """De que temporada é este episódio, quando o serviço não diz.
+
+        ## Por que isto existe
+
+        A Netflix publica "E1" e nada mais quando já se sabe em que temporada se
+        está — medido em 26/08/2026 com Breaking Bad, e confirmado pelo usuário:
+        a temporada não está em lugar nenhum da página. Inventar "T1" erraria
+        justamente para quem está na quinta.
+
+        Mas o catálogo SABE. Ele conhece a série inteira, e o que está tocando
+        deixa pistas suficientes para achar a linha certa. Medido contra a API:
+
+            T1 E1  runtime=59min  nome='Piloto'
+            T2 E1  runtime=48min  nome='Seven Thirty-Seven'
+            T3 E1  runtime=48min  nome='Chega!'
+            T4 E1  runtime=48min  nome='Estilete'
+            T5 E1  runtime=43min  nome='Viva Livre ou Morra'
+
+        ## A regra: responder só quando a resposta é ÚNICA
+
+        Isto NÃO é palpite disfarçado, e a diferença está no critério de saída.
+        Um palpite escolhe o mais provável; aqui, se sobrar mais de um
+        candidato, a resposta é `None` e a tela continua mostrando só "E1".
+
+            nome do episódio    o sinal forte. "Piloto" aparece em UMA linha da
+                                série inteira. Quando o nome isola um episódio,
+                                a temporada dele é a resposta.
+
+            duração             desempata só quando isola. 58min contra 59/48/
+                                48/48/43 aponta a T1 sem dúvida; mas se a pessoa
+                                estivesse na T2, as três de 48min seriam
+                                indistinguíveis — e aí a resposta é `None`.
+
+        `None` também quando o catálogo está desligado, a série não é achada, ou
+        a rede falha. Não saber a temporada é o estado normal, não um erro.
+        """
+        achado = await self.numeros_do_episodio(
+            serie, episodio_nome, episodio_numero, duracao,
+        )
+        return achado[0] if achado is not None else None
+
+    async def numeros_do_episodio(
+        self,
+        serie: str,
+        episodio_nome: str | None = None,
+        episodio_numero: int | None = None,
+        duracao: float | None = None,
+    ) -> tuple[int, int] | None:
+        """(temporada, episódio) do que está tocando, quando dá para isolar.
+
+        O irmão mais útil de `temporada_do_episodio`, e a razão é que a maioria
+        dos serviços NÃO publica número nenhum.
+
+            Netflix                 publica "E1" — falta a temporada
+            Max, Prime, Disney+     publicam só o NOME — "46 Long", "Ozymandias"
+
+        Para os segundos, o nome sozinho responde as duas perguntas: achado o
+        episódio na série, temporada e número vêm juntos. É o mesmo lookup, com
+        a resposta inteira em vez de metade.
+
+        As mesmas regras de recusa valem: nome repetido em duas temporadas sem
+        duração que desempate devolve `None`, e não o primeiro.
+        """
+        if not self.enabled or not serie.strip():
+            return None
+        if episodio_nome is None and episodio_numero is None:
+            return None
+        if self._client is not None:
+            return await self._temporada_com(
+                self._client, serie, episodio_nome, episodio_numero, duracao,
+            )
+        async with httpx.AsyncClient() as client:
+            return await self._temporada_com(
+                client, serie, episodio_nome, episodio_numero, duracao,
+            )
+
+    async def _temporada_com(
+        self,
+        client: httpx.AsyncClient,
+        serie: str,
+        episodio_nome: str | None,
+        episodio_numero: int | None,
+        duracao: float | None,
+    ) -> tuple[int, int] | None:
+        identificador = await self._id_da_serie(client, serie)
+        if identificador is None:
+            return None
+
+        episodios = await self._episodios_da_serie(client, identificador)
+        if not episodios:
+            return None
+
+        def resposta(episodio: dict) -> tuple[int, int]:
+            return episodio["temporada"], episodio["episodio"]
+
+        candidatos = episodios
+        if episodio_numero is not None:
+            candidatos = [e for e in candidatos if e["episodio"] == episodio_numero]
+
+        # O nome isola melhor do que qualquer outra coisa, e por isso vem antes.
+        if episodio_nome is not None:
+            alvo = normalizar(episodio_nome)
+            por_nome = [e for e in candidatos if normalizar(e["nome"]) == alvo]
+            if len(por_nome) == 1:
+                return resposta(por_nome[0])
+            if por_nome:
+                candidatos = por_nome
+
+        if len(candidatos) == 1:
+            return resposta(candidatos[0])
+
+        # A duração desempata SÓ quando isola. Dois episódios de 48 minutos
+        # continuam sendo dois, e responder ali seria escolher por sorte.
+        if duracao is not None and candidatos:
+            minutos = duracao / 60.0
+            perto = [
+                e for e in candidatos
+                if e["duracao"] is not None and abs(e["duracao"] - minutos) <= 2.0
+            ]
+            if len(perto) == 1:
+                return resposta(perto[0])
+        return None
+
+    async def _id_da_serie(self, client: httpx.AsyncClient, serie: str) -> int | None:
+        resposta = await self._get(
+            client, "/search/tv", query=serie.strip(), language=self.language,
+        )
+        alvo = normalizar(serie)
+        resultados = (resposta or {}).get("results") or []
+        # Casamento de nome antes de fama: "The Office" tem versões, e a mais
+        # popular não é necessariamente a que está tocando. Sem casamento
+        # exato, o primeiro — que é o palpite do próprio TMDB.
+        for item in resultados:
+            nomes = (item.get("name"), item.get("original_name"))
+            if any(n and normalizar(n) == alvo for n in nomes):
+                return item.get("id") if isinstance(item.get("id"), int) else None
+        primeiro = resultados[0].get("id") if resultados else None
+        return primeiro if isinstance(primeiro, int) else None
+
+    async def _episodios_da_serie(
+        self, client: httpx.AsyncClient, identificador: int,
+    ) -> list[dict]:
+        """Todos os episódios, com temporada, número, nome e duração.
+
+        Uma requisição por temporada. Cara o bastante para o chamador ter de
+        guardar o resultado — ver `Dispatcher._temporada_para`, que faz isso
+        fora do laço e uma vez por série.
+        """
+        detalhe = await self._get(client, f"/tv/{identificador}", language=self.language)
+        total = (detalhe or {}).get("number_of_seasons")
+        if not isinstance(total, int) or total < 1:
+            return []
+
+        episodios: list[dict] = []
+        for numero in range(1, min(total, self.TEMPORADAS_MAXIMAS) + 1):
+            temporada = await self._get(
+                client, f"/tv/{identificador}/season/{numero}", language=self.language,
+            )
+            for episodio in (temporada or {}).get("episodes") or []:
+                if not isinstance(episodio, dict):
+                    continue
+                numero_do_episodio = episodio.get("episode_number")
+                if not isinstance(numero_do_episodio, int):
+                    continue
+                duracao = episodio.get("runtime")
+                episodios.append({
+                    "temporada": numero,
+                    "episodio": numero_do_episodio,
+                    "nome": episodio.get("name") or "",
+                    "duracao": float(duracao) if isinstance(duracao, (int, float)) else None,
+                })
+        return episodios
+
+    #: Quantas opções a BUSCA oferece. Diferente de `OPCOES_MAXIMAS`, que serve
+    #: para resolver o pôster de uma obra já conhecida — lá duas bastam porque a
+    #: pergunta tem uma resposta certa. Aqui a pergunta é "o que você quis
+    #: dizer?", e duas é pouco: medido com "lanterna verde", havia SEIS
+    #: candidatos válidos e a tela mostrava dois.
+    RESULTADOS_DA_BUSCA = 8
+
+    async def buscar_para_escolha(
+        self, query: str, limite: int | None = None,
+    ) -> list[TitleAvailability]:
+        """A busca da TELA — que é outra pergunta, e por isso outro caminho.
+
+        ## As duas perguntas
+
+            resolver / lookup      "qual é ESTA obra?" Tem uma resposta certa, e
+                                   errar põe a capa do filme de 1989 no
+                                   histórico de uma série. Rigor é o correto:
+                                   `classificar` descarta quem não casa, e
+                                   recusar é uma saída legítima.
+
+            buscar_para_escolha    "o que você quis dizer?" Não tem resposta
+                                   certa — tem uma LISTA, e quem decide é quem
+                                   digitou. Descartar aqui é esconder.
+
+        Usar o filtro de identidade como porteiro da busca foi o defeito.
+        Medido em 25/08/2026 com "lanterna verde", contra a API real:
+
+            Lanterna Verde (2011)               TITULO         mostrado
+            Lanterna Verde: A Série Animada     SUBTITULO      mostrado
+            Lanterna Verde: Primeiro Voo        SUBTITULO      descartado (corte em 2)
+            Lanterna Verde: Cavaleiros Esmeralda SUBTITULO     descartado
+            Lanterna Verde: Cuidado Com Meu Poder SUBTITULO    descartado
+            Lanterna Mágica (1984)              PALAVRA_FORTE  descartado
+            Lanternas (2026, HBO)               NENHUM         nem gerado
+
+        A série da HBO que a pessoa queria chama-se "Lanternas" — o nome não
+        contém "lanterna verde", então nem entrava na lista de candidatos, e se
+        entrasse seria classificada NENHUM. Enquanto isso "Lanterna Mágica", um
+        filme de 1984 sem relação, passava no filtro. O rigor estava protegendo
+        a coisa errada.
+
+        ## O que muda
+
+        1. **Consulta mais larga.** A tentativa encurtada só rodava quando a
+           completa voltava vazia. Aqui ela roda SEMPRE, e os dois conjuntos são
+           unidos — é o que traz "Lanternas" para a mesa.
+        2. **Nada é descartado por nível.** O TMDB já decidiu que aquilo responde
+           à consulta; a ordem é nossa, o veto não.
+        3. **Oito em vez de duas.**
+
+        O que NÃO muda: `lookup` e `lookup_options` seguem intactos. O pôster do
+        histórico continua sendo escolhido com o rigor de antes, porque lá a
+        pergunta continua sendo a outra.
+        """
+        if not self.enabled or not query.strip():
+            return []
+        limite = limite or self.RESULTADOS_DA_BUSCA
+        if self._client is not None:
+            return await self._buscar_com(self._client, query, limite)
+        async with httpx.AsyncClient() as client:
+            return await self._buscar_com(client, query, limite)
+
+    async def _buscar_com(
+        self, client: httpx.AsyncClient, query: str, limite: int,
+    ) -> list[TitleAvailability]:
+        observado = Observado(titulo=query.strip())
+        achados: dict[tuple[str, int], Candidato] = {}
+        for candidato in await self.gerar_candidatos(client, observado):
+            achados[(candidato.tipo, candidato.tmdb_id)] = candidato
+
+        # A consulta larga, SEMPRE — e não só quando a estreita falha. É o que
+        # alcança o título que não contém as palavras que a pessoa digitou.
+        for largura in self._alargamentos(query):
+            for candidato in await self.gerar_candidatos(client, Observado(titulo=largura)):
+                achados.setdefault((candidato.tipo, candidato.tmdb_id), candidato)
+
+        # A pré-seleção ainda é por nome e fama: `disponivel` custa uma
+        # requisição por candidato, e são dezenas. Quem passa daqui é reavaliado
+        # com os três critérios.
+        ordenados = sorted(
+            achados.values(),
+            key=lambda c: -self._pontuar_na_busca(c, observado, disponivel=False),
+        )
+
+        # Uma folga acima do limite, porque a disputa final ainda vai mudar a
+        # ordem: só depois de saber ONDE ASSISTIR dá para dizer quais valem as
+        # vagas. Buscar isso para os sessenta candidatos seria sessenta
+        # requisições por letra digitada.
+        finalistas = ordenados[: limite * 2]
+
+        # Em paralelo: são requisições independentes, e em série o usuário
+        # esperaria a soma delas.
+        providers = await asyncio.gather(*[
+            self._get(
+                client,
+                f"/{'tv' if c.tipo == 'TV' else 'movie'}/{c.tmdb_id}/watch/providers",
+            )
+            for c in finalistas
+        ])
+
+        achados_com_onde = [
+            (candidato, self._platforms_of(resposta))
+            for candidato, resposta in zip(finalistas, providers)
+        ]
+
+        # O DESEMPATE FINAL: dá para assistir?
+        #
+        # Pedido pelo usuário em 25/08/2026, e a razão é boa demais para virar
+        # heurística escondida: ele digitou "Capitão América" e recebeu o filme
+        # de 1990, que não está em serviço nenhum. Um resultado que a pessoa não
+        # tem como abrir não é um resultado — é uma linha na tela.
+        #
+        # DESEMPATE e não critério principal: dentro do mesmo degrau de
+        # relevância, quem está disponível sobe. Entre degraus, não — senão um
+        # filme irrelevante que por acaso está na Netflix passaria na frente da
+        # obra que a pessoa nomeou.
+        achados_com_onde.sort(
+            key=lambda par: -self._pontuar_na_busca(
+                par[0], observado, disponivel=bool(par[1]),
+            ),
+        )
+
+        return [
+            TitleAvailability(
+                title=candidato.titulo,
+                year=candidato.ano,
+                poster_url=(
+                    f"{IMAGE_BASE}{candidato.poster_path}"
+                    if candidato.poster_path else None
+                ),
+                platforms=plataformas,
+                kind="TV" if candidato.tipo == "TV" else "MOVIE",
+            )
+            for candidato, plataformas in achados_com_onde[:limite]
+        ]
+
+    # Os pesos da busca. Explícitos e num lugar só, porque a alternativa é o
+    # `confidence: 0.98` que `contratos.py` existe para não repetir: um número
+    # mágico no meio de uma expressão que ninguém sabe justificar depois.
+    #
+    # A escala é logarítmica na fama de propósito. A popularidade do TMDB vai de
+    # 0 a centenas, e somá-la crua faria o campeão de fama vencer qualquer
+    # relevância — "Lanternas", com 320, atropelaria "Lanterna Verde" para quem
+    # digitou "lanterna verde". Em log, a distância entre 300 e 30 vale um
+    # ponto, que é mais ou menos o que ela significa.
+    PESO_NOME_EXATO = 3.0
+    PESO_NOME_PARCIAL = 1.5
+    PESO_DISPONIVEL = 1.5
+
+    def _pontuar_na_busca(
+        self, candidato: Candidato, observado: Observado, disponivel: bool,
+    ) -> float:
+        """Quanto este resultado merece a próxima vaga da lista.
+
+        ## Por que pontuação, e não degraus
+
+        Degraus rígidos dão dominância absoluta ao primeiro critério, e isso
+        produziu duas telas ruins, as duas medidas em 25/08/2026 contra a API:
+
+            "capitão américa"  →  os filmes de 1990, 1979 e 1944 no topo, os
+                                  três fora de qualquer serviço, porque casam
+                                  EXATO com o nome. Os da Marvel, que é o que
+                                  qualquer pessoa quis dizer, ficavam abaixo.
+
+            "lanterna verde"   →  um filme romeno de 1962 com fama 0,8 acima da
+                                  série da HBO com fama 320, por meio degrau de
+                                  heurística de texto.
+
+        Nos dois casos um critério legítimo — casou exato, casou por palavra —
+        estava anulando os outros dois em vez de somar com eles. Casar exato
+        VALE; não vale tudo.
+
+        ## Os três critérios, e por que cada um
+
+            nome        o que a pessoa digitou. Casar exato pesa o dobro de
+                        casar em parte — é o que mantém "Lanterna Verde" na
+                        frente de "Lanternas", que é 24 vezes mais famosa.
+
+            fama        a melhor previsão disponível de "o que as pessoas
+                        querem dizer com esta palavra". Em log, para informar
+                        sem mandar.
+
+            disponível  pedido do usuário, e a razão é boa: um resultado que
+                        ele não tem como abrir não é um resultado, é uma linha
+                        na tela. Vale o mesmo que casar em parte — sobe muito,
+                        e não passa por cima de quem tem o nome certo.
+
+        Maior é melhor, ao contrário de `Nivel`.
+        """
+        import math
+
+        nivel = classificar(candidato, observado).nivel
+        if nivel <= Nivel.ALTERNATIVO:
+            pontos = self.PESO_NOME_EXATO
+        elif nivel <= Nivel.SUBTITULO:
+            pontos = self.PESO_NOME_PARCIAL
+        else:
+            # `PALAVRA_FORTE` e `NENHUM` juntos: como PREVISÃO do que a pessoa
+            # quis, os dois são igualmente fracos, e deixar essa distinção
+            # decidir foi o que enterrou a série da HBO.
+            pontos = 0.0
+
+        pontos += math.log10(1.0 + max(0.0, candidato.popularidade))
+
+        # O bônus de disponibilidade NÃO alcança quem não responde à consulta.
+        #
+        # Disponibilidade é desempate entre resultados relevantes; ela não pode
+        # FABRICAR relevância. Sem esta trava, medido: "capitão américa"
+        # devolvia "Jake e os Piratas da Terra do Nunca" — que não tem nada a
+        # ver, e subiu só por estar no Disney+.
+        #
+        # O nível `NENHUM` continua podendo aparecer, e é assim que "Lanternas"
+        # chega à lista: pela FAMA, que é o que de fato sugere que a pessoa
+        # queria aquilo. Quem não tem nome nem fama não entra por estar num
+        # serviço.
+        if disponivel and nivel < Nivel.NENHUM:
+            pontos += self.PESO_DISPONIVEL
+        return pontos
+
+    def _alargamentos(self, query: str) -> list[str]:
+        """Consultas mais largas que a digitada, para alcançar o vizinho.
+
+        Só a primeira palavra que vale alguma coisa. Duas seria quase a consulta
+        original de novo; três palavras já é a original. E a primeira palavra é
+        justamente a que sobrevive à tradução — "Green Lantern" virou "Lanterna
+        Verde", "Lanterns" virou "Lanternas", e "lanterna" é o que os três
+        dividem.
+
+        Nada de plural nem de radical: mexer na palavra é onde a busca começa a
+        inventar. O TMDB já casa "lanterna" com "Lanternas" sozinho.
+        """
+        palavras = [
+            p.strip(":;,.-–—!?\"'") for p in query.strip().split()
+            if _normalize(p) not in self._LIGACOES
+        ]
+        palavras = [p for p in palavras if len(p) >= 4]
+        if len(palavras) < 2:
+            return []
+        return [palavras[0]]
 
     async def lookup(self, query: str) -> TitleAvailability | None:
         opcoes = await self.lookup_options(query)

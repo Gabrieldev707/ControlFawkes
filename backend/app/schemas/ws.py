@@ -332,6 +332,17 @@ class NowPlayingSession(BaseModel):
     # minutagem sumia inteira, ou ela avançava inventando um tempo que não
     # passou. Ver `RelogioDaMidia`.
     positionStale: bool = False
+    # Quantas vezes o histórico foi escrito nesta execução do servidor.
+    #
+    # O celular não usa o VALOR: ele compara com o anterior e, quando muda,
+    # recarrega a tela de "continuar assistindo". Sem isto ela dependia de um
+    # relógio de sessenta segundos, e uma obra recém-gravada levava até dois
+    # minutos e meio para aparecer — mesmo já estando no disco.
+    #
+    # Vai junto do NOW_PLAYING em vez de virar mensagem própria porque é um
+    # inteiro e a mensagem já vai: um tipo novo de mensagem para empurrar um
+    # número seria protocolo a mais para dado nenhum.
+    historyRevision: int = 0
     # O `title` acima é o nome da OBRA, ou é só o que deu para ler?
     #
     # Medido em 18/08/2026 com Ben 10 tocando: a janela do Max publica
@@ -396,6 +407,15 @@ class NeedsPlatformMessage(BaseModel):
     # A outra leitura do mesmo nome. "O Justiceiro" é filme de 2004 no Max
     # e série da Marvel no Disney+; adivinhar erraria metade das vezes.
     availabilityAlternative: TitleAvailabilityData | None = None
+    # A lista inteira — e os dois campos acima passam a ser os dois primeiros
+    # dela, mantidos para não quebrar cliente antigo.
+    #
+    # Dois slots era o formato de "adivinhar a obra e oferecer a alternativa".
+    # Para BUSCAR é pouco, e o quanto ficou medido em 25/08/2026: "capitão
+    # américa" tinha os quatro filmes da Marvel entre os candidatos e a tela
+    # mostrava o de 1990 — que não está em serviço nenhum — mais um. Os quatro
+    # que qualquer pessoa quis dizer não cabiam no protocolo.
+    availabilityOptions: list[TitleAvailabilityData] = Field(default_factory=list)
 
 
 class ErrorMessage(BaseModel):
