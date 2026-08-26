@@ -92,9 +92,56 @@ function contexto() {
     // de cada servico, custou caro para acertar e tem teste para cada caso.
     // Limpar aqui seria uma segunda verdade sobre a mesma string.
     documentTitle: document.title || null,
+    ...ondeEstaOVideo(),
     ...telemetriaDaPagina(),
     ...metadataAtual(),
   }
+}
+
+/**
+ * Onde o vídeo está na JANELA, em fração — para a tela cheia acertar nele.
+ *
+ * A tela cheia é um duplo clique, e não uma tecla: o atalho de teclado é de
+ * cada site e nenhum aplica igual (no Max, com a janela em foco, o F não fazia
+ * absolutamente nada — medido). Mas o clique mirava o CENTRO DA JANELA, e isso
+ * só acerta o vídeo enquanto ele ocupa o meio da tela.
+ *
+ * Medido no Prime em 26/08/2026: o vídeo toca em `/detail/`, com a lista de
+ * episódios e a sinopse em volta. O centro da janela cai no conteúdo da
+ * página — não no vídeo.
+ *
+ * Em FRAÇÃO da janela, e não em pixels, por dois motivos: o backend já sabe
+ * clicar assim (`_clicar_na_janela`, o mesmo caminho do toque na tela
+ * espelhada), e a fração sobrevive ao escalonamento do Windows — 150% de zoom
+ * muda os pixels e não muda a proporção.
+ *
+ * A conversão soma a barra do navegador: `getBoundingClientRect` conta a
+ * partir do viewport, e a janela começa acima dele.
+ */
+function ondeEstaOVideo() {
+  const video = observador.elemento()
+  if (video === null) return {}
+  let r
+  try {
+    r = video.getBoundingClientRect()
+  } catch {
+    return {}
+  }
+  // Um vídeo sem área na tela não é alvo de clique nenhum.
+  if (!(r.width > 0) || !(r.height > 0)) return {}
+  const larguraDaJanela = window.outerWidth || window.innerWidth
+  const alturaDaJanela = window.outerHeight || window.innerHeight
+  if (!(larguraDaJanela > 0) || !(alturaDaJanela > 0)) return {}
+
+  // As bordas laterais, e o que sobra em cima é a barra do navegador.
+  const lateral = Math.max(0, (larguraDaJanela - window.innerWidth) / 2)
+  const topo = Math.max(0, alturaDaJanela - window.innerHeight - lateral)
+
+  const x = (lateral + r.left + r.width / 2) / larguraDaJanela
+  const y = (topo + r.top + r.height / 2) / alturaDaJanela
+  // Fora da janela não é alvo: acontece com o vídeo rolado para fora da tela.
+  if (!(x >= 0 && x <= 1 && y >= 0 && y <= 1)) return {}
+  return { videoCentroX: Number(x.toFixed(4)), videoCentroY: Number(y.toFixed(4)) }
 }
 
 /** Quando o último `play` aconteceu, e quando qualquer evento de mídia. */

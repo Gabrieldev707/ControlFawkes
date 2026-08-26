@@ -1378,6 +1378,20 @@ class Dispatcher:
         gesto que todo player web implementa — um clique alterna play/pause,
         dois alternam tela cheia.
         """
+        # A extensão sabe ONDE o vídeo está; a janela não.
+        #
+        # Mirar o centro da janela só acerta enquanto o vídeo ocupa o meio da
+        # tela — e isso é falso em dois casos medidos. No Prime, o vídeo toca
+        # em `/detail/`, com a lista de episódios e a sinopse em volta. Na
+        # Netflix pausada no plano com anúncios, o meio da janela é do anúncio,
+        # e o clique ainda por cima mirava um link de anunciante.
+        #
+        # Quando a ponte diz onde ele está, usa-se isso. Quando não diz, o
+        # centro da janela continua sendo o melhor palpite disponível.
+        alvo = self._centro_do_video(platform)
+        if alvo is not None and self._clicar_na_janela(platform, *alvo, duplo):
+            return True
+
         window = self.window_focuser.find(platform)
         if window is None:
             return None
@@ -1389,6 +1403,20 @@ class Dispatcher:
         if not self.pointer_adapter.move_to(*centro):
             return None
         return self.pointer_adapter.double_click() if duplo else self.pointer_adapter.click()
+
+    def _centro_do_video(self, platform: Platform) -> tuple[float, float] | None:
+        """Onde o vídeo está na janela, em fração. `None` sem extensão.
+
+        Vem da própria página (`ondeEstaOVideo` em `index.js`), e em FRAÇÃO
+        para sobreviver ao escalonamento do Windows: 150% de zoom muda os
+        pixels e não muda a proporção.
+        """
+        sessao = self.bridge_state.atual_de(platform)
+        if sessao is None:
+            return None
+        if sessao.videoCentroX is None or sessao.videoCentroY is None:
+            return None
+        return (sessao.videoCentroX, sessao.videoCentroY)
 
     async def _handle_screen_control(
         self,

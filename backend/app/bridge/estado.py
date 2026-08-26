@@ -205,6 +205,10 @@ class SessaoDaPonte:
     duracao_cresceu: bool = False
     #: A maior sequência já vista desta sessão. Ver `registrar`.
     ultimo_seq: int | None = None
+    #: Onde o vídeo está na janela, em fração. Ver `videoCentroX` em
+    #: `eventos.py` — existe para a tela cheia acertar o vídeo.
+    videoCentroX: float | None = None
+    videoCentroY: float | None = None
 
     @property
     def tocando(self) -> bool:
@@ -425,6 +429,10 @@ class EstadoDaPonte:
                 (anterior.duracao_cresceu if anterior is not None else False)
                 or _duracao_aumentou(anterior, duracao_nova)
             ),
+            # Herdam: o retângulo do vídeo não muda entre batimentos, e um
+            # evento que não o traga não pode apagar o alvo do clique.
+            videoCentroX=_ou(evento.videoCentroX, anterior, "videoCentroX"),
+            videoCentroY=_ou(evento.videoCentroY, anterior, "videoCentroY"),
             ultimo_seq=(
                 evento.seq if evento.seq is not None
                 else (anterior.ultimo_seq if anterior is not None else None)

@@ -109,6 +109,17 @@ class EventoDeMidia:
     episodeTitle: str | None = None
     seasonNumber: int | None = None
     episodeNumber: int | None = None
+    #: Onde o vídeo está NA JANELA, em fração de 0 a 1.
+    #:
+    #: Existe para a tela cheia acertar o vídeo. Ela é um duplo clique, e o
+    #: clique mirava o centro da JANELA — o que só acerta enquanto o vídeo
+    #: ocupa o meio da tela. Medido no Prime em 26/08/2026: o vídeo toca em
+    #: `/detail/`, com a lista de episódios e a sinopse em volta.
+    #:
+    #: Fração e não pixel: sobrevive ao escalonamento do Windows, e é a mesma
+    #: forma que o toque na tela espelhada já usa.
+    videoCentroX: float | None = None
+    videoCentroY: float | None = None
     #: A ordem em que a ABA emitiu esta mensagem. Fase 17.
     #:
     #: O content script já numerava (`seq: sequencia++` em `index.js`) e o
@@ -291,6 +302,16 @@ def validar(mensagem: object, agora: float) -> EventoDeMidia | Recusa:
         valor = _numero(payload.get(nome))
         return valor if valor is not None and valor >= 0 else None
 
+    def fracao(nome: str) -> float | None:
+        """Uma posição relativa dentro da janela: de 0 a 1, e nada fora disso.
+
+        Fora da faixa não é "quase certo": é outra janela, ou uma leitura de um
+        vídeo rolado para fora da tela. Clicar ali erraria o alvo com a mesma
+        confiança de acertar.
+        """
+        valor = _numero(payload.get(nome))
+        return valor if valor is not None and 0.0 <= valor <= 1.0 else None
+
     def contagem_livre(nome: str) -> int | None:
         """Um inteiro não-negativo, sem o teto de `contagem`.
 
@@ -329,6 +350,8 @@ def validar(mensagem: object, agora: float) -> EventoDeMidia | Recusa:
         seasonNumber=contagem("seasonNumber"),
         episodeNumber=contagem("episodeNumber"),
         pageId=texto("pageId"),
+        videoCentroX=fracao("videoCentroX"),
+        videoCentroY=fracao("videoCentroY"),
         seq=contagem_livre("seq"),
         adapterPosition=posicao_do_adapter,
         adapterDuration=duracao_do_adapter,
