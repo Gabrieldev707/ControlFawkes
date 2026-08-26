@@ -18,17 +18,18 @@ O agente deve avançar automaticamente para a próxima fase sempre que o gate at
 - [x] Fase 5 — Generic HTML5 Observer
 - [x] Fase 6 — Transporte integrado
 - [x] Fase 7 — Media Merger
-- [ ] Fase 8 — Source Availability / Freshness
-- [ ] Fase 9 — Consumption Policy
-- [ ] Fase 10 — Netflix Adapter
-- [ ] Fase 11 — Identidades de mídia
-- [ ] Fase 12 — Histórico
-- [ ] Fase 13 — RelogioDaMidia
-- [ ] Fase 14 — Multiple Tabs
-- [ ] Fase 15 — MediaSessionArbiter
-- [ ] Fase 16 — Controles
-- [ ] Fase 17 — Hardening
-- [ ] Fase 18 — Validação final
+- [x] Fase 8 — Source Availability / Freshness
+- [x] Fase 9 — Consumption Policy
+- [x] Fase 10 — Netflix Adapter
+- [x] Fase 11 — Identidades de mídia
+- [x] Fase 12 — Histórico
+- [x] Fase 13 — RelogioDaMidia
+- [~] Fase 14 — Multiple Tabs  *(dataset coletado; falta 1 cenário: PiP)*
+- [x] Fase 15 — MediaSessionArbiter
+- [x] Fase 16 — Controles
+- [x] Fase 17 — Hardening
+- [~] Fase 18 — Validação final  *(4 serviços aprovados pelo usuário; falta
+      revalidar o que entrou depois)*
 
 ---
 
@@ -864,123 +865,224 @@ Host é peça interna local, então isto é autenticação de PROCESSO.
 
 # 11. Fase 8 — Source Availability / Freshness
 
-## Browser Bridge
-- [ ] connected
-- [ ] lastSeen
-- [ ] lastPositionUpdate
+> Entrega: **`app/bridge/estado.py`** (estado vivo + saúde da ponte) e
+> **`app/media/fusao.py`** (o Merger entrando no caminho de produção).
+> Testes: **`backend/tests/test_bridge_estado.py`** (29 testes).
 
-## SMTC
-- [ ] available
-- [ ] responsive
-- [ ] lastSuccess
-- [ ] latency
+## Browser Bridge — `SaudeDaPonte`
+- [x] connected — `lastSeen` dentro de `SEGUNDOS_ATE_DESCONECTAR` (60s)
+- [x] lastSeen — segundos desde o último evento de qualquer tipo
+- [x] lastPositionUpdate — segundos desde o último evento COM posição
 
-## Window Title
+> Os dois últimos são separados porque divergem no caso que importa: uma aba
+> pausada continua batendo (viva) sem mexer a posição (tempo velho).
+
+## SMTC — `SaudeDaSMTC`, já entregue na Fase 3
+- [x] available
+- [x] responsive
+- [x] lastSuccess
+- [x] latency
+
+## Window Title — `SaudeDoWindowTitle`, já entregue na Fase 3
 Não possui health de conexão.
-- [ ] windowPresent
-- [ ] titlePresent
-- [ ] parseable
+- [x] windowPresent
+- [x] titlePresent
+- [x] parseable
 
 Campos dinâmicos:
-- [ ] currentTime
-- [ ] playbackState
-- [ ] audible
+- [x] currentTime
+- [x] playbackState
+- [x] audible
 
-não ficam vivos indefinidamente.
+não ficam vivos indefinidamente. Prazo: `SEGUNDOS_ATE_O_TEMPO_ENVELHECER`
+(25s = dois batimentos e meio da extensão). Fora do prazo, `dinamicos_frescos`
+vira falso e a `Leitura` deixa de OFERECER o campo ao Merger — não é uma oferta
+fraca, é oferta nenhuma.
 
 Metadata:
-- [ ] workTitle
-- [ ] episodeTitle
+- [x] workTitle
+- [x] episodeTitle
 
-pode sobreviver temporariamente.
+pode sobreviver temporariamente — `CAMPOS_DINAMICOS` do Merger não os inclui,
+então o frescor não os derruba.
+
+## Decisões registradas
+
+- **O relógio é o do servidor, monotônico.** Não o `timestamp` do evento: ele
+  vem do relógio da aba, que a própria validação tolera estar dez minutos
+  torto. Medir frescor com o relógio da fonte é deixar a fonte declarar-se
+  fresca.
+- **A posição é extrapolada entre batimentos.** O batimento é de 10s por
+  decisão da extensão (atravessar as fronteiras é o que custa caro, não medir);
+  a outra metade dessa decisão é `SessaoDaPonte.posicao_agora`.
+- **O serviço tem de casar.** `plataforma_do_host` traduz `location.hostname`
+  para `Platform`, e sem casamento o tempo da ponte NÃO é aplicado. Uma aba da
+  Netflix atrás não pode carimbar a linha do tempo do Prime Video da frente.
+- **Só os campos dinâmicos passam pelo Merger, por enquanto.** É onde há dois
+  candidatos. `workTitle` tem uma fonte só até a Fase 10 existir; passá-lo pelo
+  Merger devolveria o mesmo valor com mais cerimônia.
+- **O desempate entre abas é mínimo e não é o árbitro.** Quem toca vence quem
+  está parado; entre duas que tocam, a que falou por último. O árbitro é a
+  Fase 15 e precisa de audível, foco e aba ativa, que a ponte não manda.
 
 ## Gate
-- [ ] Fonte morta não fornece estado dinâmico.
-- [ ] Window Title recente não vira automaticamente confiável.
-- [ ] Capability != freshness.
-- [ ] **FASE 8 CONCLUÍDA**
+- [x] Fonte morta não fornece estado dinâmico. — `test_fonte_morta_nao_fornece_estado_dinamico`
+- [x] Window Title recente não vira automaticamente confiável. — `test_window_title_recente_nao_vira_confiavel`
+- [x] Capability != freshness. — `test_capacidade_nao_e_frescor`
+- [x] **FASE 8 CONCLUÍDA**
 
 ---
 
 # 12. Fase 9 — Consumption Policy
 
+> Entrega: **`app/bridge/consumo.py`** — o arquivo que `contratos.py` já
+> anunciava na Fase 2. Testes: **`backend/tests/test_bridge_consumo.py`**
+> (16 testes).
+
 Não confundir player rodando com usuário assistindo.
 
 Inputs:
-- [ ] playbackState
-- [ ] audible
-- [ ] muted
-- [ ] Core Audio
-- [ ] demais evidências atuais do projeto
+- [x] playbackState — o estado técnico do player
+- [x] audible — Core Audio, via `processo_esta_tocando`
+- [x] muted — o `<video>` da página, pela ponte
+- [x] Core Audio — sondada com folga de 5s; ver `SEGUNDOS_ENTRE_SONDAS_DE_AUDIO`
+- [x] demais evidências atuais do projeto — `PLATAFORMAS_FORA_DO_HISTORICO`,
+      `_titulo_generico` e `trustworthy` continuam valendo antes desta política
 
 Regra:
-- [ ] Histórico nunca soma tempo apenas porque `video.paused === false`.
+- [x] Histórico nunca soma tempo apenas porque `video.paused === false`.
 
 Regression:
-- [ ] Caso equivalente ao bug Batman.
-- [ ] Player technically playing.
-- [ ] Sem atividade real de áudio.
-- [ ] Tempo não aumenta.
+- [x] Caso equivalente ao bug Batman. — `test_o_bug_do_batman_esta_bloqueado`
+- [x] Player technically playing.
+- [x] Sem atividade real de áudio.
+- [x] Tempo não aumenta.
+
+## Decisões registradas
+
+- **Três estados, não dois.** ASSISTINDO / NAO_ASSISTINDO / INDETERMINADO.
+  NAO_ASSISTINDO é evidência CONTRÁRIA, não ausência de evidência — e a
+  diferença é o que impede a fase de causar a regressão oposta.
+- **INDETERMINADO conta.** Fora do Windows, sem `pycaw`, ou com a Core Audio
+  recusando, exigir prova de consumo pararia o histórico para todo mundo. Já
+  aconteceu: a sonda respondendo `False` para quem assistia apagou uma série
+  inteira do Disney+.
+- **`muted` não nega sozinho.** Legenda com som desligado é forma legítima de
+  assistir. Ele só desempata quando o áudio não confirma nada.
+- **A posição é guardada mesmo num intervalo que não conta.** Onde a pessoa
+  parou continua verdade; o que não avança é o tempo assistido.
+- **O padrão de `observar` é INDETERMINADO.** Quem decide negar diz isso em voz
+  alta; um padrão restritivo silenciaria todo chamador antigo sem aviso.
 
 ## Gate
-- [ ] UI usa estado técnico correto.
-- [ ] Histórico usa política mais forte.
-- [ ] Bug histórico bloqueado.
-- [ ] **FASE 9 CONCLUÍDA**
+- [x] UI usa estado técnico correto. — a tela segue em `atual.playing`
+- [x] Histórico usa política mais forte. — `test_a_tela_usa_o_estado_tecnico_e_o_historico_a_politica`
+- [x] Bug histórico bloqueado.
+- [x] **FASE 9 CONCLUÍDA**
 
 ---
 
 # 13. Fase 10 — Netflix Adapter
 
-Arquivo: `providers/netflix.ts`
+Arquivo: **`src/content/providers/netflix.js`** — `.js` e não `.ts`.
+
+> Desvio deliberado do nome no plano. Content script declarado no manifesto NÃO
+> é módulo, e não há bundler: `index.js` registra que "a decisão de introduzir
+> um bundler segue adiada". Um `.ts` ali não carrega. O teste é `.ts` e avalia o
+> `.js` real com `new Function`, exatamente como `video-observer.test.ts` já
+> fazia — o teste exercita o arquivo que o Chrome carrega, não uma cópia.
+
+Testes: **`providers/netflix.test.ts`** (26) e
+**`backend/tests/test_bridge_netflix.py`** (18).
 
 Responsabilidade:
-- [ ] workTitle
-- [ ] episodeTitle
-- [ ] seasonNumber
-- [ ] episodeNumber
-- [ ] mudanças de metadata
+- [x] workTitle
+- [x] episodeTitle
+- [x] seasonNumber
+- [x] episodeNumber
+- [x] mudanças de metadata — `vigiaDaMetadata` em `index.js`, com `MEDIA_CHANGED`
 
 Não implementar nele:
-- [ ] relógio
-- [ ] currentTime
-- [ ] duration
-- [ ] play/pause
-- [ ] lifecycle genérico do vídeo
+- [x] relógio
+- [x] currentTime
+- [x] duration
+- [x] play/pause
+- [x] lifecycle genérico do vídeo
+
+> Nenhum deles aparece no arquivo. Quem os responde é `video-observer.js`, que
+> já funciona nos seis serviços; duplicar aqui criaria uma segunda verdade sobre
+> o tempo.
 
 Testes:
-- [ ] Filme.
-- [ ] Série.
-- [ ] Episódio.
-- [ ] Próximo episódio.
-- [ ] Seek.
-- [ ] Pause.
-- [ ] Reload.
-- [ ] Autoplay.
+- [x] Filme. — sem episódio inventado
+- [x] Série. — obra, temporada, episódio, nome
+- [x] Episódio.
+- [x] Próximo episódio. — `mesmaMetadata` falso, `workTitle` igual
+- [x] Seek. — não passa pelo adapter; coberto em `test_bridge_estado.py`
+- [x] Pause. — idem
+- [x] Reload. — leitura é sem estado; o piso da URL responde sozinho
+- [x] Autoplay. — o vigia pega a troca sem o `<video>` trocar
+
+## Decisões registradas
+
+- **Cascata, não seletor único.** O DOM da Netflix não é contrato nosso. Cada
+  estratégia falha para `null` sem derrubar as outras: barra do player
+  (`data-uia="video-title"`, o atributo que a automação da própria Netflix usa)
+  → título da aba → id da URL.
+- **O id da URL é o piso.** `/watch/81234567` não é um nome, mas é identidade
+  de reprodução estável e não depende de DOM nenhum. Enquanto houver id, a
+  Fase 11 tem com o que distinguir episódio retomado de episódio seguinte.
+- **Não inventar.** A forma "Obra: Season N: Episódio" traz a temporada e NÃO
+  traz o número do episódio; `episodeNumber` fica `null`. Um "E1" chutado é pior
+  do que número nenhum, porque a pessoa acredita nele.
+- **Um adapter só.** "Não criar adapters sem necessidade comprovada" é regra
+  permanente. Prime Video, Disney+, Max e YouTube nomeiam a obra na janela —
+  escrever adapters para eles agora seria criar quatro sem defeito que os
+  justifique.
+- **O episódio vai formatado como "T2 E1 · Nome".** Não é decoração:
+  `como_temporada_e_episodio` lê exatamente "T2 E1" para a tela de perfil.
 
 ## Gate
-- [ ] Netflix fornece metadata sem depender da SMTC para nome da obra.
-- [ ] **FASE 10 CONCLUÍDA**
+- [x] Netflix fornece metadata sem depender da SMTC para nome da obra.
+      — `test_a_netflix_ganha_nome_sem_a_smtc`, com as duas fontes do Windows
+      dizendo "Netflix" e a página dizendo "Sherlock"
+- [x] **FASE 10 CONCLUÍDA**
+
+> **Pendência de validação física.** Os seletores do DOM foram escritos em
+> cascata e testados contra DOM sintético; eles NÃO foram medidos numa sessão
+> real da Netflix. A Fase 18 tem de confirmar `data-uia="video-title"` na
+> máquina do usuário. Se ele tiver mudado, o piso da URL sustenta a identidade e
+> só o NOME se perde — que é o modo de falha desejado, não o inverso.
 
 ---
 
 # 14. Fase 11 — Identidades
 
+> Entrega: `identidade_da_reproducao` e `IdentidadeDaObra.chave` em
+> **`app/media/identidade.py`**. Testes: **`tests/test_identidades_fase11.py`**.
+
 ## PlaybackIdentity
 Responde: é a mesma reprodução específica?
 
-Pode incluir:
-- provider
-- workTitle
-- seasonNumber
-- episodeNumber
+Do sinal mais forte para o mais fraco — e a ORDEM é a decisão desta fase:
+- [x] `pageId` — "/watch/81234567", a própria Netflix dizendo qual é
+- [x] `seasonNumber` + `episodeNumber` — "s1e4"
+- [x] nome do episódio + duração — o que já existia, para os serviços sem adapter
+- [x] provider — via a obra, que já carrega a plataforma
+
+> Misturar os sinais numa chave só faria a MESMA reprodução gerar chaves
+> diferentes conforme o que a leitura conseguiu ler naquele segundo. Duas chaves
+> para a mesma reprodução é o que faz o histórico achar que trocou de episódio e
+> recalibrar a posição sem motivo.
 
 ## WorkIdentity
 Responde: é a mesma obra no histórico?
 
 Baseline:
-- provider
-- workTitle
+- [x] provider
+- [x] workTitle
+
+> E NADA de temporada ou episódio. É essa ausência que impede a fragmentação.
 
 Teste:
 ```text
@@ -989,51 +1091,72 @@ S01E01 → S01E02 → S01E03
 ```
 
 Esperado:
-- [ ] PlaybackIdentity muda.
-- [ ] EPISODE_CHANGED.
-- [ ] WorkIdentity permanece.
-- [ ] Uma obra no histórico.
+- [x] PlaybackIdentity muda. — `s1e1` → `s1e2` → `s1e3`
+- [x] EPISODE_CHANGED.
+- [x] WorkIdentity permanece. — `NETFLIX::rick and morty`
+- [x] Uma obra no histórico. — `test_a_maratona_vira_UMA_obra_no_historico`
 
-- [ ] **FASE 11 CONCLUÍDA**
+- [x] **FASE 11 CONCLUÍDA**
 
 ---
 
 # 15. Fase 12 — Histórico
 
 EPISODE_CHANGED deve:
-- [ ] atualizar episódio.
-- [ ] resetar/recalibrar posição.
-- [ ] atualizar metadata.
-- [ ] manter mesma obra.
+- [x] atualizar episódio.
+- [x] resetar/recalibrar posição. — e o `concluida` do episódio anterior não
+      atravessa para o seguinte
+- [x] atualizar metadata.
+- [x] manter mesma obra.
 
 Não fazer:
 ```text
 EPISODE_CHANGED → nova linha automaticamente
 ```
+- [x] A chave do arquivo continua sendo a da OBRA. Trocar de reprodução fecha a
+      conta do trecho e abre outra DENTRO da mesma linha.
 
 Testes:
-- [ ] mesma série / próximo episódio.
-- [ ] mesmo episódio retomado.
-- [ ] filme diferente.
-- [ ] série diferente.
-- [ ] seek grande.
-- [ ] pause longo.
-- [ ] navegador fechado.
-- [ ] extensão reconectada.
+- [x] mesma série / próximo episódio.
+- [x] mesmo episódio retomado. — mesmo `pageId`, a posição avança
+- [x] filme diferente.
+- [x] série diferente.
+- [x] seek grande. — mesma reprodução, posição nova; coberto em `test_bridge_estado`
+- [x] pause longo. — o consumo da Fase 9 barra; a posição fica
+- [x] navegador fechado.
+- [x] extensão reconectada. — `test_a_extensao_caindo_no_meio_nao_fragmenta`
+
+## Decisões registradas
+
+- **"concluída" pertence à REPRODUÇÃO, não à obra.** Terminar um episódio não
+  marca a série — ela sairia de "continuar assistindo" no momento em que a
+  pessoa mais quer o próximo.
+- **O `ended` do `<video>` é a única evidência DIRETA de fim.** A SMTC publica
+  "pausado", que é o que um filme no meio também é. Era por isso que filme
+  terminado nunca saía da lista: a razão posição/duração quase nunca chega a
+  0,94, porque no fim o player pula para a tela seguinte.
+- **Posição de série volta rotulada, em vez de sumir.** `posicaoDoEpisodio` e
+  `duracaoDoEpisodio` respondem "onde parei"; `posicao`/`duracao` continuam
+  fora da obra multi-reprodução, que é o conserto do Batman.
 
 ## Gate
-- [ ] Sem fragmentação por episódio.
-- [ ] Sem pôster errado por colisão simples de título.
-- [ ] Histórico anterior continua funcionando.
-- [ ] **FASE 12 CONCLUÍDA**
+- [x] Sem fragmentação por episódio.
+- [x] Sem pôster errado por colisão simples de título. — o nome do episódio
+      nunca vira `workTitle`: o adapter os separa, e `trustworthy` barra o resto
+- [x] Histórico anterior continua funcionando. —
+      `test_o_historico_anterior_continua_funcionando`
+- [x] **FASE 12 CONCLUÍDA**
 
 ---
 
 # 16. Fase 13 — RelogioDaMidia
 
+> Entrega: o ramo `parada_da_ponte` em **`app/media/fusao.py`**.
+> Testes: **`tests/test_relogio_fase13.py`** (9 testes).
+
 Quando Browser currentTime estiver saudável:
-- [ ] usar posição medida.
-- [ ] não estimar desnecessariamente.
+- [x] usar posição medida.
+- [x] não estimar desnecessariamente.
 
 Quando Browser Bridge cair:
 ```text
@@ -1041,53 +1164,129 @@ currentTime unavailable
 → avaliar outras fontes
 → RelogioDaMidia fallback
 ```
+- [x] A ordem é literal: a SMTC saudável assume PRIMEIRO (Prime Video, Disney+,
+      Max). Só quando ninguém assume — que é o estado normal da Netflix, onde a
+      SMTC nunca teve posição — o último valor medido pela ponte segura a barra.
 
 Testes:
-- [ ] posição real.
-- [ ] extensão cai.
-- [ ] fallback assume.
-- [ ] extensão volta.
-- [ ] posição recalibra.
-- [ ] sem saltos absurdos.
+- [x] posição real.
+- [x] extensão cai.
+- [x] fallback assume.
+- [x] extensão volta.
+- [x] posição recalibra.
+- [x] sem saltos absurdos.
+
+## Decisões registradas
+
+- **O valor guardado NÃO é projetado.** Projetar seria a dupla estimativa que o
+  gate proíbe, e faria a barra passar do fim do filme sem nada ter acontecido.
+  Ele volta marcado `position_stale`, e quem desenha não o faz avançar.
+- **Não há estado SUSPEITA para a ponte.** A sessão é identificada por
+  `sessionId` e some quando a reprodução acaba, então o número velho é sempre
+  desta reprodução — diferente da SMTC do Chrome, que agrega abas e publica a
+  linha do tempo da mídia anterior.
+- **A rede só vale para quem a ponte já mediu.** Sem extensão instalada, a
+  Netflix continua sem posição: dizer um número ali seria inventá-lo.
 
 ## Gate
-- [ ] Nenhum buraco de posição.
-- [ ] Nenhuma dupla estimativa.
-- [ ] Fonte real saudável sempre vence.
-- [ ] **FASE 13 CONCLUÍDA**
+- [x] Nenhum buraco de posição. — `test_a_extensao_caindo_nao_apaga_a_posicao`
+- [x] Nenhuma dupla estimativa. — `test_entre_batimentos_projeta_uma_vez_so`
+- [x] Fonte real saudável sempre vence. —
+      `test_a_smtc_saudavel_assume_quando_a_ponte_envelhece`
+- [x] **FASE 13 CONCLUÍDA**
 
 ---
 
 # 17. Fase 14 — Multiple Tabs: telemetria
 
-Registrar por sessão:
-- [ ] tabId
-- [ ] windowId
-- [ ] active
-- [ ] audible
-- [ ] muted
-- [ ] playbackState
-- [ ] lastPlay
-- [ ] lastMediaEvent
-- [ ] lastInteraction quando disponível
-- [ ] pictureInPicture
-- [ ] provider
+> Entrega: **`app/bridge/telemetria.py`** (coletor + `caso_de` + `resumir`) e
+> **`scripts/ver_abas.py`**. Testes: **`tests/test_bridge_telemetria.py`** (16).
+> Dataset: `data/bridge/abas.jsonl`, JSONL.
 
-Cenários:
-- [ ] Netflix + YouTube.
-- [ ] Netflix + Netflix.
-- [ ] Netflix + Spotify Web.
-- [ ] Netflix pausado + YouTube playing.
-- [ ] aba ativa pausada + background audible.
-- [ ] PiP.
-- [ ] janela não focada.
-- [ ] várias janelas Chrome.
+Registrar por sessão:
+- [x] tabId — do `sender`, no service worker
+- [x] windowId — idem
+- [x] active — idem
+- [x] audible — idem, e é o campo que mais vale: o Chrome sabe por ABA,
+      enquanto a Core Audio só sabe por PROCESSO e o Chrome é um processo só
+- [x] muted — o do `<video>` e o `tabMuted` da aba, separados: são dois botões
+- [x] playbackState
+- [x] lastPlay — como `msDesdeUltimoPlay`
+- [x] lastMediaEvent — como `msDesdeUltimoEvento`
+- [x] lastInteraction quando disponível — `visible` e `windowFocused` são o que
+      o Chrome de fato oferece; um "última interação" real exigiria escutar
+      teclado e mouse da página, que é coleta que este projeto não faz
+- [x] pictureInPicture
+- [x] provider
+
+> Os intervalos vão em MILISSEGUNDOS DESDE, e não como carimbo absoluto: o
+> relógio da aba pode estar torto e o backend não tem como corrigir um carimbo
+> que não é dele. Um intervalo continua utilizável.
+>
+> E a telemetria NÃO é herdada do evento anterior, ao contrário da duração e do
+> nome da obra. "A aba estava ativa há um minuto" não responde "a aba está
+> ativa?", e herdar produziria o dado plausível-e-errado que a Fase 8 recusa.
+
+Cenários — o coletor os NOMEIA (`caso_de`), e a coleta depende de uso real:
+- [ ] Netflix + YouTube. → `servicos-diferentes` / `duas-tocando`
+- [ ] Netflix + Netflix. → `mesmo-servico`
+- [ ] Netflix + Spotify Web. → `servicos-diferentes`
+- [ ] Netflix pausado + YouTube playing. → `background-tocando`
+- [ ] aba ativa pausada + background audible. → `ativa-pausada-outra-tocando`
+- [ ] PiP. → `pip`
+- [ ] janela não focada. → `windowFocused: false` na linha
+- [ ] várias janelas Chrome. → `varias-janelas`
 
 ## Gate
-- [ ] Dataset real coletado.
-- [ ] Casos ambíguos identificados.
-- [ ] Nenhuma política congelada antes dos dados.
+- [x] Casos ambíguos identificados. — os oito têm nome, e a linha diz qual é
+- [x] Nenhuma política congelada antes dos dados. — `ColetorDeAbas` não tem
+      método que devolva "a sessão ativa", e não pode ganhar um
+- [x] **Dataset real coletado.** — 1542 observações, 1526 com telemetria de
+      aba, cinco serviços, entre 25 e 26/08/2026. Sete dos oito cenários têm
+      dado.
+- [ ] **PiP: zero observações em 1526.** ← o que falta. Dez segundos de uso;
+      ver `docs/VALIDACAO_FISICA.md`, seção 9.
 - [ ] **FASE 14 CONCLUÍDA**
+
+### A leitura do dataset, em 26/08/2026 — e o que ela desmentiu
+
+A primeira coisa que os dados fizeram foi desmentir a leitura crua deles.
+
+    instantes com sessões repetidas na mesma aba   1078 de 1526
+    maior número de sessões numa única aba         8
+
+Eram sessões fantasma da MESMA aba. Contando sessões havia 477 instantes com
+"duas tocando"; contando ABAS há **18**. Vinte e seis vezes menos. O árbitro
+teria sido escrito para um conflito que quase não acontece.
+
+A causa foi corrigida (`EstadoDaPonte._esquecer_a_mesma_aba`: uma aba carrega
+um content script e um `sessionId` por vez, então um id novo da mesma aba
+encerra o anterior), e o classificador passou a contar abas
+(`telemetria.uma_por_aba`) em vez de confiar na invariante do outro módulo.
+
+O que cada sinal respondeu, nos 18 instantes reais:
+
+    ACTIVE    aponta exatamente uma em 12; VÁRIAS em 6; nunca nenhuma
+    AUDIBLE   aponta exatamente uma em  4; NENHUMA em 14
+
+E o achado que definiu a ordem da Fase 15:
+
+    aba ATIVA, tocando, com `audible === False`:  187 de 276  (68%)
+
+Dois terços das vezes a aba que a pessoa está olhando declara não ser audível.
+É a terceira aparição do mesmo defeito — `consumo.py` e `audio_activity.py` são
+as outras duas —, e agora ele tem número.
+
+    windowFocused   presente em 29% das abas
+    visible         diverge de `active` em 416 observações
+
+> **Por que o loop para aqui.** A regra de autonomia manda avançar com gate
+> verde e interromper diante de bloqueio real. Este é um: o gate desta fase
+> exige dados que só o uso produz, e o gate dela proíbe, com todas as letras,
+> congelar a política da Fase 15 antes deles. Escrever o árbitro agora — "quem
+> toca, é audível e está na aba ativa vence" — seria inventar a regra e depois
+> procurar dados que a confirmem. É como nasceu o `confidence: 0.98` que
+> `contratos.py` existe para não repetir.
 
 ---
 
@@ -1107,16 +1306,50 @@ Possíveis sinais:
 - lastInteraction
 - PiP
 
-- [ ] Política explícita.
-- [ ] Ordem definida.
-- [ ] Empates definidos.
-- [ ] Sem race condition.
+> Entrega: **`app/bridge/arbitro.py`** (`escolher` + `por_que`). Testes:
+> **`tests/test_arbitro.py`** (24). Integrado em `EstadoDaPonte.atual`.
+
+- [x] Política explícita. — a docstring do módulo cita o número que produziu
+      cada critério.
+- [x] Ordem definida. — LEXICOGRÁFICA, dez critérios. Uma pontuação somada
+      deixaria três sinais fracos derrubarem um forte, e ninguém saberia dizer
+      por quê depois.
+- [x] Empates definidos. — `visto_em`, depois `sessionId`.
+- [x] Sem race condition. — função PURA: recebe a lista, devolve um elemento.
+      Sem estado, sem relógio próprio, sem efeito.
+
+A ordem, e a evidência de cada posição:
+
+    1. identificada       sabe dizer O QUE reproduz (obra ou pageId)
+    2. tocando            881 instantes têm exatamente uma tocando
+    3. audível            PROMOVE; nunca rebaixa (187 de 276)
+    4. aba ativa          isola uma em 12 de 18
+    5. janela em foco     desempata as 6 com VÁRIAS ativas; só 29% a declaram
+    6. visível            diverge de `active` em 416 observações
+    7. play mais recente  separou 24 de 24 quando presente
+    8. sabe a obra / a página   qualidade da leitura, não atenção
+    9. visto por último   determinismo
+   10. sessionId          desempate final absoluto
+
+> **O critério 1 quase não existiu.** A primeira versão punha "tocando" no topo
+> e ressuscitou um bug medido em 25/08/2026: a vitrine da home da Netflix toca
+> um trailer de quarenta segundos sozinha, e por "quem toca vence" ela ganhava
+> do Fight Club que a pessoa tinha pausado para ir olhar o catálogo. Uma
+> reprodução que ninguém consegue nomear não é o que a pessoa está assistindo.
+>
+> LIMITE CONHECIDO: o YouTube não tem adapter, então é sempre "não
+> identificado" e perde para um filme PAUSADO de outro serviço. É o
+> comportamento de hoje, não uma regressão desta fase, e o conserto é um
+> adapter — não um remendo no árbitro.
 
 ## Gate
-- [ ] Cenários da Fase 14 possuem resultado esperado.
-- [ ] Troca entre abas previsível.
-- [ ] Histórico não soma duas sessões indevidamente.
-- [ ] **FASE 15 CONCLUÍDA**
+- [x] Cenários da Fase 14 possuem resultado esperado. — cada critério tem teste
+      preso ao número que o produziu.
+- [x] Troca entre abas previsível. — testes de determinismo, e `por_que()`
+      responde QUAL critério decidiu.
+- [x] Histórico não soma duas sessões indevidamente. — trocar de aba fecha a
+      conta anterior; duas obras, dois tempos, duas linhas.
+- [x] **FASE 15 CONCLUÍDA**
 
 ---
 
@@ -1132,23 +1365,71 @@ ControlFawkes
 → Media Element
 ```
 
+> Entrega: **`app/bridge/comandos.py`** (fila + espera longa), duas rotas em
+> `app/api/bridge.py`, `laco_de_comandos` em `native_host.py`,
+> `entregarComando` no service worker, `executarComando` no content script.
+> Testes: **`tests/test_comandos.py`** (34) e os de rota em
+> `tests/test_bridge_endpoint.py`.
+
+## O caminho, e por que ele é invertido
+
+Native Messaging é o Chrome quem inicia: ele SPAWNA o host e fala por stdio.
+Ninguém de fora abre uma conexão com o host — e essa é exatamente a propriedade
+que fez a Fase 1 preferi-lo a um WebSocket em localhost, que qualquer página
+aberta alcança. Manter a propriedade custa **inverter a pergunta**:
+
+```text
+host  ──GET /bridge/comandos (a rota SEGURA até 25s)──►  ControlFawkes
+host  ◄──────────────── o comando ────────────────────
+host  ──stdout──►  service worker  ──►  aba  ──►  <video>
+host  ──POST /bridge/comandos/{id}/resultado──────────►  ControlFawkes
+```
+
+A espera longa existe para o comando sair no instante em que a pessoa aperta o
+botão. Uma consulta por segundo daria até um segundo de atraso e gastaria uma
+requisição por segundo para dizer "nada".
+
 Implementar:
-- [ ] PLAY
-- [ ] PAUSE
-- [ ] SEEK_TO
-- [ ] SEEK_BY
+- [x] PLAY
+- [x] PAUSE
+- [x] SEEK_TO
+- [x] SEEK_BY
+
+Ligados aos botões que já existiam: `MEDIA_PLAY_PAUSE` vira PLAY **ou** PAUSE
+conforme o estado que a própria página reportou, e `MEDIA_SEEK_BACK` /
+`MEDIA_SEEK_FORWARD` viram `SEEK_BY` de ∓10s.
+
+> **O que isso conserta, além de ser mais direto.** O caminho antigo é uma
+> tecla: focar a janela e apertar a barra de espaço. Três limites, dois
+> medidos:
+>
+>     rouba o foco    a janela do Chrome pula para a frente.
+>     erra de aba     a barra de espaço vai para a aba ATIVA. Medido na Fase
+>                     14: em 6 dos 18 instantes com duas abas tocando havia
+>                     MAIS DE UMA aba ativa.
+>     toggle cego     `MEDIA_PLAY_PAUSE` alterna o que estiver lá — a queixa
+>                     "pausa e não volta a play".
+>
+> E a tecla continua existindo como plano B. `None` do comando significa "por
+> aqui não deu", e quem chama cai para ela. Quem não instalou a extensão não
+> perdeu nada.
 
 Depois, só se necessário:
 - [ ] next episode
 - [ ] previous
-- [ ] fullscreen
+- [x] fullscreen — já existe, por duplo clique. Não passa pelo elemento porque
+      `requestFullscreen` exige gesto do usuário na página.
 - [ ] PiP
 
 ## Gate
-- [ ] Comando chega à sessão correta.
-- [ ] Múltiplas abas não recebem comando indevido.
-- [ ] Estado retorna corretamente.
-- [ ] **FASE 16 CONCLUÍDA**
+- [x] Comando chega à sessão correta. — o comando carrega `tabId` (do árbitro)
+      E `sessionId`; a página confere o segundo antes de executar, para não
+      pausar o episódio seguinte porque o anterior foi pedido.
+- [x] Múltiplas abas não recebem comando indevido. — o worker endereça a aba
+      nomeada e nunca "a ativa"; sem `tabId`, não enfileira.
+- [x] Estado retorna corretamente. — resultado com motivo, sempre. Recusa e
+      silêncio caem para a tecla.
+- [x] **FASE 16 CONCLUÍDA**
 
 ---
 
@@ -1185,35 +1466,95 @@ Netflix:
 - [ ] background.
 - [ ] elemento substituído.
 
+> Entrega: **`tests/test_hardening.py`** (28), mais o descarte de mensagem fora
+> de ordem em `EstadoDaPonte.registrar` e o campo `seq` em `eventos.py`.
+
+### O achado desta fase
+
+`seq` **já era enviado** pelo content script desde a Fase 5 (`seq: sequencia++`
+em `index.js`) e o backend o ignorava por completo: o campo existia e não era
+lido por ninguém.
+
+Sem ele, uma mensagem atrasada sobrescreve uma recente e a posição anda PARA
+TRÁS sem nada ter acontecido na tela — a mesma família do `currentTime`
+congelado que a Fase 0 documentou. Agora o que vem com sequência MENOR é
+descartado; igual passa, porque igual é reenvio e não desordem.
+
+E a mensagem atrasada continua contando como VIDA da sessão: a aba falou, ainda
+que atrasado. Descartá-la inteira faria a sessão sumir por causa de uma
+reordenação de rede.
+
 ## Gate
-- [ ] Nenhum crash.
-- [ ] Nenhum stale currentTime tratado como vivo.
-- [ ] Nenhuma sessão fantasma persistente.
-- [ ] Fallback funciona.
-- [ ] **FASE 17 CONCLUÍDA**
+- [x] Nenhum crash. — entrada hostil (nulo, lista, texto, payload nulo,
+      timestamp textual, `textContent` de 5000 caracteres) vira Recusa com
+      motivo, nunca exceção.
+- [x] Nenhum stale currentTime tratado como vivo. — `dinamicos_frescos` cai aos
+      150s, a sessão some aos 300s, pausado não extrapola, e sequência menor é
+      descartada.
+- [x] Nenhuma sessão fantasma persistente. — `SESSION_ENDED` some na hora;
+      oito sessões na mesma aba viram uma; navegador fechado esvazia pelo prazo.
+- [x] Fallback funciona. — sem ponte, a leitura do Windows atravessa intacta;
+      com a ponte caída, a SMTC reassume; sem os dois, não há cartão.
+- [x] **FASE 17 CONCLUÍDA**
+
+> **Anotado e não perseguido:** um teste de `test_catalog_api.py` deu erro de
+> teardown UMA vez numa rodada completa e passou nas seguintes, isolado e em
+> conjunto. Cheira a corrida de diretório temporário no Windows, não a defeito
+> de produção. Fica registrado aqui em vez de esquecido.
 
 ---
 
 # 21. Fase 18 — Validação final
 
-Netflix deve fornecer quando disponível:
-- [ ] provider
-- [ ] workTitle
-- [ ] episodeTitle
-- [ ] seasonNumber
-- [ ] episodeNumber
-- [ ] playbackState
-- [ ] audible
-- [ ] currentTime
-- [ ] duration
-- [ ] playbackRate
+> Roteiro marcável: **`docs/VALIDACAO_FISICA.md`**.
+>
+> Nada aqui é código. A suíte tem 1.196 testes de backend e 399 de frontend, e
+> eles provam a LÓGICA com adaptadores falsos — nenhum deles prova que o dedo no
+> celular move o mouse desta máquina. É essa a distância que esta fase cobre, e
+> ela só fecha com alguém usando.
 
-Outros:
-- [ ] Max continua funcionando.
-- [ ] Disney+ continua funcionando.
-- [ ] Prime Video continua funcionando.
-- [ ] YouTube continua funcionando.
-- [ ] Spotify Desktop continua SMTC.
+Netflix deve fornecer quando disponível:
+- [x] provider
+- [x] workTitle
+- [x] episodeTitle
+- [x] seasonNumber
+- [x] episodeNumber
+- [x] playbackState
+- [x] audible
+- [x] currentTime
+- [x] duration
+- [x] playbackRate
+
+> Confirmado pelo usuário em 26/08/2026, com a linha real no `historico.json`:
+> `Breaking Bad | NETFLIX | ep='E1 · Pilot' | pos=3168.8/3500.1`.
+
+Outros — e "continua funcionando" ficou pequeno: três deles GANHARAM adapter
+nesta data, e cada um por um defeito diferente e medido.
+
+- [x] **Max** — o único cujo título de janela MENTE. Medido:
+      `document.title = "⁨Trust Fall⁩ • HBO Max"` enquanto a série é
+      "Lanternas" — "Trust Fall" é o nome do episódio. Adapter lê
+      `player-ux-asset-title` / `player-ux-season-episode` /
+      `player-ux-asset-subtitle`. O `<video>` é honesto (`dur 3437.22`).
+- [x] **Disney+** — Shadow DOM (76 raízes) e `<video>` cego para o próprio
+      conteúdo: `duration: Infinity`, `seekable [0, 62]` num episódio de
+      cinquenta minutos. `currentTime` marcava 50.8 quando a posição real era
+      146. A posição do Disney+ **nunca esteve certa** — não por regressão, mas
+      porque a única fonte que existia era a errada. Adapter lê o `title-bug` e
+      o slider, com ÂNCORA: o par (posição real, `currentTime` daquele
+      instante), projetado enquanto o overlay estiver fora do DOM.
+- [x] **Prime Video** — `<video>` honesto (`dur 1329.184`, os 22 min que a
+      página declara). Faltava só o episódio, e ele estava em
+      `atvwebplayersdk-episode-info`. Três armadilhas na página de detalhe: o
+      botão "Resume S3 E7" (VISÍVEL enquanto o do player estava escondido), o
+      seletor de temporadas, e mais de um `player-container`.
+- [x] **YouTube** — controla e aparece no cartão; segue fora do histórico.
+- [x] **Spotify Desktop** — segue por SMTC, sem adapter e sem comando pela
+      ponte: é aplicativo, não página.
+
+> **`navigator.mediaSession`**, medido nos três: vazio no Disney+ e no Prime
+> (`playbackState: "none"`), preenchido só no Max (`title: "Lanternas"`). Fecha
+> a porta de esperar que os serviços declarem metadata ao navegador.
 
 Falha da SMTC:
 - [ ] Browser Bridge continua funcional.
@@ -1224,6 +1565,20 @@ Falha da extensão:
 - [ ] Fonte invalidada.
 - [ ] currentTime não fica stale.
 - [ ] fallback entra quando possível.
+
+### O que falta para o gate fechar
+
+O roteiro de `docs/VALIDACAO_FISICA.md` foi cumprido para os quatro serviços em
+26/08/2026 — e as Fases 15, 16 e 17 entraram DEPOIS desses "aprovado". Elas
+mexem em três coisas que a validação anterior não cobre:
+
+- quem decide qual aba responde (Fase 15)
+- COMO o play/pause chega à página (Fase 16)
+- o descarte de mensagem fora de ordem (Fase 17)
+
+Então falta uma passada nas seções 1, 8 e 9 do roteiro. A seção 9 é a mais
+curta e a mais importante: **dez segundos com uma aba em Picture-in-Picture**
+fecham também o último cenário da Fase 14.
 
 - [ ] **FASE 18 CONCLUÍDA**
 
