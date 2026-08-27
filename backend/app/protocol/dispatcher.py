@@ -396,6 +396,21 @@ class Dispatcher:
             # Uma máquina sem `winsdk` é o mesmo caso de uma com a SMTC
             # pendurada para sempre. A janela continua sabendo o que está aberto.
             janela = self.window_focuser.media_window()
+            # Um título que não é TEXTO não é título.
+            #
+            # Na prática ele sempre é: vem do `GetWindowText` do Windows. Mas
+            # este é o ponto onde um valor de fora entra no nosso parsing, e a
+            # consequência de deixá-lo passar é a pior que este sistema tem —
+            # a leitura estoura, o laço pula a volta, o cartão para de atualizar
+            # e a única pista é uma linha no terminal do servidor.
+            #
+            # Medido no CI em 27/08/2026: 141 testes caíram de uma vez com
+            # `assert 'HEARTBEAT' == 'NOW_PLAYING'`, porque a janela era um
+            # `Mock` e `limpar_titulo_de_janela` estourou com "'Mock' object is
+            # not iterable". Tratar como "sem janela" degrada a leitura; deixar
+            # estourar cala o cartão inteiro.
+            if janela is not None and not isinstance(janela.title, str):
+                janela = None
             if janela is not None:
                 atual = da_janela(
                     janela.title,

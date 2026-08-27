@@ -22,6 +22,7 @@ from app.windows.app_volume import (
     AppVolumeUnavailable,
     WindowsAppVolumeAdapter,
 )
+from app.protocol import dispatcher as dispatcher_module
 from app.windows.focus import DesktopWindow, WindowFocuser
 from app.input.pointer import PointerRateLimiter, WindowsPointerAdapter
 from app.input.keyboard import WindowsKeyboardAdapter
@@ -134,6 +135,19 @@ def window_focuser_mock():
     # teclado, e cada teste que quer o caminho do duplo clique monta a janela
     # explicitamente.
     focuser.find.return_value = None
+    # E o MESMO para `media_window`, que faltava.
+    #
+    # Sem esta linha ela devolvia um `Mock`, que não é `None` — então o socorro
+    # pela janela entrava com um título que não é texto, e
+    # `limpar_titulo_de_janela` estourava com "'Mock' object is not iterable".
+    # A leitura inteira morria, o cartão nunca era enviado, e o celular recebia
+    # só o batimento.
+    #
+    # Passava NESTA máquina e quebrava no CI, porque o socorro só entra quando
+    # a SMTC não responde: aqui o `winsdk` está instalado e a leitura vinha por
+    # ele, então este caminho nunca era exercitado. No Linux não há `winsdk`, e
+    # 141 testes caíram de uma vez com `assert 'HEARTBEAT' == 'NOW_PLAYING'`.
+    focuser.media_window.return_value = None
     return focuser
 
 
@@ -2919,3 +2933,61 @@ def test_the_now_playing_fields_are_a_contract_with_the_phone():
         "posterUrl",
         "historyRevision",
     }
+
+
+# ── O socorro pela janela, que só o CI exercitava ─────────────────────────
+#
+# Quando a SMTC não responde, a leitura cai para o título da janela aberta. Esse
+# caminho passou meses sem UM teste porque nesta máquina o `winsdk` está
+# instalado: a leitura vinha pela SMTC e o socorro nunca entrava.
+#
+# No Linux não há `winsdk`. Em 27/08/2026 o CI caiu com 141 testes de uma vez,
+# todos `assert 'HEARTBEAT' == 'NOW_PLAYING'`, e a causa estava na fixture: ela
+# zerava `find` e esquecia `media_window`, que devolvia um `Mock`. O socorro
+# entrava com um título que não é texto e a leitura inteira morria com
+# "'Mock' object is not iterable" — o cartão nunca era enviado, e o celular
+# recebia só o batimento.
+#
+# Estes testes existem para o caminho passar a ser exercitado dos DOIS lados.
+
+@pytest.mark.asyncio
+async def test_sem_smtc_a_janela_diz_o_que_esta_tocando(dispatcher, monkeypatch):
+    """A metade que faltava: a SMTC ausente, e a janela respondendo por ela."""
+    monkeypatch.setattr(dispatcher_module, "smtc_disponivel", lambda: False)
+    dispatcher.window_focuser.media_window.return_value = DesktopWindow(
+        handle=7, process="chrome.exe", title="Duna: Parte Dois - Netflix - Google Chrome",
+    )
+
+    mensagem = await dispatcher._read_now_playing(contar=False)
+
+    assert mensagem["type"] == "NOW_PLAYING"
+    assert mensagem["session"]["title"] == "Duna: Parte Dois"
+
+
+@pytest.mark.asyncio
+async def test_sem_smtc_e_sem_janela_nao_ha_cartao(dispatcher, monkeypatch):
+    monkeypatch.setattr(dispatcher_module, "smtc_disponivel", lambda: False)
+    dispatcher.window_focuser.media_window.return_value = None
+
+    mensagem = await dispatcher._read_now_playing(contar=False)
+
+    assert mensagem["session"] is None
+
+
+@pytest.mark.asyncio
+async def test_um_titulo_que_nao_e_TEXTO_nao_derruba_a_leitura(dispatcher, monkeypatch):
+    """O defeito exato do CI, agora como teste.
+
+    Um título que não é texto é entrada inválida vinda de fora — e entrada
+    inválida não pode calar o cartão. Era isto que fazia o celular receber só
+    batimento: a exceção subia, o laço pulava a volta, e nada dizia por quê a
+    não ser uma linha no terminal do servidor.
+    """
+    monkeypatch.setattr(dispatcher_module, "smtc_disponivel", lambda: False)
+    dispatcher.window_focuser.media_window.return_value = DesktopWindow(
+        handle=7, process="chrome.exe", title=Mock(),
+    )
+
+    mensagem = await dispatcher._read_now_playing(contar=False)
+
+    assert mensagem["type"] == "NOW_PLAYING"
