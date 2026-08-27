@@ -257,6 +257,26 @@ function doTituloDaAba(titulo) {
  * título da aba descreve a PÁGINA, que pode ser a de detalhe de outra obra.
  * Nunca o contrário.
  */
+/**
+ * A última leitura boa, presa ao id da reprodução.
+ *
+ * A barra `data-uia="video-title"` só existe enquanto os controles estão na
+ * tela — o mesmo defeito do Disney+, e eu tinha dado lembrança só a ele.
+ *
+ * Funcionava por acidente: o estado da ponte herda `workTitle` entre
+ * batimentos, então o nome sobrevivia enquanto a sessão sobrevivesse. Mas essa
+ * memória é do SERVIDOR, e ela zera quando ele reinicia. Medido em 27/08/2026,
+ * logo depois de um restart com Breaking Bad tocando:
+ *
+ *     host.log   tem=pageId+active      sem workTitle
+ *     cartão     "Netflix"              sem episódio
+ *
+ * Aqui a lembrança é da PÁGINA, e ela sobrevive ao servidor. Presa ao
+ * `/watch/<id>`, que muda quando o episódio muda — então o episódio seguinte
+ * descarta a lembrança do anterior sozinho.
+ */
+let lembrancaDaNetflix = null
+
 function lerNetflix(documento = document, local = location) {
   const id = idDaPagina(local.pathname)
   // O título da aba só descreve uma OBRA nas páginas de obra.
@@ -276,7 +296,17 @@ function lerNetflix(documento = document, local = location) {
   const achado = daBarraDeTitulo(documento)
     || (paginaDeObra ? doTituloDaAba(documento.title) : null)
 
-  if (achado === null) {
+  // Outra reprodução: a lembrança da anterior não vale mais. Descartar ANTES
+  // de ler é o que impede afirmar o episódio errado durante os segundos em que
+  // a barra da nova ainda não apareceu.
+  if (lembrancaDaNetflix !== null && lembrancaDaNetflix.id !== id) {
+    lembrancaDaNetflix = null
+  }
+
+  const lido = achado ?? (lembrancaDaNetflix === null ? null : lembrancaDaNetflix.dados)
+  if (achado !== null && id !== null) lembrancaDaNetflix = { id, dados: achado }
+
+  if (lido === null) {
     // Sem nome nenhum. O id ainda é uma identidade de reprodução válida, e
     // devolvê-lo sozinho é diferente de devolver nada: a Fase 11 distingue
     // episódio retomado de episódio seguinte só com ele.
@@ -284,12 +314,17 @@ function lerNetflix(documento = document, local = location) {
   }
 
   return {
-    workTitle: achado.workTitle ?? null,
-    episodeTitle: achado.episodeTitle ?? null,
-    seasonNumber: achado.seasonNumber ?? null,
-    episodeNumber: achado.episodeNumber ?? null,
+    workTitle: lido.workTitle ?? null,
+    episodeTitle: lido.episodeTitle ?? null,
+    seasonNumber: lido.seasonNumber ?? null,
+    episodeNumber: lido.episodeNumber ?? null,
     pageId: id,
   }
+}
+
+/** Só para os testes: a lembrança não pode vazar de um caso para o outro. */
+function esquecerLembrancaDaNetflix() {
+  lembrancaDaNetflix = null
 }
 
 /** Duas leituras descrevem a mesma coisa? Serve para emitir MEDIA_CHANGED. */

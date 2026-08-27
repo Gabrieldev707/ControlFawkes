@@ -29,14 +29,26 @@ function carregar<T>(nome: string): T {
   return new Function(`${FONTE}\nreturn ${nome}`)() as T
 }
 
-const lerNetflix = carregar<(d: Document, l: { pathname: string }) => Metadata>('lerNetflix')
-const lerMetadata = carregar<
-  (d: Document, l: { pathname: string; hostname: string }) => Metadata
->('lerMetadata')
-const temporadaEEpisodio = carregar<
-  (t: string) => { temporada: number; episodio: number } | null
->('temporadaEEpisodio')
-const mesmaMetadata = carregar<(a: Metadata, b: Metadata) => boolean>('mesmaMetadata')
+/**
+ * Tudo de uma vez, e não um `carregar` por função.
+ *
+ * A lembrança do adapter é uma variável de módulo, e cada avaliação da fonte
+ * cria um fechamento novo. Carregar `lerNetflix` e `esquecerLembrancaDaNetflix`
+ * em chamadas separadas daria duas lembranças diferentes, e o esquecimento não
+ * alcançaria a leitura — um caso vazaria no seguinte sem nada acusar.
+ */
+const api = carregar<{
+  lerNetflix: (d: Document, l: { pathname: string }) => Metadata
+  lerMetadata: (d: Document, l: { pathname: string; hostname: string }) => Metadata
+  temporadaEEpisodio: (t: string) => { temporada: number; episodio: number } | null
+  mesmaMetadata: (a: Metadata, b: Metadata) => boolean
+  esquecerLembrancaDaNetflix: () => void
+}>(
+  '{ lerNetflix, lerMetadata, temporadaEEpisodio, mesmaMetadata,'
+  + ' esquecerLembrancaDaNetflix }',
+)
+
+const { lerNetflix, lerMetadata, temporadaEEpisodio, mesmaMetadata } = api
 
 /** A página, do jeito que a Netflix a monta. */
 function montarBarra(partes: string[], obra?: string) {
@@ -61,6 +73,7 @@ const emWatch = { pathname: '/watch/81234567', hostname: 'www.netflix.com' }
 beforeEach(() => {
   document.body.innerHTML = ''
   document.title = 'Netflix'
+  api.esquecerLembrancaDaNetflix()
 })
 
 
@@ -288,3 +301,59 @@ describe('a vitrine da home não é uma obra', () => {
   })
 })
 
+
+
+// ── A lembrança, e o restart que a expôs ──────────────────────────────────
+//
+// A barra `data-uia="video-title"` só existe enquanto os controles estão na
+// tela — o mesmo defeito do Disney+, e eu tinha dado lembrança só a ele.
+//
+// Funcionava por acidente: o estado da ponte herda `workTitle` entre
+// batimentos, então o nome sobrevivia enquanto a SESSÃO DO SERVIDOR
+// sobrevivesse. Medido em 27/08/2026, logo depois de reiniciar o backend com
+// Breaking Bad tocando:
+//
+//     host.log   tem=pageId+active      sem workTitle
+//     cartão     "Netflix"              sem episódio
+//
+// A memória do servidor zera; a da página, não.
+
+describe('a barra que some com os controles', () => {
+  it('continua nomeando a obra depois de a barra sair do DOM', () => {
+    montarBarra(['T2:E1', 'Um Escândalo'], 'Sherlock')
+    expect(lerNetflix(document, emWatch)?.workTitle).toBe('Sherlock')
+
+    // Controles escondidos: a Netflix remove o bloco inteiro.
+    document.body.innerHTML = ''
+
+    const lida = lerNetflix(document, emWatch)
+    expect(lida?.workTitle).toBe('Sherlock')
+    expect(lida?.episodeNumber).toBe(1)
+  })
+
+  it('esquece quando o EPISÓDIO muda, mesmo sem ler o novo', () => {
+    // Repetir o anterior aqui poria o episódio errado no histórico — pior do
+    // que não dizer nada.
+    montarBarra(['T2:E1', 'Um Escândalo'], 'Sherlock')
+    lerNetflix(document, emWatch)
+
+    document.body.innerHTML = ''
+    const outro = lerNetflix(document, { pathname: '/watch/99999999' })
+
+    expect(outro).toEqual({ pageId: '99999999' })
+  })
+
+  it('a barra ATUAL vence a lembrança', () => {
+    montarBarra(['T2:E1', 'Um Escândalo'], 'Sherlock')
+    lerNetflix(document, emWatch)
+
+    document.body.innerHTML = ''
+    montarBarra(['T2:E2', 'Os Cães de Baskerville'], 'Sherlock')
+
+    expect(lerNetflix(document, emWatch)?.episodeNumber).toBe(2)
+  })
+
+  it('sem nunca ter lido, devolve só a identidade', () => {
+    expect(lerNetflix(document, emWatch)).toEqual({ pageId: '81234567' })
+  })
+})

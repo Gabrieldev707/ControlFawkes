@@ -188,3 +188,78 @@ def test_sem_duracao_nao_ha_o_que_julgar():
 
     assert final.duration_seconds is None
     assert final.position_seconds == pytest.approx(150.0)
+
+
+# ── A regressão que este guarda causou em toda série ──────────────────────
+#
+# A chave era `(platform, title)`, e numa série o título é o mesmo em todos os
+# episódios enquanto a duração muda a cada um. Passar de um episódio de 47
+# minutos para um de 48 parecia exatamente "a duração cresceu" — e a
+# desconfiança gruda, então a série perdia a duração PARA SEMPRE.
+#
+# Medido em 27/08/2026, com a extensão mandando o número certo o tempo todo:
+#
+#     host.log   duration=2894.975416   (48:15, Breaking Bad T1 E6)
+#     tela       "T1 E6 · 15:12"        sem o "de 48:15"
+#
+# Na tela, o formato certo é o do Invincible: "T3 E4 · 17:32 de 49:18". Sem
+# duração, sobra só a posição — e ela sozinha não diz de onde a pessoa volta.
+
+def episodio(duracao: float, identidade: str, posicao: float = 100.0) -> NowPlaying:
+    return leitura(posicao, duracao, title="Breaking Bad", platform="NETFLIX",
+                   playback_id=identidade)
+
+
+def test_o_episodio_seguinte_MAIS_LONGO_nao_e_borda_de_buffer():
+    """O caso exato: 47 minutos e depois 48, na mesma série."""
+    d = dispatcher()
+
+    observar(d, [episodio(2820.0, "id:70196253"), episodio(2820.0, "id:70196253")])
+    seguinte = observar(d, [episodio(2880.0, "id:70196254")])
+
+    assert seguinte.duration_seconds == pytest.approx(2880.0)
+
+
+def test_a_desconfianca_de_um_episodio_nao_contamina_o_proximo():
+    """Gruda dentro da reprodução, e morre com ela.
+
+    Sem isto, um episódio que por qualquer motivo tivesse a duração crescendo
+    condenava todos os episódios seguintes da mesma série.
+    """
+    d = dispatcher()
+
+    # Este cresce de verdade: é borda de buffer.
+    observar(d, [episodio(200.0, "id:70196253"), episodio(300.0, "id:70196253")])
+    seguinte = observar(d, [episodio(2880.0, "id:70196254")])
+
+    assert seguinte.duration_seconds == pytest.approx(2880.0)
+
+
+def test_dentro_do_MESMO_episodio_o_crescimento_continua_sendo_pego():
+    """O caso do Disney+ não pode ter sido perdido no conserto.
+
+    Lá o buffer cresce DENTRO do episódio, e a identidade de reprodução não
+    muda enquanto isso — é justamente esse recorte que separa os dois casos.
+    """
+    d = dispatcher()
+
+    final = observar(d, [
+        leitura(646.5, 660.8, playback_id="id:79955576"),
+        leitura(666.5, 676.8, playback_id="id:79955576"),
+        leitura(676.5, 692.8, playback_id="id:79955576"),
+    ])
+
+    assert final.duration_seconds is None
+
+
+def test_sem_identidade_a_obra_ainda_serve_de_recorte():
+    """Leituras que não sabem se identificar continuam com o comportamento
+    antigo — e com o defeito antigo. É o piso, não o alvo."""
+    d = dispatcher()
+
+    final = observar(d, [
+        leitura(100.0, 200.0, playback_id=None),
+        leitura(150.0, 300.0, playback_id=None),
+    ])
+
+    assert final.duration_seconds is None

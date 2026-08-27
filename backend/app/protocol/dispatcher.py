@@ -525,7 +525,32 @@ class Dispatcher:
         if atual is None or atual.duration_seconds is None:
             return atual
 
-        chave = (atual.platform, atual.title)
+        # A chave é a REPRODUÇÃO, e não a obra.
+        #
+        # Ela era `(platform, title)`, e isso quebrou toda série. Numa série o
+        # título é o mesmo em todos os episódios e a duração muda a cada um —
+        # então passar de um episódio de 47 minutos para um de 48 parecia
+        # exatamente "a duração cresceu". A desconfiança grudava, e a série
+        # perdia a duração para sempre.
+        #
+        # Medido em 27/08/2026, com a extensão mandando o número certo e
+        # constante o tempo todo:
+        #
+        #     host.log   duration=2894.975416   (48:15, Breaking Bad T1 E6)
+        #     tela       "T1 E6 · 15:12"        sem o "de 48:15"
+        #
+        # Breaking Bad T1 E1 tem 58 minutos e o T1 E6 tem 48; entre eles há
+        # episódios de 47 e de 48, e um único aumento bastava.
+        #
+        # A identidade de reprodução é o recorte certo porque é ela que muda
+        # quando o episódio muda — e NÃO muda enquanto o buffer do Disney+
+        # cresce dentro do mesmo episódio, que é o caso que este guarda existe
+        # para pegar. Sem identidade, resta a obra: é o comportamento antigo,
+        # com o defeito antigo, para as leituras que não sabem se identificar.
+        chave = (
+            ("reproducao", atual.playback_id) if atual.playback_id is not None
+            else ("obra", atual.platform, atual.title)
+        )
         anterior = self._duracoes.get(chave)
         cresceu = (
             anterior is not None
@@ -537,7 +562,7 @@ class Dispatcher:
         # outra prova.
         suspeita = cresceu or (anterior is not None and anterior[1])
         self._duracoes[chave] = (atual.duration_seconds, suspeita)
-        # Não deixa crescer para sempre: uma entrada por obra vista.
+        # Não deixa crescer para sempre: uma entrada por reprodução vista.
         if len(self._duracoes) > 64:
             self._duracoes.pop(next(iter(self._duracoes)), None)
 
