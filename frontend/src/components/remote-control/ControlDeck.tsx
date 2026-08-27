@@ -33,6 +33,23 @@ interface ControlDeckProps {
   onKey: (key: SafeKey) => void
   /** Ajustável em Ajustes: o polegar de cada um é diferente. */
   gestureLimits?: GestureLimits
+  /**
+   * O deslize rápido pode virar seta AGORA?
+   *
+   * Falso enquanto algo está tocando, e o motivo é medido. A seta vira
+   * `ARROW_RIGHT`, e seta num player de vídeo não navega: ela PULA 5 ou 10
+   * segundos. Relatado em 26/08/2026: "quando mexo o mouse no controle ele
+   * sempre adianta tempo no que estou assistindo".
+   *
+   * O comentário do detector de flick dizia que o cursor andar junto era
+   * "inofensivo, porque mover o cursor num menu não aciona nada". Vale num
+   * menu; durante a reprodução, cada movimento rápido do dedo virava um salto
+   * no filme.
+   *
+   * As setas dos cantos continuam, e é por isso que dá para desligar o gesto
+   * sem perder a navegação: quem quer navegar durante a reprodução toca nelas.
+   */
+  flickHabilitado?: boolean
 }
 
 const FLICK_TO_NAVIGATION: Record<FlickDirection, NavigationAction> = {
@@ -80,9 +97,15 @@ export function ControlDeck({
   onPointerAction,
   onKey,
   gestureLimits = DEFAULT_GESTURE_LIMITS,
+  flickHabilitado = true,
 }: ControlDeckProps) {
   const [hint, setHint] = useState<string | null>(null)
   const gestureRef = useRef(new TouchpadGesture(gestureLimits))
+  // Numa `ref` porque `runEffects` é chamado de dentro de manipuladores de
+  // ponteiro que não são recriados a cada render: lido direto, o valor ficaria
+  // congelado no que era quando o manipulador nasceu.
+  const flickHabilitadoRef = useRef(flickHabilitado)
+  flickHabilitadoRef.current = flickHabilitado
   const holdTimerRef = useRef<number | null>(null)
   const accumulatedRef = useRef({ dx: 0, dy: 0 })
   const frameRef = useRef<number | null>(null)
@@ -148,6 +171,12 @@ export function ControlDeck({
         pointerRef.current('POINTER_CLICK')
         showHint('clique')
       } else if (effect.type === 'FLICK') {
+        if (!flickHabilitadoRef.current) {
+          // Tocando: a seta pularia o filme em vez de navegar. O cursor já se
+          // moveu junto com o gesto, que é o que a pessoa queria.
+          showHint('use as setas')
+          continue
+        }
         navigationRef.current(FLICK_TO_NAVIGATION[effect.direction])
         showHint(effect.direction)
       } else if (effect.type === 'TWO_FINGER_TAP') {
@@ -372,7 +401,9 @@ export function ControlDeck({
       </div>
 
       <p className="control-deck__help" id="control-deck-help">
-        Deslize rápido para navegar · arraste devagar para o cursor · toque para clicar
+        {flickHabilitado
+          ? 'Deslize rápido para navegar · arraste devagar para o cursor · toque para clicar'
+          : 'Tocando: use as setas para navegar · arraste para o cursor · toque para clicar'}
       </p>
     </section>
   )

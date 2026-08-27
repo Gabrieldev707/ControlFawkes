@@ -84,3 +84,109 @@ describe('ControlDeck', () => {
     expect(onKey).toHaveBeenCalledWith('TAB')
   })
 })
+
+
+// ── O deslize que pulava o filme ──────────────────────────────────────────
+//
+// Relatado em 26/08/2026: "quando mexo o mouse no controle ele sempre adianta
+// tempo no que estou assistindo, tipo pula em 5seg 10seg".
+//
+// Não era falha intermitente. `NAVIGATE_RIGHT` vira `ARROW_RIGHT`, e seta num
+// player de vídeo não navega: ela PULA. O detector de flick decide no fim do
+// gesto e o comentário dele dizia que o cursor andar junto era "inofensivo,
+// porque mover o cursor num menu não aciona nada" — vale num menu, e durante a
+// reprodução cada movimento rápido do dedo virava um salto no filme.
+
+describe('o deslize enquanto algo toca', () => {
+  function deslizar(elemento: HTMLElement) {
+    const comum = { pointerId: 1, pointerType: 'touch', isPrimary: true }
+    fireEvent.pointerDown(elemento, { ...comum, clientX: 10, clientY: 100 })
+    fireEvent.pointerMove(elemento, { ...comum, clientX: 90, clientY: 100 })
+    fireEvent.pointerUp(elemento, { ...comum, clientX: 90, clientY: 100 })
+  }
+
+  it('com o flick habilitado, o deslize vira seta', () => {
+    const onNavigationAction = vi.fn()
+    render(
+      <ControlDeck
+        disabled={false}
+        navigationDisabled={false}
+        currentNavigationAction={null}
+        onNavigationAction={onNavigationAction}
+        onPointerAction={vi.fn()}
+        onKey={vi.fn()}
+        flickHabilitado
+      />,
+    )
+
+    deslizar(screen.getByRole('application'))
+
+    expect(onNavigationAction).toHaveBeenCalledWith('NAVIGATE_RIGHT')
+  })
+
+  it('TOCANDO, o mesmo deslize NÃO manda seta nenhuma', () => {
+    const onNavigationAction = vi.fn()
+    render(
+      <ControlDeck
+        disabled={false}
+        navigationDisabled={false}
+        currentNavigationAction={null}
+        onNavigationAction={onNavigationAction}
+        onPointerAction={vi.fn()}
+        onKey={vi.fn()}
+        flickHabilitado={false}
+      />,
+    )
+
+    deslizar(screen.getByRole('application'))
+
+    expect(onNavigationAction).not.toHaveBeenCalled()
+  })
+
+  it('o cursor continua se movendo — é o que a pessoa queria', () => {
+    const onPointerAction = vi.fn()
+    render(
+      <ControlDeck
+        disabled={false}
+        navigationDisabled={false}
+        currentNavigationAction={null}
+        onNavigationAction={vi.fn()}
+        onPointerAction={onPointerAction}
+        onKey={vi.fn()}
+        flickHabilitado={false}
+      />,
+    )
+
+    deslizar(screen.getByRole('application'))
+
+    expect(onPointerAction).toHaveBeenCalled()
+  })
+
+  it('a dica de uso diz o que mudou', () => {
+    const { rerender } = render(
+      <ControlDeck
+        disabled={false}
+        navigationDisabled={false}
+        currentNavigationAction={null}
+        onNavigationAction={vi.fn()}
+        onPointerAction={vi.fn()}
+        onKey={vi.fn()}
+        flickHabilitado
+      />,
+    )
+    expect(screen.getByText(/Deslize rápido para navegar/)).toBeTruthy()
+
+    rerender(
+      <ControlDeck
+        disabled={false}
+        navigationDisabled={false}
+        currentNavigationAction={null}
+        onNavigationAction={vi.fn()}
+        onPointerAction={vi.fn()}
+        onKey={vi.fn()}
+        flickHabilitado={false}
+      />,
+    )
+    expect(screen.getByText(/use as setas/)).toBeTruthy()
+  })
+})

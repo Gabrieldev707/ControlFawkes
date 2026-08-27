@@ -183,6 +183,10 @@ export function RemoteControlScreen({
         onPointerAction={onPointerAction}
         onKey={onKey}
         gestureLimits={gestureLimits}
+        /* Enquanto algo toca, o deslize NÃO vira seta: seta num player pula
+           5 ou 10 segundos em vez de navegar. As setas dos cantos continuam
+           valendo para quem quiser navegar mesmo assim. */
+        flickHabilitado={!(nowPlaying?.playing ?? false)}
       />
 
       {/* Logo abaixo da superfície que clica e manda Tab: com o texto aqui,
