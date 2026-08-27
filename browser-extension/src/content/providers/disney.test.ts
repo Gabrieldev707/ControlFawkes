@@ -474,3 +474,69 @@ describe('a posição real', () => {
     expect(lida.adapterPosition).toBeNull()
   })
 })
+
+
+// ── Acordar os controles sozinho ──────────────────────────────────────────
+//
+// Relatado em 26/08/2026, com WandaVision tocando: o cartão dizia "ao vivo" e
+// mostrava "2:34". Sem âncora, a duração fica ausente — o `<video>` publica
+// `Infinity`, recusado na validação — e a posição cai para o `currentTime` do
+// elemento, que é a janela DASH e não o episódio.
+//
+// A causa era do desenho: o adapter esperava que alguém mexesse o mouse. E
+// quem assiste pelo celular não mexe o mouse do computador nunca.
+
+describe('quando ninguém mexe o mouse', () => {
+  function comOuvinteDeMouse() {
+    const visto: string[] = []
+    const alvo = montarVideo(1280, 50.8)
+    for (const tipo of ['mousemove', 'pointermove']) {
+      alvo.addEventListener(tipo, () => visto.push(tipo))
+    }
+    return visto
+  }
+
+  it('pede os controles de volta quando não há âncora', () => {
+    montarPlayer()
+    const visto = comOuvinteDeMouse()
+
+    lerDisney(document, EM_PLAY)
+
+    expect(visto).toContain('mousemove')
+  })
+
+  it('PARA de pedir assim que consegue a leitura', () => {
+    // O overlay aparecendo na tela é o custo. Uma vez, para conseguir a única
+    // leitura que falta, é aceitável; a cada batimento seria a interface
+    // piscando sozinha em cima do filme.
+    montarPlayer({ obra: 'WandaVision', legenda: 'T1:E1 Gravado ao Vivo' })
+    const visto = comOuvinteDeMouse()
+    montarLinhaDoTempo(154, 1810)
+
+    lerDisney(document, EM_PLAY)
+
+    expect(visto).toEqual([])
+  })
+
+  it('não pede de novo a cada leitura', () => {
+    montarPlayer()
+    const visto = comOuvinteDeMouse()
+
+    for (let i = 0; i < 10; i += 1) lerDisney(document, EM_PLAY)
+
+    // Uma rajada de leituras não vira uma rajada de overlays.
+    expect(visto.filter((t) => t === 'mousemove').length).toBe(1)
+  })
+
+  it('com a âncora conseguida, o cartão deixa de dizer "ao vivo"', () => {
+    // É o sintoma exato: sem duração, a tela desenha "ao vivo".
+    montarPlayer({ obra: 'WandaVision', legenda: 'T1:E1 Gravado ao Vivo' })
+    montarVideo(1280, 50.8)
+    montarLinhaDoTempo(154, 1810)
+
+    const lida = lerDisney(document, EM_PLAY) as Record<string, unknown>
+
+    expect(lida.adapterDuration).toBe(1810)
+    expect(lida.adapterPosition).toBe(154)
+  })
+})

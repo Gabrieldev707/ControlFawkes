@@ -406,7 +406,15 @@ function lerDisney(documento = document, local = location) {
   const lido = doBlocoDeTitulo(raizes)
   if (lido !== null) lembrancaDoDisney = { caminho, dados: lido }
 
-  const tempo = posicaoReal(raizes, caminho)
+  let tempo = posicaoReal(raizes, caminho)
+  // Sem âncora, a posição e a duração reais não existem — e quem assiste pelo
+  // celular não mexe o mouse do computador para elas aparecerem. Então o
+  // adapter pede os controles de volta, uma vez a cada poucos segundos, até
+  // conseguir a leitura. Depois disso ele para sozinho.
+  if (tempo === null) {
+    acordarOsControles(documento, raizes)
+    tempo = posicaoReal(raizes, caminho)
+  }
   const dados = lembrancaDoDisney === null ? null : lembrancaDoDisney.dados
 
   const resposta = {
@@ -433,10 +441,80 @@ function lerDisney(documento = document, local = location) {
   }
 }
 
+/**
+ * Quanto esperar entre duas tentativas de acordar os controles.
+ *
+ * Acordar faz o overlay aparecer na tela por alguns segundos. Uma vez, para
+ * conseguir a única leitura que falta, é aceitável; a cada batimento seria a
+ * interface piscando sozinha em cima do filme.
+ */
+const SEGUNDOS_ENTRE_TENTATIVAS = 6.0
+
+let ultimoAcordar = 0
+
+/**
+ * Faz o player mostrar os controles, para o slider existir por um instante.
+ *
+ * ## Por que isto precisou existir
+ *
+ * A posição e a duração REAIS do Disney+ só vivem no slider, e o slider some
+ * junto com o overlay depois de alguns segundos sem mouse. O desenho original
+ * dependia de a pessoa mexer o mouse alguma vez — e quem assiste pelo celular
+ * não mexe o mouse do computador nunca.
+ *
+ * O resultado, relatado em 26/08/2026 com WandaVision tocando: o cartão dizia
+ * "ao vivo" e mostrava "2:34". Sem âncora, a duração fica ausente (o `<video>`
+ * publica `Infinity`, recusado na validação) e a posição cai para o
+ * `currentTime` do elemento — que é a janela DASH, e não o episódio.
+ *
+ * ## O gesto
+ *
+ * Um `mousemove` sintético sobre o player. Mostrar controles é reação a um
+ * ouvinte de evento comum; não exige ativação do usuário, que é o que impede
+ * um content script de pedir tela cheia por conta própria.
+ *
+ * Só acontece enquanto NÃO há âncora. Assim que uma leitura boa acontece, isto
+ * para sozinho — e volta só se a âncora for invalidada (troca de episódio,
+ * seek, troca de elemento).
+ */
+function acordarOsControles(documento, raizes) {
+  const agora = Date.now() / 1000
+  if (agora - ultimoAcordar < SEGUNDOS_ENTRE_TENTATIVAS) return
+  ultimoAcordar = agora
+
+  const video = videoDoConteudo(raizes)
+  const alvo = video ?? acharEmQualquerRaiz(raizes, '.btm-media-player') ?? documento.body
+  if (alvo === null || alvo === undefined) return
+
+  let x = 0
+  let y = 0
+  try {
+    const r = alvo.getBoundingClientRect()
+    x = r.left + r.width / 2
+    y = r.top + r.height / 2
+  } catch {
+    // Sem retângulo, o evento no meio da janela ainda alcança o player.
+    x = (documento.defaultView?.innerWidth ?? 0) / 2
+    y = (documento.defaultView?.innerHeight ?? 0) / 2
+  }
+
+  for (const tipo of ['mousemove', 'pointermove']) {
+    try {
+      alvo.dispatchEvent(new MouseEvent(tipo, {
+        bubbles: true, cancelable: true, clientX: x, clientY: y,
+      }))
+    } catch {
+      // Ambiente sem `MouseEvent` (o teste em jsdom antigo) não pode derrubar
+      // a leitura: acordar é uma melhoria, não um requisito.
+    }
+  }
+}
+
 /** Só para os testes: nada pode vazar de um caso para o outro. */
 function esquecerLembrancaDoDisney() {
   lembrancaDoDisney = null
   ancoraDoDisney = null
+  ultimoAcordar = 0
 }
 
 // Sem `export`: content script declarado no manifesto NÃO é módulo, e um
