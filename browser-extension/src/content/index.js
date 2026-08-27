@@ -92,10 +92,19 @@ function contexto() {
     // de cada servico, custou caro para acertar e tem teste para cada caso.
     // Limpar aqui seria uma segunda verdade sobre a mesma string.
     documentTitle: document.title || null,
+    // `metadataAtual()` PRIMEIRO, e a ordem importa.
+    //
+    // No Disney+ é ela que acorda os controles do player — e o botão de tela
+    // cheia só existe enquanto eles estão na tela. Com a leitura do botão
+    // antes, ela sempre rodava com o overlay fechado e nunca via nada:
+    // `telaCheia=[None, None]` no diagnóstico ao vivo, com tudo o mais certo.
+    //
+    // Nenhum destes campos colide com os outros, então a ordem é livre para
+    // resolver justamente isto.
+    ...metadataAtual(),
     ...ondeEstaOVideo(),
     ...ondeEstaOBotaoDeTelaCheia(),
     ...telemetriaDaPagina(),
-    ...metadataAtual(),
   }
 }
 

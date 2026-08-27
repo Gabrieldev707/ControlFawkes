@@ -108,6 +108,18 @@ async def diagnostico(request: Request) -> dict:
                     "episodeNumber": s.episodeNumber,
                     "active": s.active,
                     "audible": s.audible,
+                    # O tempo que veio da PÁGINA, separado do tempo do
+                    # elemento. Sem os dois lado a lado, "a posição está
+                    # errada" e "a âncora não foi criada" parecem a mesma
+                    # coisa no diagnóstico — e são problemas diferentes.
+                    "adapterPosition": s.adapterPosition,
+                    "adapterDuration": s.adapterDuration,
+                    # E onde a página diz que estão o vídeo e o botão de tela
+                    # cheia. A presença deles também responde uma pergunta que
+                    # eu vinha respondendo por dedução: o content script desta
+                    # aba é o novo, ou é um órfão de antes de recarregar?
+                    "videoCentro": (s.videoCentroX, s.videoCentroY),
+                    "telaCheia": (s.telaCheiaX, s.telaCheiaY),
                 }
                 for s in estado_da_ponte.vivas()
             ],
