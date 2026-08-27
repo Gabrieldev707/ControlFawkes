@@ -1,5 +1,6 @@
 import { ArrowLeft, Clapperboard, Play, Sparkles, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
+import type { CSSProperties } from 'react'
 
 import {
   Achievements,
@@ -103,12 +104,24 @@ function restanteEmTexto(segundos: number): string {
 function restanteDe(
   posicao: number | null,
   duracao: number | null,
-): { proporcao: number; legenda: string } | null {
+): { proporcao: number; legenda: string; ondeParou: string } | null {
   if (posicao === null || duracao === null || duracao <= 0 || posicao < 0) return null
   return {
     proporcao: Math.min(1, posicao / duracao),
     legenda: restanteEmTexto(Math.max(0, duracao - posicao)),
+    // O ponto de partida da retomada, na ponta esquerda do trajeto. Ele
+    // responde "de onde eu volto"; a legenda da direita responde "quanto
+    // falta". Duas perguntas, duas pontas.
+    ondeParou: relogioDe(posicao),
   }
+}
+
+/** "1:12:04", ou "12:04" quando não passa de uma hora. */
+function relogioDe(total: number): string {
+  const s = Math.floor(total % 60).toString().padStart(2, '0')
+  const m = Math.floor((total / 60) % 60)
+  const h = Math.floor(total / 3600)
+  return h > 0 ? `${h}:${m.toString().padStart(2, '0')}:${s}` : `${m}:${s}`
 }
 
 /** "37:08 de 48:41" — onde a pessoa parou DENTRO do episódio.
@@ -225,11 +238,35 @@ function FaixaDeObras({
                 {[item.episodio, tempoDoEpisodio].filter(Boolean).join(' · ')}
               </span>
             ) : null}
-            {/* A barra e o texto aparecem juntos ou não aparecem: os dois saem
+            {/* O TRAJETO, e ele é só de FILME.
+                
+                Um filme tem começo e fim, e a pergunta natural é "onde estou
+                no caminho". Uma série não tem: a obra não tem duração, e o que
+                existe é a posição dentro de um episódio — desenhar um trajeto
+                ali diria que a SÉRIE está a 12% do fim, que é falso e é o bug
+                do Batman de novo.
+
+                Por isso ele nasce de `restante`, que só existe quando a OBRA
+                tem duração. É a mesma condição que já separava os dois casos.
+
+                A barra e o texto aparecem juntos ou não aparecem: os dois saem
                 da mesma posição, e um sem o outro sugeriria que a informação
                 que falta é de outro tipo. */}
             {restante !== null ? (
-              <span className="continuar-card__tempo">{restante.legenda}</span>
+              <span className="continuar-card__trajeto">
+                <span
+                  className="continuar-card__trilho"
+                  style={{ '--andado': `${restante.proporcao * 100}%` } as CSSProperties}
+                  aria-hidden="true"
+                >
+                  <span className="continuar-card__percorrido" />
+                  <span className="continuar-card__aqui" />
+                </span>
+                <span className="continuar-card__legendas">
+                  <span className="continuar-card__parou">{restante.ondeParou}</span>
+                  <span className="continuar-card__tempo">{restante.legenda}</span>
+                </span>
+              </span>
             ) : null}
           </button>
         )

@@ -295,3 +295,93 @@ describe('continuar assistindo diz DE ONDE continuar', () => {
     expect(await screen.findByText('T1 E4 · 37:08 de 48:41')).toBeTruthy()
   })
 })
+
+
+// ── O trajeto do filme ────────────────────────────────────────────────────
+//
+// Pedido em 27/08/2026: "seria só para filmes um novo modelo de contabilização
+// de tempo, em séries normal como o padrão... uma barrinha pra mostrar o quanto
+// falta, tipo um destino, traçando uma linha".
+//
+// Um filme tem começo e fim, e a pergunta natural é "onde estou no caminho".
+// Uma série não tem: a obra não tem duração, e o que existe é a posição dentro
+// de um episódio. Desenhar um trajeto ali diria que a SÉRIE está a 12% do fim
+// — o bug do Batman de novo.
+
+describe('o trajeto de um filme', () => {
+  const filme = {
+    titulo: 'Django Livre',
+    platform: 'MAX',
+    segundos: 3600,
+    posicao: 719,
+    duracao: 9974,
+    vistoEm: 1,
+    posterUrl: null,
+    generos: [],
+    terminado: false,
+    episodio: null,
+    posicaoDoEpisodio: null,
+    duracaoDoEpisodio: null,
+  }
+  const serie = {
+    ...filme,
+    titulo: 'Lanternas',
+    posicao: null,
+    duracao: null,
+    episodio: 'T1 E2',
+    posicaoDoEpisodio: 1803,
+    duracaoDoEpisodio: 3430,
+  }
+
+  beforeEach(() => {
+    localStorage.clear()
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('o filme ganha trilho, ponto e as duas pontas', async () => {
+    responder([filme])
+    const { container } = renderizar()
+    await act(async () => {})
+
+    expect(container.querySelector('.continuar-card__trilho')).toBeTruthy()
+    expect(container.querySelector('.continuar-card__aqui')).toBeTruthy()
+    // De onde se volta, à esquerda.
+    expect(screen.getByText('11:59')).toBeTruthy()
+    // Quanto falta, à direita.
+    expect(screen.getByText(/faltam/i)).toBeTruthy()
+  })
+
+  it('a SÉRIE não ganha trajeto', async () => {
+    // A obra não tem duração: um trajeto ali afirmaria progresso da série
+    // inteira a partir da posição de um episódio.
+    responder([serie])
+    const { container } = renderizar()
+    await act(async () => {})
+
+    expect(container.querySelector('.continuar-card__trilho')).toBeNull()
+    expect(screen.getByText(/T1 E2/)).toBeTruthy()
+  })
+
+  it('o quanto andou vira a largura do percorrido', async () => {
+    responder([filme])
+    const { container } = renderizar()
+    await act(async () => {})
+
+    const trilho = container.querySelector('.continuar-card__trilho') as HTMLElement
+    // 719 de 9974 é 7,2%.
+    expect(trilho.style.getPropertyValue('--andado')).toMatch(/^7\.2/)
+  })
+
+  it('sem duração da obra não há trajeto nenhum', async () => {
+    // Linha antiga, gravada antes de a duração passar a chegar. Melhor não
+    // desenhar do que desenhar um caminho de tamanho inventado.
+    responder([{ ...filme, duracao: null }])
+    const { container } = renderizar()
+    await act(async () => {})
+
+    expect(container.querySelector('.continuar-card__trilho')).toBeNull()
+  })
+})

@@ -3662,6 +3662,75 @@ textarea {
   background: linear-gradient(90deg, var(--accent-bright), var(--cyan));
 }
 
+/* O TRAJETO de um filme: de onde se volta até onde acaba.
+ *
+ * Uma linha, não uma barra cheia. A barra diz "quanto já foi"; a linha diz
+ * "onde estou no caminho", que é a pergunta de quem vai retomar um filme.
+ *
+ * O trecho percorrido é sólido e o que falta é pontilhado — a diferença de
+ * textura carrega o sentido sem precisar de legenda, e sobrevive a quem não
+ * distingue as duas cores.
+ */
+.continuar-card__trajeto {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  width: 100%;
+}
+
+.continuar-card__trilho {
+  position: relative;
+  display: block;
+  height: 3px;
+  width: 100%;
+  border-radius: 999px;
+  /* O que falta: pontilhado, e discreto. */
+  background-image: radial-gradient(
+    circle at 1px 50%,
+    rgb(255 255 255 / 0.32) 1px,
+    transparent 1.2px
+  );
+  background-size: 5px 100%;
+  background-repeat: repeat-x;
+}
+
+.continuar-card__percorrido {
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--andado, 0%);
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--fawkes-ciano, #4cc9f0), var(--fawkes-roxo, #7b5cff));
+}
+
+/* Onde a pessoa está agora. O ponto é o "você está aqui" do trajeto. */
+.continuar-card__aqui {
+  position: absolute;
+  top: 50%;
+  left: var(--andado, 0%);
+  width: 8px;
+  height: 8px;
+  margin-left: -4px;
+  border-radius: 50%;
+  background: var(--fawkes-roxo, #7b5cff);
+  box-shadow: 0 0 0 2px rgb(10 8 20 / 0.9), 0 0 10px rgb(123 92 255 / 0.7);
+  transform: translateY(-50%);
+}
+
+.continuar-card__legendas {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+/* De onde se volta. Mais apagado que "quanto falta": é referência, não
+   decisão — quem escolhe retomar quer saber se dá tempo. */
+.continuar-card__parou {
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  color: rgb(255 255 255 / 0.45);
+}
+
 .continuar-card__tempo {
   color: var(--text-secondary);
   font-size: 0.62rem;
