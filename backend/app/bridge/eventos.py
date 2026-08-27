@@ -120,6 +120,14 @@ class EventoDeMidia:
     #: forma que o toque na tela espelhada já usa.
     videoCentroX: float | None = None
     videoCentroY: float | None = None
+    #: Onde está o BOTÃO de tela cheia do player, na mesma fração.
+    #:
+    #: A tela cheia era um duplo clique no vídeo, e Prime e Max não implementam
+    #: duplo clique. Medido pelo usuário em 26/08/2026: "apertei 1 vez nada, 2
+    #: vezes nada, na 3ª um clique rápido no pausa e despausa na mesma hora" —
+    #: exatamente dois cliques SIMPLES chegando.
+    telaCheiaX: float | None = None
+    telaCheiaY: float | None = None
     #: A ordem em que a ABA emitiu esta mensagem. Fase 17.
     #:
     #: O content script já numerava (`seq: sequencia++` em `index.js`) e o
@@ -352,6 +360,8 @@ def validar(mensagem: object, agora: float) -> EventoDeMidia | Recusa:
         pageId=texto("pageId"),
         videoCentroX=fracao("videoCentroX"),
         videoCentroY=fracao("videoCentroY"),
+        telaCheiaX=fracao("telaCheiaX"),
+        telaCheiaY=fracao("telaCheiaY"),
         seq=contagem_livre("seq"),
         adapterPosition=posicao_do_adapter,
         adapterDuration=duracao_do_adapter,

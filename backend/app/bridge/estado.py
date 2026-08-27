@@ -209,6 +209,9 @@ class SessaoDaPonte:
     #: `eventos.py` — existe para a tela cheia acertar o vídeo.
     videoCentroX: float | None = None
     videoCentroY: float | None = None
+    #: Onde está o botão de tela cheia. Ver `telaCheiaX` em `eventos.py`.
+    telaCheiaX: float | None = None
+    telaCheiaY: float | None = None
 
     @property
     def tocando(self) -> bool:
@@ -433,6 +436,12 @@ class EstadoDaPonte:
             # evento que não o traga não pode apagar o alvo do clique.
             videoCentroX=_ou(evento.videoCentroX, anterior, "videoCentroX"),
             videoCentroY=_ou(evento.videoCentroY, anterior, "videoCentroY"),
+            # O botão só existe enquanto os controles estão na tela, e some
+            # depois de alguns segundos sem mouse. Herdar é o que permite
+            # clicar nele quando ele não está visível AGORA — e ele volta para
+            # o mesmo lugar, porque o player não o move.
+            telaCheiaX=_ou(evento.telaCheiaX, anterior, "telaCheiaX"),
+            telaCheiaY=_ou(evento.telaCheiaY, anterior, "telaCheiaY"),
             ultimo_seq=(
                 evento.seq if evento.seq is not None
                 else (anterior.ultimo_seq if anterior is not None else None)

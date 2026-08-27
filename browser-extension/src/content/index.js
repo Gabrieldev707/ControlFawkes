@@ -93,6 +93,7 @@ function contexto() {
     // Limpar aqui seria uma segunda verdade sobre a mesma string.
     documentTitle: document.title || null,
     ...ondeEstaOVideo(),
+    ...ondeEstaOBotaoDeTelaCheia(),
     ...telemetriaDaPagina(),
     ...metadataAtual(),
   }
@@ -118,30 +119,141 @@ function contexto() {
  * A conversão soma a barra do navegador: `getBoundingClientRect` conta a
  * partir do viewport, e a janela começa acima dele.
  */
+/**
+ * Quanto da janela o viewport pode deixar de ocupar e a conta ainda valer.
+ *
+ * A conversão abaixo supõe bordas laterais simétricas — é a suposição padrão, e
+ * ela quebra quando há um painel ancorado. Medido no Max em 26/08/2026, com o
+ * DevTools aberto à direita:
+ *
+ *     innerW: 322    outerW: 1284
+ *
+ * Com esses números, "metade da diferença" daria 481 pixels de borda de cada
+ * lado, e o clique erraria o alvo por centenas de pixels — com a mesma
+ * confiança de acertar. Quando a proporção não fecha, é melhor não afirmar
+ * posição nenhuma e deixar o backend cair para o centro da janela.
+ */
+const PROPORCAO_MINIMA_DO_VIEWPORT = 0.8
+
+/** O centro de um retângulo, em fração da JANELA. `null` quando não dá. */
+function emFracaoDaJanela(r) {
+  if (!r || !(r.width > 0) || !(r.height > 0)) return null
+  const largura = window.outerWidth || window.innerWidth
+  const altura = window.outerHeight || window.innerHeight
+  if (!(largura > 0) || !(altura > 0)) return null
+  // Painel ancorado: a suposição de bordas simétricas não vale mais.
+  if (window.innerWidth / largura < PROPORCAO_MINIMA_DO_VIEWPORT) return null
+
+  const lateral = Math.max(0, (largura - window.innerWidth) / 2)
+  const topo = Math.max(0, altura - window.innerHeight - lateral)
+  const x = (lateral + r.left + r.width / 2) / largura
+  const y = (topo + r.top + r.height / 2) / altura
+  // Fora da janela não é alvo: acontece com o elemento rolado para fora.
+  if (!(x >= 0 && x <= 1 && y >= 0 && y <= 1)) return null
+  return { x: Number(x.toFixed(4)), y: Number(y.toFixed(4)) }
+}
+
 function ondeEstaOVideo() {
   const video = observador.elemento()
   if (video === null) return {}
-  let r
+  let ponto = null
   try {
-    r = video.getBoundingClientRect()
+    ponto = emFracaoDaJanela(video.getBoundingClientRect())
   } catch {
     return {}
   }
-  // Um vídeo sem área na tela não é alvo de clique nenhum.
-  if (!(r.width > 0) || !(r.height > 0)) return {}
-  const larguraDaJanela = window.outerWidth || window.innerWidth
-  const alturaDaJanela = window.outerHeight || window.innerHeight
-  if (!(larguraDaJanela > 0) || !(alturaDaJanela > 0)) return {}
+  if (ponto === null) return {}
+  return { videoCentroX: ponto.x, videoCentroY: ponto.y }
+}
 
-  // As bordas laterais, e o que sobra em cima é a barra do navegador.
-  const lateral = Math.max(0, (larguraDaJanela - window.innerWidth) / 2)
-  const topo = Math.max(0, alturaDaJanela - window.innerHeight - lateral)
+/**
+ * Onde está o BOTÃO de tela cheia do player.
+ *
+ * A tela cheia era um duplo clique no vídeo, e isso funciona em quem
+ * implementa duplo clique — Netflix e Disney+, onde foi testado quando o
+ * código nasceu. Prime e Max não implementam, e o resultado descrito pelo
+ * usuário em 26/08/2026 é exatamente o de dois cliques SIMPLES chegando:
+ *
+ *     "apertei 1 vez nada, 2 vezes nada, na 3ª um clique rápido no pausa e
+ *      despausa na mesma hora"
+ *
+ * Clicar no botão é determinístico: não depende de timing entre dois cliques
+ * e não tem efeito colateral de play/pause.
+ *
+ * ## O casamento, e por que ele é por RÓTULO
+ *
+ * Medido no Max:
+ *
+ *     button  data-testid="player-ux-fullscreen-button"
+ *             aria-label="Tela cheia"   title="Tela cheia (F)"
+ *
+ * O `data-testid` é o mais específico e vem primeiro. Mas ele é de um serviço
+ * só, e escrever quatro seletores dos quais três não foram medidos é o erro
+ * que quebrou Prime, Disney+ e Max nesta mesma noite.
+ *
+ * Então a rede é o RÓTULO — e não é chute: foi exatamente o predicado que
+ * encontrou o botão do Max na sonda. Ele é traduzido, por isso a lista tem
+ * português, inglês e espanhol.
+ *
+ * `expandir` fica FORA da lista de propósito. A sonda o incluiu e ele casou
+ * com os botões "Expandir Episódios" e "Expandir Você também pode gostar" —
+ * clicar neles abriria a bandeja de recomendações em vez da tela cheia.
+ */
+const ROTULO_DE_TELA_CHEIA = /full[\s-]?screen|tela\s*cheia|pantalla\s*completa/i
 
-  const x = (lateral + r.left + r.width / 2) / larguraDaJanela
-  const y = (topo + r.top + r.height / 2) / alturaDaJanela
-  // Fora da janela não é alvo: acontece com o vídeo rolado para fora da tela.
-  if (!(x >= 0 && x <= 1 && y >= 0 && y <= 1)) return {}
-  return { videoCentroX: Number(x.toFixed(4)), videoCentroY: Number(y.toFixed(4)) }
+/** Um botão de controle tem tamanho de botão. Fora disso é outra coisa. */
+const LADO_MINIMO_DO_BOTAO = 16
+const LADO_MAXIMO_DO_BOTAO = 200
+
+function raizesDaPagina() {
+  // `raizesComShadow` vem de `providers/disney.js`, carregado antes no
+  // manifesto: content scripts compartilham o mesmo mundo isolado. Sem ele, a
+  // busca ainda funciona — só não atravessa Shadow DOM, e aí o Disney+ fica
+  // com o duplo clique de sempre, que nele funciona.
+  if (typeof raizesComShadow === 'function') return raizesComShadow(document)
+  return [document]
+}
+
+function ondeEstaOBotaoDeTelaCheia() {
+  let melhor = null
+  for (const raiz of raizesDaPagina()) {
+    let elementos
+    try {
+      elementos = raiz.querySelectorAll(
+        '[data-testid*="fullscreen"],[data-uia*="fullscreen"],[aria-label],[title]',
+      )
+    } catch {
+      continue
+    }
+    for (const elemento of elementos) {
+      const testid = elemento.getAttribute('data-testid') || elemento.getAttribute('data-uia') || ''
+      const rotulo = `${elemento.getAttribute('aria-label') || ''} ${elemento.getAttribute('title') || ''}`
+      const casa = /fullscreen/i.test(testid) || ROTULO_DE_TELA_CHEIA.test(rotulo)
+      if (!casa) continue
+      // SAIR da tela cheia não é entrar. O rótulo muda quando ela está ativa,
+      // e clicar no botão errado desfaria o que a pessoa pediu.
+      if (/exit|sair|salir/i.test(`${testid} ${rotulo}`)) continue
+
+      let r
+      try {
+        r = elemento.getBoundingClientRect()
+      } catch {
+        continue
+      }
+      const lado = Math.min(r.width, r.height)
+      if (lado < LADO_MINIMO_DO_BOTAO || Math.max(r.width, r.height) > LADO_MAXIMO_DO_BOTAO) continue
+      if (!elemento.getClientRects().length) continue
+
+      const ponto = emFracaoDaJanela(r)
+      if (ponto === null) continue
+      // O que tem `data-testid` de tela cheia vence o que só tem rótulo: o
+      // atributo é escolhido pelo serviço, o rótulo é traduzido.
+      const forca = /fullscreen/i.test(testid) ? 2 : 1
+      if (melhor === null || forca > melhor.forca) melhor = { ...ponto, forca }
+    }
+  }
+  if (melhor === null) return {}
+  return { telaCheiaX: melhor.x, telaCheiaY: melhor.y }
 }
 
 /** Quando o último `play` aconteceu, e quando qualquer evento de mídia. */

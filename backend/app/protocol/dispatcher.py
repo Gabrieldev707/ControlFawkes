@@ -1334,7 +1334,7 @@ class Dispatcher:
             return
 
         if message.type == "MEDIA_FULLSCREEN" and session.platform != "SPOTIFY":
-            executed = self._enter_fullscreen(session.platform)
+            executed = await self._enter_fullscreen(session.platform)
         elif (pela_ponte := await self._comandar_pela_ponte(
                 message.type, session.platform)) is not None:
             # Fase 16 — o comando foi direto ao `<video>` da aba que o árbitro
@@ -1595,22 +1595,110 @@ class Dispatcher:
         self.window_focuser.focus(janela)
         return self.keyboard_adapter.press_key("SPACE")
 
-    def _enter_fullscreen(self, platform: Platform) -> bool:
-        """Duplo clique no meio do vídeo, em vez da tecla F.
+    #: Quanto esperar depois de acordar os controles do player.
+    #:
+    #: O botão de tela cheia só existe enquanto o overlay está na tela, e o
+    #: overlay aparece quando o mouse se mexe sobre o vídeo. Um quarto de
+    #: segundo é mais do que qualquer animação de fade observada, e pouco o
+    #: bastante para o botão não parecer travado.
+    SEGUNDOS_PARA_OS_CONTROLES_APARECEREM = 0.25
 
-        O atalho de teclado é de cada site e nenhum deles o aplica igual: no
-        Max, com a janela em foco, o F não fazia absolutamente nada — medido.
-        Já o duplo clique sobre o vídeo é o gesto de tela cheia que todo player
-        web implementa, e foi o que funcionou no uso real.
+    async def _clicar_no_botao_de_tela_cheia(self, platform: Platform) -> bool:
+        """Um clique no botão do player. `False` quando não dá para mirar nele.
+
+        ## Por que não é mais o duplo clique no vídeo
+
+        O duplo clique funciona em quem IMPLEMENTA duplo clique — Netflix e
+        Disney+, onde ele foi testado quando nasceu. Prime e Max não
+        implementam, e o relato do usuário em 26/08/2026 descreve exatamente
+        dois cliques simples chegando:
+
+            "apertei 1 vez nada, 2 vezes nada, na 3ª um clique rápido no pausa
+             e despausa na mesma hora"
+
+        Clicar no botão é determinístico: não depende de o player reconhecer um
+        duplo clique, não depende do intervalo entre eles, e não tem efeito
+        colateral de play/pause.
+
+        ## Os dois movimentos
+
+        O botão SOME junto com os controles depois de alguns segundos sem
+        mouse. Mexer o mouse sobre o vídeo é o que os traz de volta — então o
+        primeiro movimento vai ao centro do vídeo para acordar o overlay, e só
+        depois o segundo vai ao botão.
+
+        A posição do botão é a ÚLTIMA conhecida, herdada entre batimentos: ele
+        volta sempre para o mesmo lugar, porque o player não o move.
+        """
+        sessao = self.bridge_state.atual_de(platform)
+        if sessao is None or sessao.telaCheiaX is None or sessao.telaCheiaY is None:
+            return False
+        janela = self.window_focuser.find(platform)
+        if janela is None:
+            return False
+        rect = self.window_capture.retangulo(janela)
+        if rect is None:
+            return False
+
+        self.window_focuser.focus(janela)
+
+        # Acorda os controles. Sem alvo do vídeo, mexer para o próprio botão já
+        # costuma bastar — ele fica sobre o player.
+        acordar = (
+            (sessao.videoCentroX, sessao.videoCentroY)
+            if sessao.videoCentroX is not None and sessao.videoCentroY is not None
+            else (sessao.telaCheiaX, sessao.telaCheiaY)
+        )
+        self.pointer_adapter.move_to(*ponto_na_tela(rect, *acordar))
+        await asyncio.sleep(self.SEGUNDOS_PARA_OS_CONTROLES_APARECEREM)
+
+        alvo = ponto_na_tela(rect, sessao.telaCheiaX, sessao.telaCheiaY)
+        print(
+            f"[tela cheia] {platform} botao=({sessao.telaCheiaX:.4f}, "
+            f"{sessao.telaCheiaY:.4f}) -> pixel={alvo}",
+            flush=True,
+        )
+        if not self.pointer_adapter.move_to(*alvo):
+            return False
+        return bool(self.pointer_adapter.click())
+
+    async def _enter_fullscreen(self, platform: Platform) -> bool:
+        """Três tentativas, da mais específica para a mais genérica.
+
+            1. o BOTÃO do player, quando a extensão diz onde ele está
+            2. duplo clique no vídeo
+            3. a tecla de mídia
+
+        A ordem mudou em 26/08/2026. Antes começava no duplo clique, e a
+        docstring afirmava que ele era "o gesto de tela cheia que todo player
+        web implementa". Isso nunca foi medido — foi testado na Netflix e no
+        Disney+, que implementam, e generalizado para os outros dois.
+
+        O relato do usuário no Max e no Prime descreve o contrário:
+
+            "apertei 1 vez nada, 2 vezes nada, na 3ª um clique rápido no pausa
+             e despausa na mesma hora"
+
+        São dois cliques SIMPLES chegando: o player alterna play/pause duas
+        vezes e ignora o duplo. Nenhuma insistência no duplo clique conserta
+        isso, porque o gesto não existe naqueles players.
+
+        O botão existe, e está medido. No Max:
+
+            button  data-testid="player-ux-fullscreen-button"
+                    aria-label="Tela cheia"   title="Tela cheia (F)"
+
+        O duplo clique NÃO saiu: ele continua sendo o caminho de quem não tem
+        extensão, e continua sendo o que funciona na Netflix e no Disney+.
 
         A saída continua sendo Escape, que é padrão do navegador e não depende
         do site.
-
-        Vale o mesmo aviso do play/pause: mirar o centro só acerta o vídeo
-        enquanto ele ocupa o meio da tela. Com a reprodução pausada no plano com
-        anúncios, o meio é do anúncio — então o caso a reproduzir é sempre com
-        o vídeo tocando.
         """
+        if await self._clicar_no_botao_de_tela_cheia(platform):
+            return True
+
+        # Mirar o centro só acerta o vídeo enquanto ele ocupa o meio da tela.
+        # Com a reprodução pausada no plano com anúncios, o meio é do anúncio.
         clicou = self._clicar_no_video(platform, duplo=True)
         if clicou is None:
             return self.media_adapter.execute("MEDIA_FULLSCREEN", platform)
