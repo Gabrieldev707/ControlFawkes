@@ -1,5 +1,5 @@
 import { ArrowLeft, Minus, Plus, Volume2, VolumeX } from 'lucide-react'
-import type { CSSProperties } from 'react'
+import { useEffect, useState, type CSSProperties } from 'react'
 
 import { RemoteStatusText } from '../../components/fawkes-remote/RemoteStatusText'
 import type { VolumeScope } from '../../features/fawkes-remote/types'
@@ -35,8 +35,27 @@ export function VolumeScreen({
   onToggleMute,
   onBack,
 }: VolumeScreenProps) {
-  const effectiveLevel = level ?? 0
-  const controlsDisabled = disabled || loading || level === null
+  // O slider é otimista: enquanto o arrasto acontece, ele mostra o valor do
+  // dedo, não o último confirmado pelo Windows. Sem isso cada movimento voltava
+  // ao valor antigo até a resposta chegar, e o controle parecia emperrado.
+  const [draftLevel, setDraftLevel] = useState<number | null>(null)
+
+  useEffect(() => {
+    if (draftLevel === null) return
+    // O servidor alcançou o arrasto: volta a mandar o valor confirmado.
+    if (level === draftLevel) {
+      setDraftLevel(null)
+      return
+    }
+    // Rede de segurança para quando o Windows arredonda e nunca devolve
+    // exatamente o valor pedido: sem isso o slider ficaria preso no rascunho.
+    const timer = window.setTimeout(() => setDraftLevel(null), 700)
+    return () => window.clearTimeout(timer)
+  }, [draftLevel, level])
+
+  const effectiveLevel = draftLevel ?? level ?? 0
+  const escopoLocal = scope === 'LOCAL' && target !== null
+  const controlsDisabled = disabled || level === null
 
   return (
     <main className="remote-screen volume-screen" aria-labelledby="volume-screen-title">
@@ -45,17 +64,21 @@ export function VolumeScreen({
         Voltar
       </button>
 
+      {/* Uma frase só sobre o alvo, e no lugar onde o olho já está.
+          Antes o mesmo fato aparecia três vezes na mesma tela — cabeçalho
+          genérico, linha de escopo centralizada e texto de status —, e o
+          número grande logo abaixo dizia tudo de novo. */}
       <div className="volume-screen__heading">
-        <p className="remote-screen__eyebrow">Sistema Windows</p>
+        <p className="remote-screen__eyebrow">
+          {escopoLocal ? target : 'Sistema Windows'}
+        </p>
         <h2 id="volume-screen-title">Volume</h2>
-        <p>Controle o áudio principal do computador.</p>
+        <p>
+          {escopoLocal
+            ? `Só o áudio do ${target} muda; o resto do computador fica como está.`
+            : 'O ajuste vale para o computador inteiro.'}
+        </p>
       </div>
-
-      <p className="volume-screen__scope">
-        {scope === 'LOCAL' && target !== null
-          ? `Controlando o volume do ${target}`
-          : 'Controlando o volume do Windows (fallback)'}
-      </p>
 
       <RemoteStatusText message={statusMessage} error={statusError} />
 
@@ -64,7 +87,7 @@ export function VolumeScreen({
           {muted ? <VolumeX size={28} aria-hidden="true" /> : <Volume2 size={28} aria-hidden="true" />}
         </div>
         <output className="volume-panel__value" aria-live="polite">
-          {level === null ? '—' : `${level}%`}
+          {level === null ? '—' : `${effectiveLevel}%`}
         </output>
         <span className="volume-panel__state">{muted ? 'Mudo ativado' : 'Som ativo'}</span>
 
@@ -86,7 +109,11 @@ export function VolumeScreen({
             aria-label="Volume do computador"
             disabled={controlsDisabled}
             style={{ '--volume-progress': `${effectiveLevel}%` } as CSSProperties}
-            onChange={(event) => onSetLevel(Number(event.target.value))}
+            onChange={(event) => {
+              const next = Number(event.target.value)
+              setDraftLevel(next)
+              onSetLevel(next)
+            }}
           />
           <button
             type="button"

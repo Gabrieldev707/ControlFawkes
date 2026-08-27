@@ -22,6 +22,8 @@ from app.windows.app_volume import (
     AppVolumeUnavailable,
     WindowsAppVolumeAdapter,
 )
+from app.protocol import dispatcher as dispatcher_module
+from app.windows.focus import DesktopWindow, WindowFocuser
 from app.input.pointer import PointerRateLimiter, WindowsPointerAdapter
 from app.input.keyboard import WindowsKeyboardAdapter
 from app.platforms.browser import BrowserLaunchResult, BrowserLauncher
@@ -121,6 +123,35 @@ def keyboard_adapter_mock():
 
 
 @pytest.fixture
+def window_focuser_mock():
+    """Foco resolvido, sem tocar nas janelas reais da máquina.
+
+    O padrão varre o desktop de verdade, então sem este mock o resultado do
+    teste passaria a depender do que estiver aberto na hora.
+    """
+    focuser = Mock(spec=WindowFocuser)
+    focuser.focus_platform.return_value = True
+    # Sem janela localizada por padrão: assim a tela cheia cai no atalho de
+    # teclado, e cada teste que quer o caminho do duplo clique monta a janela
+    # explicitamente.
+    focuser.find.return_value = None
+    # E o MESMO para `media_window`, que faltava.
+    #
+    # Sem esta linha ela devolvia um `Mock`, que não é `None` — então o socorro
+    # pela janela entrava com um título que não é texto, e
+    # `limpar_titulo_de_janela` estourava com "'Mock' object is not iterable".
+    # A leitura inteira morria, o cartão nunca era enviado, e o celular recebia
+    # só o batimento.
+    #
+    # Passava NESTA máquina e quebrava no CI, porque o socorro só entra quando
+    # a SMTC não responde: aqui o `winsdk` está instalado e a leitura vinha por
+    # ele, então este caminho nunca era exercitado. No Linux não há `winsdk`, e
+    # 141 testes caíram de uma vez com `assert 'HEARTBEAT' == 'NOW_PLAYING'`.
+    focuser.media_window.return_value = None
+    return focuser
+
+
+@pytest.fixture
 def dispatcher(
     tmp_path,
     monkeypatch,
@@ -133,6 +164,7 @@ def dispatcher(
     pointer_adapter_mock,
     keyboard_adapter_mock,
     app_volume_adapter_mock,
+    window_focuser_mock,
 ):
     store = DeviceStore(
         filepath=tmp_path / "paired_devices.json",
@@ -153,6 +185,7 @@ def dispatcher(
         pointer_rate_limiter=PointerRateLimiter(max_updates=60),
         keyboard_adapter=keyboard_adapter_mock,
         app_volume_adapter=app_volume_adapter_mock,
+        window_focuser=window_focuser_mock,
     )
     monkeypatch.setattr(websocket_module, "dispatcher", instance)
     return instance
@@ -189,6 +222,11 @@ def pair(websocket, dispatcher, request_id="pair-1"):
     assert result["type"] == "PAIR_RESULT"
     assert result["success"] is True
     assert ready["state"] == "READY"
+    # O cartão do que está tocando chega logo depois de autenticar, para o
+    # celular não ficar com a tela vazia até a próxima mudança. Consumir aqui
+    # deixa os testes falando só do que cada um quer testar.
+    tocando = websocket.receive_json()
+    assert tocando["type"] == "NOW_PLAYING"
     return result
 
 
@@ -579,12 +617,21 @@ def test_authenticated_media_control_uses_only_allowlisted_windows_keys(
                 "action": action,
                 "platform": "YOUTUBE",
                 "session": "WEB",
+                "focused": True,
                 "executed": True,
             },
         }
+        # A tecla é a da lista, pressionada e solta — e agora com o scan code
+        # e a flag de tecla ESTENDIDA que fazem o Windows entregá-la como o
+        # teclado de verdade entregaria. Sem a flag, seta-esquerda chega como o
+        # 4 do numérico e o player web ignora; foi o que quebrou avançar e
+        # voltar 10s. Ver `app/input/teclas.py`.
+        from app.input.teclas import flags_de, scan_code_de
+
+        scan = scan_code_de(virtual_key)
         assert windows_key_event_mock.call_args_list == [
-            call(virtual_key, 0, 0, 0),
-            call(virtual_key, 0, 2, 0),
+            call(virtual_key, scan, flags_de(virtual_key), 0),
+            call(virtual_key, scan, flags_de(virtual_key, soltando=True), 0),
         ]
 
 
@@ -649,7 +696,9 @@ def test_media_control_requires_an_identified_active_session(
         error = websocket.receive_json()
 
     assert error["code"] == "MEDIA_SESSION_NOT_FOUND"
-    assert error["message"] == "Nenhuma plataforma de mídia ativa foi identificada."
+    # Sem sessão de mídia não é falha: é o estado de quem ainda não começou a
+    # assistir. A resposta precisa dizer o que fazer, não só constatar.
+    assert error["message"] == "Nada tocando agora. Abra uma plataforma para começar."
     windows_key_event_mock.assert_not_called()
 
 
@@ -1881,13 +1930,25 @@ def test_reset_input_state_requires_authentication(client, keyboard_adapter_mock
         keyboard_adapter_mock.release_all.assert_not_called()
 
 
-def test_disconnecting_releases_the_keyboard(client, dispatcher, keyboard_adapter_mock):
+def test_disconnecting_releases_only_what_got_stuck(
+    client,
+    dispatcher,
+    keyboard_adapter_mock,
+):
+    """Cair a conexão não pode deixar seta repetindo — nem mandar Escape.
+
+    O celular desconecta o tempo todo: tela apagada, troca de app, oscilação
+    de rede. Soltar a lista inteira de teclas em cada uma dessas mandava um
+    keyup de Escape para a janela em foco, e o Escape tira o navegador da tela
+    cheia. Na prática, o filme saía de tela cheia sozinho quando o usuário
+    guardava o celular.
+    """
     with client.websocket_connect("/ws") as websocket:
         receive_auth_required(websocket)
         pair(websocket, dispatcher)
 
-    # Cair a conexão no meio de um comando não pode deixar seta repetindo.
-    keyboard_adapter_mock.release_all.assert_called()
+    keyboard_adapter_mock.release_stuck.assert_called()
+    keyboard_adapter_mock.release_all.assert_not_called()
 
 
 def test_volume_prefers_the_active_app_and_says_so(
@@ -1948,8 +2009,8 @@ def test_volume_falls_back_to_windows_without_hiding_it(
         result = websocket.receive_json()
 
         assert result["data"]["scope"] == "GLOBAL"
-        assert "fallback" in result["message"]
-        assert result["message"] == "Volume do Windows (fallback): 47%."
+        assert "geral" in result["message"]
+        assert result["message"] == "Volume geral do Windows: 47%."
 
     volume_adapter_mock.change_level.assert_called_once_with(5)
 
@@ -2004,3 +2065,929 @@ def test_local_mute_reports_the_app_it_muted(
         assert result["data"]["scope"] == "LOCAL"
         assert result["data"]["target"] == "Chrome"
         assert result["message"] == "Volume do Chrome: mudo ativado, 40%."
+
+
+def ask_where_to_search(websocket, dispatcher, query: str, request_id: str) -> dict:
+    websocket.send_json({
+        "protocolVersion": 1,
+        "type": "TEXT_COMMAND",
+        "requestId": request_id,
+        "payload": {"query": query},
+    })
+    websocket.receive_json()  # BUSY
+    # Pula o que chega sozinho: o cartão de "tocando agora" é empurrado a cada
+    # segundo, e uma busca que consulta o catálogo dá tempo de sobra para ele
+    # cair no meio. O teste é sobre a resposta ao comando, não sobre a ordem em
+    # que as duas coisas chegam.
+    for _ in range(6):
+        mensagem = websocket.receive_json()
+        if mensagem["type"] not in ("NOW_PLAYING", "HEARTBEAT"):
+            return mensagem
+    raise AssertionError("só chegou mensagem espontânea")
+
+
+def test_the_choice_offers_max_and_disney_as_open_only(client, dispatcher):
+    """Um título que só existe no Max não tinha caminho nenhum pelo controle.
+
+    As duas não têm URL de busca estável, então continuam separadas das que
+    recebem a consulta — mas some da lista era pior: dava a impressão de que a
+    plataforma não era suportada.
+    """
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+
+        message = ask_where_to_search(websocket, dispatcher, "Harry Potter", "needs-1")
+
+        assert message["type"] == "NEEDS_PLATFORM"
+        assert message["query"] == "Harry Potter"
+        assert message["openOnlyPlatforms"] == ["MAX", "DISNEY_PLUS"]
+        # Nenhuma das duas pode aparecer como busca direta: prometeria levar a
+        # consulta para uma tela que a descarta.
+        assert "MAX" not in message["suggestedPlatforms"]
+        assert "DISNEY_PLUS" not in message["suggestedPlatforms"]
+
+
+def test_naming_max_still_asks_where_to_search_and_offers_max(client, dispatcher):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+
+        message = ask_where_to_search(
+            websocket, dispatcher, "coloca Harry Potter no Max", "needs-2",
+        )
+
+        assert message["type"] == "NEEDS_PLATFORM"
+        assert message["query"] == "Harry Potter"
+        assert "MAX" in message["openOnlyPlatforms"]
+
+
+def test_a_music_request_does_not_offer_video_only_platforms(client, dispatcher):
+    """"toca alguma coisa" no Max não faz sentido; oferecer só polui a escolha."""
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+
+        message = ask_where_to_search(websocket, dispatcher, "toca Runaway", "needs-3")
+
+        assert message["type"] == "NEEDS_PLATFORM"
+        assert message["openOnlyPlatforms"] == []
+        assert message["suggestedPlatforms"][0] == "SPOTIFY"
+
+
+class CatalogoDeDoisResultados:
+    """O catálogo quando o nome serve para duas obras diferentes."""
+
+    enabled = True
+
+    async def buscar_para_escolha(self, query: str, limite: int | None = None):
+        from app.catalog.tmdb import TitleAvailability
+
+        return [
+            TitleAvailability("O Justiceiro", 2004, None, ["MAX"], "MOVIE"),
+            TitleAvailability("Marvel - O Justiceiro", 2017, None, ["DISNEY_PLUS"], "TV"),
+        ]
+
+
+def test_the_choice_carries_the_other_reading_of_the_same_name(client, dispatcher):
+    """Escolher sozinho entre o filme e a série erra metade das vezes.
+
+    Medido no catálogo real: "o justiceiro" é um filme de 2004 no Max e a série
+    da Marvel de 2017 no Disney+. Quem estava assistindo à série no Disney+
+    recebia o filme, sem nenhuma forma de corrigir pela tela.
+    """
+    dispatcher.catalog = CatalogoDeDoisResultados()
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+
+        message = ask_where_to_search(websocket, dispatcher, "o justiceiro", "needs-4")
+
+        assert message["availability"]["title"] == "O Justiceiro"
+        assert message["availability"]["kind"] == "MOVIE"
+        assert message["availabilityAlternative"]["title"] == "Marvel - O Justiceiro"
+        assert message["availabilityAlternative"]["kind"] == "TV"
+
+
+def test_the_choice_carries_every_reading_not_just_two(client, dispatcher):
+    """Dois slots era o formato de "adivinhar a obra e oferecer a alternativa".
+
+    Para BUSCAR é pouco, e o quanto ficou medido em 25/08/2026: "capitão
+    américa" tinha os quatro filmes da Marvel entre os candidatos e a tela
+    mostrava o de 1990 — que não está em serviço nenhum — mais um.
+
+    Os dois campos antigos continuam preenchidos com os dois primeiros: um
+    cliente que não conhece a lista segue funcionando.
+    """
+    class CatalogoDeMuitos:
+        enabled = True
+
+        async def buscar_para_escolha(self, query: str, limite: int | None = None):
+            from app.catalog.tmdb import TitleAvailability
+
+            return [
+                TitleAvailability(f"Opção {i}", 2000 + i, None, ["MAX"], "MOVIE")
+                for i in range(1, 7)
+            ]
+
+    dispatcher.catalog = CatalogoDeMuitos()
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+
+        message = ask_where_to_search(websocket, dispatcher, "opcao", "needs-5")
+
+        assert len(message["availabilityOptions"]) == 6
+        # E os dois campos antigos são os dois primeiros da lista.
+        assert message["availability"]["title"] == "Opção 1"
+        assert message["availabilityAlternative"]["title"] == "Opção 2"
+        assert message["availabilityOptions"][0]["title"] == "Opção 1"
+
+
+def test_a_music_request_never_asks_the_movie_catalog(client, dispatcher):
+    dispatcher.catalog = CatalogoDeDoisResultados()
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+
+        message = ask_where_to_search(websocket, dispatcher, "toca Runaway", "needs-5")
+
+        assert message["availability"] is None
+        assert message["availabilityAlternative"] is None
+
+
+def send_media(websocket, dispatcher, action: str = "MEDIA_FULLSCREEN") -> dict:
+    websocket.send_json({
+        "protocolVersion": 1,
+        "type": action,
+        "requestId": "media-focus",
+    })
+    return websocket.receive_json()
+
+
+def test_the_platform_window_is_focused_before_the_key_is_sent(
+    client,
+    dispatcher,
+    window_focuser_mock,
+    windows_key_event_mock,
+):
+    """A tecla vai para a janela em primeiro plano, seja ela qual for.
+
+    Sem trazer a plataforma para frente, "tela cheia" digitava um "f" no editor
+    de código e "+10s" mandava seta para o Explorer — e a resposta dizia
+    "comando enviado" nos dois casos.
+    """
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+
+        result = send_media(websocket, dispatcher)
+
+        window_focuser_mock.focus_platform.assert_called_once_with("YOUTUBE")
+        assert result["data"]["focused"] is True
+        assert windows_key_event_mock.called
+
+
+def test_the_answer_stops_claiming_success_when_the_window_could_not_be_focused(
+    client,
+    dispatcher,
+    window_focuser_mock,
+):
+    window_focuser_mock.focus_platform.return_value = False
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+
+        result = send_media(websocket, dispatcher)
+
+        assert result["data"]["focused"] is False
+        assert "deixe a janela dele visível" in result["message"]
+
+
+def test_a_failed_focus_still_sends_the_key(
+    client,
+    dispatcher,
+    window_focuser_mock,
+    windows_key_event_mock,
+):
+    """A janela pode já estar na frente sem que o foco precise mudar; desistir
+    do envio transformaria um caso que funciona num erro."""
+    window_focuser_mock.focus_platform.return_value = False
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        send_media(websocket, dispatcher)
+
+    assert windows_key_event_mock.called
+
+
+def test_fullscreen_double_clicks_the_video_instead_of_pressing_f(
+    client,
+    dispatcher,
+    window_focuser_mock,
+    pointer_adapter_mock,
+    windows_key_event_mock,
+):
+    """O atalho F é de cada site e nenhum aplica igual.
+
+    Medido: no Max, com a janela em foco, o F não fazia absolutamente nada. O
+    duplo clique sobre o vídeo é o gesto que todo player web implementa, e foi
+    o que funcionou no uso real.
+    """
+    janela = DesktopWindow(handle=42, process="chrome.exe", title="Filme - Netflix")
+    window_focuser_mock.find.return_value = janela
+    window_focuser_mock.center_of.return_value = (800, 450)
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        result = send_media(websocket, dispatcher, "MEDIA_FULLSCREEN")
+
+    assert result["type"] == "COMMAND_RESULT"
+    pointer_adapter_mock.move_to.assert_called_once_with(800, 450)
+    pointer_adapter_mock.double_click.assert_called_once()
+    windows_key_event_mock.assert_not_called()
+
+
+def test_fullscreen_falls_back_to_the_key_when_the_window_is_not_found(
+    client,
+    dispatcher,
+    window_focuser_mock,
+    pointer_adapter_mock,
+    windows_key_event_mock,
+):
+    """Sem janela localizada não há onde clicar; tentar a tecla é melhor do que
+    responder que o comando falhou."""
+    window_focuser_mock.find.return_value = None
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        send_media(websocket, dispatcher, "MEDIA_FULLSCREEN")
+
+    pointer_adapter_mock.double_click.assert_not_called()
+    assert windows_key_event_mock.called
+
+
+def test_leaving_fullscreen_still_uses_escape(
+    client,
+    dispatcher,
+    window_focuser_mock,
+    pointer_adapter_mock,
+    windows_key_event_mock,
+):
+    """Escape é do navegador, não do site: sai da tela cheia em qualquer um.
+    Um segundo duplo clique dependeria do player tratar o toggle igual."""
+    window_focuser_mock.find.return_value = DesktopWindow(
+        handle=42, process="chrome.exe", title="Filme - Netflix",
+    )
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        send_media(websocket, dispatcher, "MEDIA_EXIT_FULLSCREEN")
+
+    pointer_adapter_mock.double_click.assert_not_called()
+    assert windows_key_event_mock.call_args_list[0].args[0] == 0x1B
+
+
+def test_spotify_never_gets_a_click_in_the_middle_of_its_window(
+    client,
+    dispatcher,
+    window_focuser_mock,
+    pointer_adapter_mock,
+):
+    """O Spotify não tem tela cheia de vídeo; um clique no meio da janela
+    acertaria a lista de músicas."""
+    dispatcher.media_session_detector.detect.return_value = MediaSession(
+        platform="SPOTIFY", kind="APP",
+    )
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        result = send_media(websocket, dispatcher, "MEDIA_FULLSCREEN")
+
+    assert result["type"] == "ERROR"
+    assert result["code"] == "MEDIA_ACTION_UNSUPPORTED"
+    pointer_adapter_mock.double_click.assert_not_called()
+
+
+def test_the_card_arrives_right_after_authenticating(client, dispatcher):
+    """Sem isto o cartão só apareceria na próxima mudança — e com o filme
+    tocando parado, o celular ficaria sem nada até alguém apertar pausa."""
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "PAIR_DEVICE",
+            "requestId": "pair-card",
+            "payload": {
+                "pin": dispatcher.pairing_service.current_pin,
+                "deviceName": "iPhone",
+            },
+        })
+        websocket.receive_json()  # PAIR_RESULT
+        websocket.receive_json()  # READY
+        cartao = websocket.receive_json()
+
+    assert cartao["type"] == "NOW_PLAYING"
+    assert "session" in cartao
+
+
+def test_nothing_playing_is_a_state_that_gets_sent(client, dispatcher, monkeypatch):
+    """"Nada tocando" precisa chegar: sem ele o cartão anterior ficaria
+    congelado na tela depois de o filme acabar."""
+    async def sem_midia():
+        return None
+
+    monkeypatch.setattr(dispatcher.now_playing_reader, "read", sem_midia)
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "PAIR_DEVICE",
+            "requestId": "pair-vazio",
+            "payload": {
+                "pin": dispatcher.pairing_service.current_pin,
+                "deviceName": "iPhone",
+            },
+        })
+        websocket.receive_json()
+        websocket.receive_json()
+        cartao = websocket.receive_json()
+
+    assert cartao == {"protocolVersion": 1, "type": "NOW_PLAYING", "session": None}
+
+
+def test_the_thumbnail_needs_the_same_token_as_everything_else(client, dispatcher):
+    dispatcher.thumbnails["capa-1"] = b"\x89PNG\r\n\x1a\nfake"
+
+    sem_token = client.get("/now-playing/thumbnail/capa-1")
+    errado = client.get(
+        "/now-playing/thumbnail/capa-1",
+        headers={"X-Device-Id": "x", "X-Device-Token": "y"},
+    )
+
+    assert sem_token.status_code == 401
+    assert errado.status_code == 401
+
+
+def test_an_unknown_thumbnail_is_a_clean_404(client, dispatcher):
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        resultado = pair(websocket, dispatcher)
+
+    resposta = client.get(
+        "/now-playing/thumbnail/nao-existe",
+        headers={
+            "X-Device-Id": resultado["deviceId"],
+            "X-Device-Token": resultado["token"],
+        },
+    )
+
+    assert resposta.status_code == 404
+
+
+def test_the_server_proves_the_connection_is_alive(client, dispatcher, monkeypatch):
+    """O ping do protocolo WebSocket é respondido pelo navegador sem passar
+    pelo JavaScript, então a página não tem como saber que ele parou. Quando o
+    Wi-Fi troca de rede, a conexão fica meio aberta: o `onclose` nunca dispara
+    e o controle segue mostrando "conectado" com todo comando falhando calado.
+    """
+    from app.protocol import dispatcher as modulo
+
+    # Encurta o relógio para o teste não esperar dez segundos de verdade.
+    monkeypatch.setattr(modulo, "NOW_PLAYING_INTERVAL_SECONDS", 0.02)
+    monkeypatch.setattr(modulo, "HEARTBEAT_INTERVAL_SECONDS", 0.04)
+
+    async def sem_midia():
+        return None
+
+    monkeypatch.setattr(dispatcher.now_playing_reader, "read", sem_midia)
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+
+        recebidos = [websocket.receive_json()["type"] for _ in range(3)]
+
+    assert "HEARTBEAT" in recebidos
+
+
+def test_the_heartbeat_carries_nothing_but_its_own_type(client, dispatcher):
+    """Ele existe só para provar que a conexão está viva; qualquer campo a
+    mais viraria estado que o celular precisaria interpretar."""
+    from app.schemas.ws import HeartbeatMessage
+
+    assert HeartbeatMessage().model_dump() == {
+        "protocolVersion": 1,
+        "type": "HEARTBEAT",
+    }
+
+
+def test_the_position_alone_does_not_trigger_a_new_message(dispatcher):
+    """O laço dizia mandar "só quando muda", mas a posição muda a cada segundo
+    — na prática era um envio por segundo por dispositivo, exatamente o que a
+    regra queria evitar. Quem conta os segundos é o celular."""
+    from app.protocol.dispatcher import POSITION_RESYNC_SECONDS
+
+    def mensagem(posicao: float, tocando: bool = True) -> dict:
+        return {
+            "protocolVersion": 1,
+            "type": "NOW_PLAYING",
+            "session": {
+                "title": "Duna", "artist": None, "app": "Chrome", "platform": None,
+                "playing": tocando, "positionSeconds": posicao,
+                "durationSeconds": 600.0, "thumbnailId": None,
+            },
+        }
+
+    dispatcher._last_now_playing = mensagem(10.0)
+
+    assert dispatcher._vale_enviar(mensagem(11.0), 1.0) is False
+    assert dispatcher._vale_enviar(mensagem(12.0), 2.0) is False
+    # Pausar muda algo de verdade e precisa chegar na hora.
+    assert dispatcher._vale_enviar(mensagem(12.0, tocando=False), 2.0) is True
+    # E a ressincronização periódica evita a barra derivar numa sessão longa.
+    assert dispatcher._vale_enviar(mensagem(30.0), POSITION_RESYNC_SECONDS) is True
+
+
+def test_a_title_change_is_sent_immediately(dispatcher):
+    base = {
+        "protocolVersion": 1, "type": "NOW_PLAYING",
+        "session": {
+            "title": "Duna", "artist": None, "app": "Chrome", "platform": None,
+            "playing": True, "positionSeconds": 10.0,
+            "durationSeconds": 600.0, "thumbnailId": None,
+        },
+    }
+    dispatcher._last_now_playing = base
+    outro = {**base, "session": {**base["session"], "title": "Interestelar"}}
+
+    assert dispatcher._vale_enviar(outro, 0.5) is True
+
+
+def test_going_from_playing_to_nothing_is_sent_immediately(dispatcher):
+    """Sem isso o cartão do filme anterior ficaria congelado na tela."""
+    dispatcher._last_now_playing = {
+        "protocolVersion": 1, "type": "NOW_PLAYING",
+        "session": {
+            "title": "Duna", "artist": None, "app": "Chrome", "platform": None,
+            "playing": True, "positionSeconds": 10.0,
+            "durationSeconds": 600.0, "thumbnailId": None,
+        },
+    }
+    vazio = {"protocolVersion": 1, "type": "NOW_PLAYING", "session": None}
+
+    assert dispatcher._vale_enviar(vazio, 0.5) is True
+
+
+def test_choosing_max_from_a_query_lands_on_its_search_screen(
+    client,
+    dispatcher,
+    browser_launcher_mock,
+):
+    """Abrir a home obrigava a achar e clicar na lupa antes de digitar. Medido:
+    `play.max.com/search` abre direto na tela de busca para quem está logado."""
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "PLATFORM_SELECTED",
+            "requestId": "busca-max",
+            "payload": {"platform": "MAX", "openSearch": True},
+        })
+        websocket.receive_json()
+
+    browser_launcher_mock.open.assert_called_once_with("https://play.max.com/search")
+
+
+def test_just_opening_max_still_lands_on_the_home(
+    client,
+    dispatcher,
+    browser_launcher_mock,
+):
+    """"abre o Max" é outro pedido: quem só quer a plataforma não quer cair
+    numa tela de busca vazia."""
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "PLATFORM_SELECTED",
+            "requestId": "abre-max",
+            "payload": {"platform": "MAX"},
+        })
+        websocket.receive_json()
+
+    browser_launcher_mock.open.assert_called_once_with("https://www.max.com")
+
+
+def test_a_platform_without_a_search_page_falls_back_to_its_home(
+    client,
+    dispatcher,
+    browser_launcher_mock,
+):
+    """Disney+ não tem página de busca conhecida; inventar uma levaria a 404."""
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "PLATFORM_SELECTED",
+            "requestId": "busca-disney",
+            "payload": {"platform": "DISNEY_PLUS", "openSearch": True},
+        })
+        websocket.receive_json()
+
+    browser_launcher_mock.open.assert_called_once_with("https://www.disneyplus.com")
+
+
+def test_play_pause_uses_the_space_bar_on_the_focused_window(
+    client,
+    dispatcher,
+    window_focuser_mock,
+    pointer_adapter_mock,
+    keyboard_adapter_mock,
+    windows_key_event_mock,
+):
+    """Nem a tecla global de mídia, nem o clique no meio do vídeo.
+
+    A tecla global depende do subsistema de mídia do Windows rotear o evento —
+    o mesmo subsistema cuja API ficou pendurada por minutos nesta máquina.
+
+    O clique no centro só acerta o vídeo enquanto ele ocupa o meio da tela, que
+    é justamente o que deixa de valer quando ele pausa: medido na tela do
+    usuário, pausar a Netflix no plano com anúncios encolhe o player num cartão
+    à esquerda e cobre o centro com um anúncio. O botão pausava e não
+    despausava, e ainda mirava um link de anunciante."""
+    window_focuser_mock.find.return_value = DesktopWindow(
+        handle=7, process="chrome.exe", title="Jogo - YouTube",
+    )
+    window_focuser_mock.center_of.return_value = (640, 360)
+    dispatcher.media_session_detector.detect.return_value = MediaSession(
+        platform="YOUTUBE", kind="WEB",
+    )
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        result = send_media(websocket, dispatcher, "MEDIA_PLAY_PAUSE")
+
+    assert result["type"] == "COMMAND_RESULT"
+    # A tecla só chega no player certo com a janela em foco.
+    window_focuser_mock.focus.assert_called_once()
+    keyboard_adapter_mock.press_key.assert_called_once_with("SPACE")
+    pointer_adapter_mock.click.assert_not_called()
+    windows_key_event_mock.assert_not_called()
+
+
+def test_play_pause_falls_back_to_the_media_key_without_a_window(
+    client,
+    dispatcher,
+    window_focuser_mock,
+    keyboard_adapter_mock,
+    windows_key_event_mock,
+):
+    """Sem janela para focar, a tecla não teria onde chegar — aí a tecla global
+    de mídia é a única tentativa que resta."""
+    window_focuser_mock.find.return_value = None
+    dispatcher.media_session_detector.detect.return_value = MediaSession(
+        platform="YOUTUBE", kind="WEB",
+    )
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        send_media(websocket, dispatcher, "MEDIA_PLAY_PAUSE")
+
+    keyboard_adapter_mock.press_key.assert_not_called()
+    windows_key_event_mock.assert_called()
+
+
+def test_spotify_keeps_the_media_key_for_play_pause(
+    client,
+    dispatcher,
+    pointer_adapter_mock,
+    windows_key_event_mock,
+):
+    """O Spotify é aplicativo, não página: clicar no meio da janela acertaria
+    a lista de músicas."""
+    dispatcher.media_session_detector.detect.return_value = MediaSession(
+        platform="SPOTIFY", kind="APP",
+    )
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        send_media(websocket, dispatcher, "MEDIA_PLAY_PAUSE")
+
+    pointer_adapter_mock.click.assert_not_called()
+    assert windows_key_event_mock.called
+
+
+def test_play_pause_falls_back_to_the_key_without_a_window(
+    client,
+    dispatcher,
+    window_focuser_mock,
+    pointer_adapter_mock,
+    windows_key_event_mock,
+):
+    window_focuser_mock.find.return_value = None
+    dispatcher.media_session_detector.detect.return_value = MediaSession(
+        platform="YOUTUBE", kind="WEB",
+    )
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        send_media(websocket, dispatcher, "MEDIA_PLAY_PAUSE")
+
+    pointer_adapter_mock.click.assert_not_called()
+    assert windows_key_event_mock.called
+
+
+# ── Toque na foto da tela ─────────────────────────────────────────────────
+
+JANELA_DA_NETFLIX = DesktopWindow(handle=7, process="chrome.exe", title="Netflix - Google Chrome")
+
+
+def preparar_janela(dispatcher, rect=None):
+    """Uma janela localizável e um retângulo conhecido para ela."""
+    from unittest.mock import Mock
+
+    from app.windows.screen import Retangulo, WindowCapture
+
+    dispatcher.window_focuser.find.return_value = JANELA_DA_NETFLIX
+    captura = Mock(spec=WindowCapture)
+    captura.retangulo.return_value = rect or Retangulo(1536, 0, 1280, 720)
+    dispatcher.window_capture = captura
+    return captura
+
+
+def test_a_tap_on_the_photo_clicks_the_same_spot_on_the_window(
+    client, dispatcher, pointer_adapter_mock,
+):
+    """A conta que faz a feature existir: fração da imagem -> pixel da tela."""
+    preparar_janela(dispatcher)
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "SCREEN_TAP",
+            "requestId": "tap-1",
+            "payload": {"platform": "NETFLIX", "x": 0.5, "y": 0.5},
+        })
+
+        resultado = websocket.receive_json()
+
+    assert resultado["data"] == {
+        "intent": "SCREEN_CONTROL",
+        "action": "SCREEN_TAP",
+        "platform": "NETFLIX",
+        "executed": True,
+    }
+    pointer_adapter_mock.move_to.assert_called_once_with(2176, 360)
+    pointer_adapter_mock.click.assert_called_once()
+
+
+def test_the_window_is_brought_to_the_front_before_the_click(client, dispatcher):
+    """Clicar numa janela atrás entregaria o clique para quem está na frente."""
+    preparar_janela(dispatcher)
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "SCREEN_TAP",
+            "requestId": "tap-2",
+            "payload": {"platform": "NETFLIX", "x": 0.2, "y": 0.3},
+        })
+        websocket.receive_json()
+
+    dispatcher.window_focuser.focus.assert_called_once_with(JANELA_DA_NETFLIX)
+
+
+def test_tapping_a_platform_that_is_not_open_says_so(client, dispatcher):
+    dispatcher.window_focuser.find.return_value = None
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "SCREEN_TAP",
+            "requestId": "tap-3",
+            "payload": {"platform": "MAX", "x": 0.5, "y": 0.5},
+        })
+
+        erro = websocket.receive_json()
+
+    assert erro["type"] == "ERROR"
+    assert erro["code"] == "SCREEN_CONTROL_FAILED"
+    assert "Max" in erro["message"]
+
+
+def test_choosing_a_profile_clicks_where_it_was_registered(
+    client, dispatcher, pointer_adapter_mock, tmp_path,
+):
+    from app.profiles.store import ProfileStore
+
+    preparar_janela(dispatcher)
+    dispatcher.profile_store = ProfileStore(tmp_path / "perfis.json")
+    perfil = dispatcher.profile_store.adicionar("NETFLIX", "Gabriel", 0.25, 0.5, None)
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "PROFILE_SELECT",
+            "requestId": "perfil-1",
+            "payload": {"platform": "NETFLIX", "profileId": perfil.id},
+        })
+
+        resultado = websocket.receive_json()
+
+    assert resultado["message"] == "Entrando como Gabriel."
+    assert resultado["data"]["action"] == "PROFILE_SELECT"
+    pointer_adapter_mock.move_to.assert_called_once_with(1856, 360)
+
+
+def test_a_profile_that_was_deleted_gives_a_clear_error(client, dispatcher, tmp_path):
+    from app.profiles.store import ProfileStore
+
+    preparar_janela(dispatcher)
+    dispatcher.profile_store = ProfileStore(tmp_path / "perfis.json")
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "PROFILE_SELECT",
+            "requestId": "perfil-2",
+            "payload": {"platform": "NETFLIX", "profileId": "nao-existe"},
+        })
+
+        erro = websocket.receive_json()
+
+    assert erro["code"] == "PROFILE_NOT_FOUND"
+
+
+def receber_resultado(websocket) -> dict:
+    """A próxima resposta ao comando, pulando o que chega sozinho.
+
+    Com uma janela de plataforma visível, o laço de "tocando agora" passa a
+    emitir pelo caminho da janela — e essa mensagem chega no meio.
+    """
+    for _ in range(5):
+        mensagem = websocket.receive_json()
+        if mensagem["type"] not in ("NOW_PLAYING", "HEARTBEAT"):
+            return mensagem
+    raise AssertionError("só chegou mensagem espontânea")
+
+
+def test_typing_brings_the_platform_to_the_front_first(client, dispatcher):
+    """Sem isto o texto ia para a janela que estivesse na frente.
+
+    Foi o "botão sem pegar" relatado: o texto era enviado de verdade, só que
+    para o editor de código aberto atrás — e o controle respondia "texto
+    enviado", porque enviado ele foi.
+    """
+    dispatcher.window_focuser.media_window.return_value = JANELA_DA_NETFLIX
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "KEYBOARD_TEXT",
+            "requestId": "texto-1",
+            "payload": {"text": "o justiceiro"},
+        })
+
+        resultado = receber_resultado(websocket)
+
+    assert resultado["data"]["intent"] == "KEYBOARD_CONTROL"
+    dispatcher.window_focuser.focus.assert_called_once_with(JANELA_DA_NETFLIX)
+
+
+def test_typing_still_works_when_no_platform_window_is_open(client, dispatcher):
+    """Sem plataforma aberta o texto continua indo: é o comportamento antigo."""
+    dispatcher.window_focuser.media_window.return_value = None
+
+    with client.websocket_connect("/ws") as websocket:
+        receive_auth_required(websocket)
+        pair(websocket, dispatcher)
+        websocket.send_json({
+            "protocolVersion": 1,
+            "type": "KEYBOARD_TEXT",
+            "requestId": "texto-2",
+            "payload": {"text": "oi"},
+        })
+
+        resultado = receber_resultado(websocket)
+
+    assert resultado["success"] is True
+    dispatcher.window_focuser.focus.assert_not_called()
+
+
+def test_the_now_playing_fields_are_a_contract_with_the_phone():
+    """O celular valida a mensagem com uma LISTA FECHADA de campos.
+
+    Um campo novo aqui que não seja acrescentado em
+    `frontend/src/features/fawkes-remote/protocol.ts` (`isNowPlayingSession`)
+    faz o celular DESCARTAR a mensagem inteira. O cartão fica preso em "nada
+    tocando" para sempre, sem erro na tela nem no log do servidor — foi
+    exatamente o que aconteceu quando `episode` nasceu só deste lado.
+
+    Se este teste falhou porque você acrescentou um campo: acrescente-o também
+    no validador do frontend e no teste de lá, e então atualize esta lista.
+    """
+    from app.schemas.ws import NowPlayingSession
+
+    assert set(NowPlayingSession.model_fields) == {
+        "title",
+        "episode",
+        "artist",
+        "app",
+        "platform",
+        "playing",
+        "positionSeconds",
+        "durationSeconds",
+        "positionStale",
+        "titleIsWork",
+        "thumbnailId",
+        "posterUrl",
+        "historyRevision",
+    }
+
+
+# ── O socorro pela janela, que só o CI exercitava ─────────────────────────
+#
+# Quando a SMTC não responde, a leitura cai para o título da janela aberta. Esse
+# caminho passou meses sem UM teste porque nesta máquina o `winsdk` está
+# instalado: a leitura vinha pela SMTC e o socorro nunca entrava.
+#
+# No Linux não há `winsdk`. Em 27/08/2026 o CI caiu com 141 testes de uma vez,
+# todos `assert 'HEARTBEAT' == 'NOW_PLAYING'`, e a causa estava na fixture: ela
+# zerava `find` e esquecia `media_window`, que devolvia um `Mock`. O socorro
+# entrava com um título que não é texto e a leitura inteira morria com
+# "'Mock' object is not iterable" — o cartão nunca era enviado, e o celular
+# recebia só o batimento.
+#
+# Estes testes existem para o caminho passar a ser exercitado dos DOIS lados.
+
+@pytest.mark.asyncio
+async def test_sem_smtc_a_janela_diz_o_que_esta_tocando(dispatcher, monkeypatch):
+    """A metade que faltava: a SMTC ausente, e a janela respondendo por ela."""
+    monkeypatch.setattr(dispatcher_module, "smtc_disponivel", lambda: False)
+    dispatcher.window_focuser.media_window.return_value = DesktopWindow(
+        handle=7, process="chrome.exe", title="Duna: Parte Dois - Netflix - Google Chrome",
+    )
+
+    mensagem = await dispatcher._read_now_playing(contar=False)
+
+    assert mensagem["type"] == "NOW_PLAYING"
+    assert mensagem["session"]["title"] == "Duna: Parte Dois"
+
+
+@pytest.mark.asyncio
+async def test_sem_smtc_e_sem_janela_nao_ha_cartao(dispatcher, monkeypatch):
+    monkeypatch.setattr(dispatcher_module, "smtc_disponivel", lambda: False)
+    dispatcher.window_focuser.media_window.return_value = None
+
+    mensagem = await dispatcher._read_now_playing(contar=False)
+
+    assert mensagem["session"] is None
+
+
+@pytest.mark.asyncio
+async def test_um_titulo_que_nao_e_TEXTO_nao_derruba_a_leitura(dispatcher, monkeypatch):
+    """O defeito exato do CI, agora como teste.
+
+    Um título que não é texto é entrada inválida vinda de fora — e entrada
+    inválida não pode calar o cartão. Era isto que fazia o celular receber só
+    batimento: a exceção subia, o laço pulava a volta, e nada dizia por quê a
+    não ser uma linha no terminal do servidor.
+    """
+    monkeypatch.setattr(dispatcher_module, "smtc_disponivel", lambda: False)
+    dispatcher.window_focuser.media_window.return_value = DesktopWindow(
+        handle=7, process="chrome.exe", title=Mock(),
+    )
+
+    mensagem = await dispatcher._read_now_playing(contar=False)
+
+    assert mensagem["type"] == "NOW_PLAYING"

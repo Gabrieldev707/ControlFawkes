@@ -9,11 +9,31 @@ export interface OrbTheme {
   size: number;
   lineAmount: number;
   electronRate: number;
+  /**
+   * Órbita: velocidade tangencial em torno do eixo Y.
+   *
+   * É o que faz a nuvem girar como uma eletrosfera em vez de só flutuar. Antes
+   * o único movimento perceptível era a respiração de profundidade, e em
+   * repouso o orb parecia parado.
+   */
+  swirl: number;
+  /**
+   * Onda de energia: força do anel que sai do centro e atravessa a nuvem.
+   *
+   * Dá um pulso com direção — dá para ver a energia viajando —, diferente da
+   * respiração, que move tudo junto. Zero desliga.
+   */
+  waveStrength: number;
+  /** Segundos entre uma onda e a seguinte. */
+  wavePeriod: number;
 }
 
 export const ORB_VISUAL_TUNING = {
-  spriteMidHaloOpacity: 0.42,
-  lineOpacityMultiplier: 0.085,
+  spriteMidHaloOpacity: 0.55,
+  // Em repouso isto dava 0,014 de opacidade: as ligações existiam no buffer e
+  // não apareciam na tela. Sem elas o orb vira poeira, e é justamente a malha
+  // que faz a nuvem parecer um átomo.
+  lineOpacityMultiplier: 0.3,
   electronOpacity: 1,
   initialPointOpacity: 1,
 } as const;
@@ -35,11 +55,15 @@ export const ORB_THEMES: Record<OrbState, OrbTheme> = {
     radius: 28,
     speed: 0.20,
     brightness: 1.08,
-    size: 0.45,
-    lineAmount: 0.08,
-    // O estado padrão não emitia elétron nenhum: era parte do "quase
-    // invisível". Baixo o bastante para continuar calmo em repouso.
-    electronRate: 0.012,
+    // Repouso é a primeira tela que alguém vê e era a mais apagada de todas:
+    // poucos elétrons, poucas ligações. Subiu o bastante para a nuvem ter
+    // presença sem competir com os estados que precisam se destacar dela.
+    size: 0.62,
+    lineAmount: 0.3,
+    electronRate: 0.045,
+    swirl: 0.055,
+    waveStrength: 0.01,
+    wavePeriod: 6.5,
   },
   listening: {
     colors: [
@@ -55,6 +79,9 @@ export const ORB_THEMES: Record<OrbState, OrbTheme> = {
     size: 0.40,
     lineAmount: 0.20,
     electronRate: 0.018,
+    swirl: 0.085,
+    waveStrength: 0.016,
+    wavePeriod: 3.2,
   },
   transcribing: {
     colors: [
@@ -70,6 +97,9 @@ export const ORB_THEMES: Record<OrbState, OrbTheme> = {
     size: 0.30,
     lineAmount: 0.35,
     electronRate: 0.015,
+    swirl: 0.13,
+    waveStrength: 0.02,
+    wavePeriod: 2.1,
   },
   needs_selection: {
     colors: [
@@ -85,6 +115,9 @@ export const ORB_THEMES: Record<OrbState, OrbTheme> = {
     size: 0.40,
     lineAmount: 0.22,
     electronRate: 0.015,
+    swirl: 0.07,
+    waveStrength: 0.014,
+    wavePeriod: 4.0,
   },
   executing: {
     colors: [
@@ -100,6 +133,9 @@ export const ORB_THEMES: Record<OrbState, OrbTheme> = {
     size: 0.35,
     lineAmount: 0.35,
     electronRate: 0.02,
+    swirl: 0.16,
+    waveStrength: 0.026,
+    wavePeriod: 1.6,
   },
   success: {
     colors: [
@@ -115,6 +151,9 @@ export const ORB_THEMES: Record<OrbState, OrbTheme> = {
     size: 0.50,
     lineAmount: 0.15,
     electronRate: 0.05,
+    swirl: 0.11,
+    waveStrength: 0.034,
+    wavePeriod: 2.4,
   },
   error: {
     colors: [
@@ -130,5 +169,8 @@ export const ORB_THEMES: Record<OrbState, OrbTheme> = {
     size: 0.25,
     lineAmount: 0.10,
     electronRate: 0.02,
+    swirl: 0.03,
+    waveStrength: 0.022,
+    wavePeriod: 1.2,
   }
 };

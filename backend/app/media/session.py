@@ -7,6 +7,7 @@ from typing import Literal
 import unicodedata
 
 from app.schemas.ws import Platform
+from app.windows.focus import WindowLister, list_windows, platform_of
 
 
 MediaSessionKind = Literal["WEB", "APP"]
@@ -86,15 +87,20 @@ class WindowsMediaSessionDetector:
         self,
         foreground_title_reader: ForegroundTitleReader | None = None,
         audio_process_reader: AudioProcessReader | None = None,
+        window_lister: WindowLister | None = None,
     ) -> None:
         self._foreground_title_reader = foreground_title_reader or _read_foreground_title
         self._audio_process_reader = audio_process_reader or _read_audio_processes
+        self._window_lister = window_lister or list_windows
 
     def detect(self) -> MediaSession | None:
         by_audio = self._detect_by_audio()
         if by_audio is not None:
             return by_audio
-        return self._detect_by_title()
+        by_title = self._detect_by_title()
+        if by_title is not None:
+            return by_title
+        return self._detect_by_open_window()
 
     def _detect_by_audio(self) -> MediaSession | None:
         try:
@@ -107,11 +113,31 @@ class WindowsMediaSessionDetector:
             return MediaSession(platform="SPOTIFY", kind="APP")
 
         # O Chrome agrupa todas as abas num processo: saber que ele toca não
-        # diz qual plataforma é. Aí o título desempata.
+        # diz qual plataforma é. Aí o título desempata — primeiro a janela em
+        # foco, depois qualquer janela aberta.
         if "chrome.exe" in processes:
-            by_title = self._detect_by_title()
-            if by_title is not None:
-                return by_title
+            return self._detect_by_title() or self._detect_by_open_window()
+        return None
+
+    def _detect_by_open_window(self) -> MediaSession | None:
+        """Última tentativa: varre o desktop atrás da janela da plataforma.
+
+        Sem isto, bastava a página do controle estar aberta no computador para
+        o detector responder "nenhuma plataforma ativa" — ele só enxergava a
+        janela da frente, e a da frente era a própria página.
+        """
+        try:
+            windows = self._window_lister()
+        except Exception:  # noqa: BLE001 - enumeração não pode derrubar o comando
+            return None
+
+        for window in windows:
+            if "control fawkes" in _normalize_title(window.title):
+                continue
+            platform = platform_of(window)
+            if platform is not None:
+                kind: MediaSessionKind = "APP" if platform == "SPOTIFY" else "WEB"
+                return MediaSession(platform=platform, kind=kind)
         return None
 
     def _detect_by_title(self) -> MediaSession | None:

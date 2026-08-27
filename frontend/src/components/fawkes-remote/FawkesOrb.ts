@@ -12,6 +12,8 @@ import {
 const N             = 2000;
 const MAX_LINES     = 3000;
 const MAX_ELECTRONS = 200;
+/** Espessura do anel da onda de energia, em unidades de cena. */
+const WAVE_WIDTH    = 3.2;
 
 function _makeCircleSprite() {
   const size = 64;
@@ -82,6 +84,8 @@ export class FawkesOrb {
   private targetSize       = 0.35;
   private targetLineAmount = 0.15;
   private targetElectronRate = 0;
+  private targetSwirl        = 0;
+  private targetWaveStrength = 0;
 
   private currentRadius     = 28;
   private currentSpeed      = 0.2;
@@ -89,6 +93,12 @@ export class FawkesOrb {
   private currentSize       = 0.35;
   private lineAmount        = 0.15;
   private electronSpawnRate = 0;
+  private currentSwirl        = 0;
+  private currentWaveStrength = 0;
+
+  // Onda de energia: um anel que sai do centro e atravessa a nuvem.
+  private wavePhase  = 0;
+  private waveRadius = 0;
 
   // Transition tumble
   private spinX = 0;
@@ -321,6 +331,8 @@ export class FawkesOrb {
     this.targetSize = theme.size;
     this.targetLineAmount = theme.lineAmount;
     this.targetElectronRate = theme.electronRate * this.quality.electronScale;
+    this.targetSwirl        = theme.swirl;
+    this.targetWaveStrength = theme.waveStrength;
 
     // ── Lerp Configuration ───────────────────────────────────────────────────
     const lr = 0.02;
@@ -330,6 +342,16 @@ export class FawkesOrb {
     this.currentSize       += (this.targetSize       - this.currentSize)       * lr;
     this.lineAmount        += (this.targetLineAmount - this.lineAmount)        * lr;
     this.electronSpawnRate += (this.targetElectronRate - this.electronSpawnRate) * lr;
+    this.currentSwirl        += (this.targetSwirl        - this.currentSwirl)        * lr;
+    this.currentWaveStrength += (this.targetWaveStrength - this.currentWaveStrength) * lr;
+
+    // ── Onda de energia ───────────────────────────────────────────────────────
+    // Avança o anel; ao completar o ciclo, volta ao centro e sai de novo. É o
+    // período do tema que dita o ritmo, então cada estado pulsa no seu tempo.
+    const wavePeriod = Math.max(0.4, theme.wavePeriod);
+    this.wavePhase = (this.wavePhase + (1 / 60) / wavePeriod) % 1;
+    // Vai um pouco além do raio para a onda sumir na borda em vez de parar nela.
+    this.waveRadius = this.wavePhase * (this.currentRadius * 1.25);
 
     this.mat.size = this.currentSize;
     this.mat.opacity = this.currentBright;
@@ -401,6 +423,49 @@ export class FawkesOrb {
       this.vel[i3]     -= (x / dist) * pull;
       this.vel[i3 + 1] -= (y / dist) * pull;
       this.vel[i3 + 2] -= (z / dist) * pull;
+
+      // ── Animação 1: órbita ────────────────────────────────────────────────
+      // Empurrão tangencial no plano XZ, mais forte longe do eixo. A nuvem
+      // passa a girar como uma eletrosfera; girar o objeto inteiro não teria o
+      // mesmo efeito, porque aqui cada partícula mantém a própria deriva.
+      if (this.currentSwirl > 0.001) {
+        const radial = Math.sqrt(x * x + z * z) || 0.01;
+        // O fator anterior era 0.0012. Com o amortecimento de 0.992, a
+        // velocidade terminal dava meia unidade por segundo — uma volta
+        // completa levava mais de cinco minutos, ou seja, movimento nenhum
+        // aos olhos. Em 0.008 o repouso gira em ~45s e os estados agitados em
+        // ~15s, que é o que se percebe sem virar distração.
+        const orbital = this.currentSwirl * 0.008 * Math.min(1, radial / 12);
+        this.vel[i3]     += (-z / radial) * orbital;
+        this.vel[i3 + 2] += (x / radial) * orbital;
+        // Leve inclinação: sem ela o giro fica achatado num disco só.
+        this.vel[i3 + 1] += Math.sin(px + t * 0.3) * orbital * 0.22;
+      }
+
+      // ── Animação 2: onda de energia ───────────────────────────────────────
+      // Só as partículas na frente de onda recebem o empurrão, e a intensidade
+      // cai até zero na borda do anel. É o que faz enxergar a energia viajando,
+      // em vez de tudo se mover junto como na respiração.
+      if (this.currentWaveStrength > 0.0005) {
+        const toFront = Math.abs(dist - this.waveRadius);
+        if (toFront < WAVE_WIDTH) {
+          const intensity = (1 - toFront / WAVE_WIDTH) ** 2
+            * this.currentWaveStrength
+            // Some no fim do ciclo para o anel não reaparecer com um estalo.
+            * (1 - this.wavePhase);
+          this.vel[i3]     += (x / dist) * intensity;
+          this.vel[i3 + 1] += (y / dist) * intensity;
+          this.vel[i3 + 2] += (z / dist) * intensity;
+          // Clareia o que a onda toca: o brilho é o que dá a leitura de crista.
+          // Em 12 o acréscimo máximo era 0,12 numa cor já clara — a onda existia
+          // no cálculo e não aparecia na tela. Em 45 a crista fica visível como
+          // um anel percorrendo a nuvem, que é a razão de ela existir.
+          const glow = intensity * 45;
+          c[i3]     = Math.min(1, c[i3] + glow);
+          c[i3 + 1] = Math.min(1, c[i3 + 1] + glow);
+          c[i3 + 2] = Math.min(1, c[i3 + 2] + glow);
+        }
+      }
 
       // Bass push
       if (this.bass > 0.05) {

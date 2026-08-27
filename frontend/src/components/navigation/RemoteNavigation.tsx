@@ -2,7 +2,7 @@ import {
   Gamepad2,
   House,
   LayoutGrid,
-  MousePointer2,
+  UserRound,
   Settings,
 } from 'lucide-react'
 
@@ -17,7 +17,7 @@ interface RemoteNavigationProps {
 const NAV_ITEMS = [
   { screen: 'HOME', label: 'Início', icon: House },
   { screen: 'REMOTE_CONTROL', label: 'Controle', icon: Gamepad2 },
-  { screen: 'TOUCHPAD', label: 'Touchpad', icon: MousePointer2 },
+  { screen: 'PROFILE', label: 'Perfil', icon: UserRound },
   { screen: 'PLATFORMS', label: 'Plataformas', icon: LayoutGrid },
   { screen: 'SETTINGS', label: 'Ajustes', icon: Settings },
 ] as const satisfies ReadonlyArray<{

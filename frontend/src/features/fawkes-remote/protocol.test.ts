@@ -369,3 +369,195 @@ describe('protocol v1 phase 2 additions', () => {
     })).toBe(true)
   })
 })
+
+describe('NEEDS_PLATFORM com plataformas que só abrem', () => {
+  const base = {
+    protocolVersion: 1,
+    type: 'NEEDS_PLATFORM',
+    requestId: 'req-1',
+    query: 'Harry Potter',
+    suggestedPlatforms: ['NETFLIX', 'PRIME_VIDEO'],
+  }
+
+  it('aceita a lista de plataformas que só podem ser abertas', () => {
+    const message = { ...base, openOnlyPlatforms: ['MAX', 'DISNEY_PLUS'] }
+
+    expect(isServerMessage(message)).toBe(true)
+  })
+
+  it('continua aceitando a mensagem sem o campo novo', () => {
+    // A validação recusa a mensagem inteira ao ver uma chave desconhecida;
+    // exigir o campo travaria o controle contra um backend anterior.
+    expect(isServerMessage(base)).toBe(true)
+  })
+
+  it('recusa uma plataforma inventada na lista de abrir', () => {
+    const message = { ...base, openOnlyPlatforms: ['MAX', 'PIRATE_TV'] }
+
+    expect(isServerMessage(message)).toBe(false)
+  })
+
+  it('continua recusando qualquer outra chave desconhecida', () => {
+    const message = { ...base, redirectUrl: 'http://exemplo.com' }
+
+    expect(isServerMessage(message)).toBe(false)
+  })
+})
+
+describe('NEEDS_PLATFORM com filme e série ao mesmo tempo', () => {
+  const base = {
+    protocolVersion: 1,
+    type: 'NEEDS_PLATFORM',
+    requestId: 'req-2',
+    query: 'o justiceiro',
+    suggestedPlatforms: ['NETFLIX'],
+  }
+  const filme = {
+    title: 'O Justiceiro',
+    year: 2004,
+    posterUrl: 'https://image.tmdb.org/t/p/w185/a.jpg',
+    platforms: ['MAX'],
+    kind: 'MOVIE',
+  }
+
+  it('aceita as duas leituras do mesmo nome', () => {
+    const message = {
+      ...base,
+      availability: filme,
+      availabilityAlternative: {
+        title: 'Marvel - O Justiceiro',
+        year: 2017,
+        posterUrl: null,
+        platforms: ['DISNEY_PLUS'],
+        kind: 'TV',
+      },
+    }
+
+    expect(isServerMessage(message)).toBe(true)
+  })
+
+  it('continua aceitando um catálogo sem o tipo', () => {
+    const { kind: _kind, ...semTipo } = filme
+
+    expect(isServerMessage({ ...base, availability: semTipo })).toBe(true)
+  })
+
+  it('recusa um tipo que a tela não sabe mostrar', () => {
+    const message = { ...base, availability: { ...filme, kind: 'PODCAST' } }
+
+    expect(isServerMessage(message)).toBe(false)
+  })
+
+  it('recusa um pôster que não é https na alternativa', () => {
+    // A URL vira o `src` de uma imagem; a alternativa passa pela mesma porta.
+    const message = {
+      ...base,
+      availability: filme,
+      availabilityAlternative: { ...filme, posterUrl: 'javascript:alert(1)' },
+    }
+
+    expect(isServerMessage(message)).toBe(false)
+  })
+})
+
+describe('NOW_PLAYING — o cartão de tocando agora', () => {
+  const sessao = {
+    title: 'Batman: Caped Crusader',
+    episode: null,
+    artist: null,
+    app: null,
+    platform: 'PRIME_VIDEO',
+    playing: true,
+    positionSeconds: null,
+    durationSeconds: null,
+    thumbnailId: null,
+    posterUrl: 'https://image.tmdb.org/t/p/w342/batman.jpg',
+  }
+
+  function mensagem(overrides: Record<string, unknown> = {}) {
+    return {
+      protocolVersion: 1,
+      type: 'NOW_PLAYING',
+      session: { ...sessao, ...overrides },
+    }
+  }
+
+  it('aceita a mensagem exatamente como o servidor a envia hoje', () => {
+    // `hasOnlyKeys` fecha a lista de campos: um campo novo no backend que não
+    // passe pelo validador derruba a mensagem INTEIRA, e o cartão fica preso
+    // em "nada tocando" para sempre — sem erro na tela nem no log. Foi o que
+    // aconteceu quando `episode` nasceu só do lado do servidor.
+    expect(isServerMessage(mensagem())).toBe(true)
+  })
+
+  it('aceita o episódio preenchido, que é o caso de série', () => {
+    expect(isServerMessage(mensagem({ episode: 'Campo dos Sonhos' }))).toBe(true)
+  })
+
+  it('aceita a sessão sem episódio nenhum, que é o caso de filme', () => {
+    const { episode: _ignorado, ...semEpisodio } = sessao
+    expect(isServerMessage({
+      protocolVersion: 1, type: 'NOW_PLAYING', session: semEpisodio,
+    })).toBe(true)
+  })
+
+  it('continua recusando campo desconhecido', () => {
+    expect(isServerMessage(mensagem({ inesperado: 'x' }))).toBe(false)
+  })
+
+  it('recusa um episódio que não é texto', () => {
+    expect(isServerMessage(mensagem({ episode: 42 }))).toBe(false)
+  })
+
+  it('aceita o aviso de posição travada', () => {
+    expect(isServerMessage(mensagem({
+      positionSeconds: 600, positionStale: true,
+    }))).toBe(true)
+  })
+
+  it('aceita a sessão sem o aviso, que é como um servidor anterior responde', () => {
+    const { positionStale: _ignorado, ...semAviso } = { ...sessao, positionStale: true }
+    expect(isServerMessage({
+      protocolVersion: 1, type: 'NOW_PLAYING', session: semAviso,
+    })).toBe(true)
+  })
+
+  it('recusa um aviso de posição travada que não é booleano', () => {
+    expect(isServerMessage(mensagem({ positionStale: 'sim' }))).toBe(false)
+  })
+
+  // ── A revisão do histórico ──────────────────────────────────────────────
+  //
+  // Um contador que o servidor incrementa a cada gravação. O celular não usa o
+  // valor: quando ele MUDA, a tela de "continuar assistindo" recarrega. Antes
+  // ela dependia de um relógio de sessenta segundos e de o título mudar — e
+  // quem começa a assistir não muda o título, então a linha nova levava até
+  // dois minutos e meio para aparecer.
+
+  it('aceita a revisão do histórico', () => {
+    expect(isServerMessage(mensagem({ historyRevision: 7 }))).toBe(true)
+  })
+
+  it('aceita zero, que é o servidor recém-iniciado', () => {
+    expect(isServerMessage(mensagem({ historyRevision: 0 }))).toBe(true)
+  })
+
+  it('aceita a sessão SEM a revisão, que é como um servidor anterior responde', () => {
+    expect(isServerMessage(mensagem({}))).toBe(true)
+  })
+
+  it.each([['texto', 'sim'], ['fracionado', 1.5], ['negativo', -1], ['NaN', Number.NaN]])(
+    'recusa uma revisão %s',
+    (_nome, valor) => {
+      // Um NaN passaria por qualquer comparação e a tela pararia de recarregar
+      // para sempre, sem nada acusar.
+      expect(isServerMessage(mensagem({ historyRevision: valor }))).toBe(false)
+    },
+  )
+
+  it('aceita "nada tocando", que precisa chegar para o cartão sumir', () => {
+    expect(isServerMessage({
+      protocolVersion: 1, type: 'NOW_PLAYING', session: null,
+    })).toBe(true)
+  })
+})

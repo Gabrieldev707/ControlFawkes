@@ -7,3 +7,8 @@ export * from './PairingScreen';
 export * from './RemoteStatusText';
 export * from './AuthenticationStatus';
 export * from './OrbStatePreview';
+export * from './PendingSearchHandoff';
+export * from './NowPlayingCard';
+export * from './NoMediaCard';
+export * from './CatalogKeyCard';
+export * from './FawkesMark';

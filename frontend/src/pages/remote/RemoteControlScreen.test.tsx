@@ -4,10 +4,25 @@ import { describe, expect, it, vi } from 'vitest'
 import { RemoteControlScreen } from './RemoteControlScreen'
 
 
+/** Estado padrão dos testes: conectado e com algo tocando. */
+const TOCANDO = {
+  title: 'Duna',
+  artist: null,
+  app: 'Chrome',
+  platform: null,
+  playing: true,
+  positionSeconds: 10,
+  durationSeconds: 100,
+  thumbnailId: null,
+}
+
 function renderScreen(overrides: Partial<Parameters<typeof RemoteControlScreen>[0]> = {}) {
   const callbacks = {
     onAction: vi.fn(),
     onNavigationAction: vi.fn(),
+    onPointerAction: vi.fn(),
+    onKey: vi.fn(),
+    onSetVolume: vi.fn(),
     onVolumeDelta: vi.fn(),
     onNavigate: vi.fn(),
     onToggleMute: vi.fn(),
@@ -20,11 +35,11 @@ function renderScreen(overrides: Partial<Parameters<typeof RemoteControlScreen>[
       navigationDisabled={false}
       currentAction={null}
       currentNavigationAction={null}
-      currentVolumeAction={null}
       muted={false}
       volumeLevel={42}
       statusMessage="Computador pronto."
       statusError={false}
+      nowPlaying={TOCANDO}
       {...callbacks}
       {...overrides}
     />,
@@ -38,11 +53,27 @@ describe('RemoteControlScreen', () => {
     renderScreen()
 
     expect(screen.getByRole('heading', { name: 'Controle' })).toBeTruthy()
-    expect(screen.getByRole('group', { name: 'Controle direcional' })).toBeTruthy()
+    // `application` e não `group`: a superfície interpreta gestos próprios, e
+    // é esse papel que faz o leitor de tela repassar as teclas em vez de
+    // consumi-las na própria navegação.
+    expect(screen.getByRole('application', { name: 'Controle direcional' })).toBeTruthy()
     expect(screen.getByRole('group', { name: 'Controles de reprodução' })).toBeTruthy()
-    expect(screen.getByRole('group', { name: 'Volume rápido' })).toBeTruthy()
+    expect(screen.getByRole('region', { name: 'Volume do Windows' })).toBeTruthy()
     expect(screen.getByRole('group', { name: 'Ações secundárias' })).toBeTruthy()
     expect(screen.getByRole('navigation', { name: 'Ferramentas do controle' })).toBeTruthy()
+  })
+
+  it('mantém as setas como botões de verdade, além do gesto', () => {
+    // Gesto sozinho seria inacessível para leitor de tela e para quem tem
+    // limitação motora — e é o botão que ensina o gesto a quem chega agora.
+    const { onNavigationAction } = renderScreen()
+
+    for (const nome of ['Cima', 'Baixo', 'Esquerda', 'Direita', 'OK', 'Voltar na TV']) {
+      expect(screen.getByRole('button', { name: nome })).toBeTruthy()
+    }
+
+    fireEvent.click(screen.getByRole('button', { name: 'OK' }))
+    expect(onNavigationAction).toHaveBeenCalledWith('NAVIGATE_CONFIRM')
   })
 
   it('routes directional and media actions through their closed callbacks', () => {
@@ -55,18 +86,28 @@ describe('RemoteControlScreen', () => {
     expect(onAction).toHaveBeenCalledWith('MEDIA_PLAY_PAUSE')
   })
 
-  it('provides one-tap volume down, mute and volume up with a real level', () => {
-    const { onToggleMute, onVolumeDelta } = renderScreen()
-    const volume = screen.getByRole('group', { name: 'Volume rápido' })
+  it('ajusta o volume arrastando, e diz de quem é o volume', () => {
+    // Quatro caixas iguais lado a lado não diziam qual era a importante, e
+    // ajustar de 5 em 5 pedia uma fileira de toques. Agora o controle é um só.
+    const { onToggleMute, onSetVolume } = renderScreen({ volumeTarget: 'Chrome' })
+    const volume = screen.getByRole('region', { name: 'Volume do Chrome' })
 
     expect(within(volume).getByText('42%')).toBeTruthy()
-    fireEvent.click(within(volume).getByRole('button', { name: 'Diminuir volume' }))
-    fireEvent.click(within(volume).getByRole('button', { name: 'Ativar mudo' }))
-    fireEvent.click(within(volume).getByRole('button', { name: 'Aumentar volume' }))
+    expect(within(volume).getByText('Chrome')).toBeTruthy()
 
-    expect(onVolumeDelta).toHaveBeenNthCalledWith(1, -5)
-    expect(onVolumeDelta).toHaveBeenNthCalledWith(2, 5)
+    fireEvent.change(within(volume).getByRole('slider', { name: 'Nível do volume' }), {
+      target: { value: '70' },
+    })
+    fireEvent.click(within(volume).getByRole('button', { name: 'Ativar mudo' }))
+
+    expect(onSetVolume).toHaveBeenCalledWith(70)
     expect(onToggleMute).toHaveBeenCalledOnce()
+  })
+
+  it('mostra o Windows como alvo quando não é o volume de um aplicativo', () => {
+    renderScreen()
+
+    expect(screen.getByRole('region', { name: 'Volume do Windows' })).toBeTruthy()
   })
 
   it('describes mute from server-confirmed state and exposes active actions', () => {
@@ -74,10 +115,9 @@ describe('RemoteControlScreen', () => {
       muted: true,
       currentAction: 'MEDIA_PLAY_PAUSE',
       currentNavigationAction: 'NAVIGATE_LEFT',
-      currentVolumeAction: 'SYSTEM_MUTE_TOGGLE',
     })
 
-    expect(screen.getByRole('button', { name: 'Desativar mudo' }).getAttribute('data-active')).toBe('true')
+    expect(screen.getByRole('button', { name: 'Desativar mudo' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Play/Pause' }).getAttribute('data-active')).toBe('true')
     expect(screen.getByRole('button', { name: 'Esquerda' }).getAttribute('data-active')).toBe('true')
   })
@@ -87,10 +127,37 @@ describe('RemoteControlScreen', () => {
     const secondary = screen.getByRole('group', { name: 'Ações secundárias' })
 
     fireEvent.click(within(secondary).getByRole('button', { name: 'Voltar 10 segundos' }))
-    fireEvent.click(within(secondary).getByRole('button', { name: 'Fullscreen' }))
+    fireEvent.click(within(secondary).getByRole('button', { name: 'Tela cheia: entrar ou sair' }))
 
     expect(onAction).toHaveBeenNthCalledWith(1, 'MEDIA_SEEK_BACK')
     expect(onAction).toHaveBeenNthCalledWith(2, 'MEDIA_FULLSCREEN')
+  })
+
+  it('tem UM botão de tela cheia, e não um par entrar/sair', () => {
+    // `MEDIA_FULLSCREEN` dá duplo clique no meio do vídeo, e duplo clique é o
+    // gesto que todo player web trata como alternância. Um botão já era um
+    // toggle de verdade; dois só ocupavam a fileira.
+    renderScreen()
+    const secondary = screen.getByRole('group', { name: 'Ações secundárias' })
+
+    expect(within(secondary).getByRole('button', { name: 'Tela cheia: entrar ou sair' })).toBeTruthy()
+    expect(within(secondary).queryByRole('button', { name: 'Sair do fullscreen' })).toBeNull()
+  })
+
+  it('manda Esc pelo caminho de teclado, sem inventar comando novo', () => {
+    // A tecla já existia ponta a ponta e o caminho de teclado já foca a janela
+    // de mídia antes de teclar. O que faltava era ela estar na tela em que a
+    // pessoa está, em vez de só na tela de Teclado.
+    const { onKey, onAction } = renderScreen()
+    const secondary = screen.getByRole('group', { name: 'Ações secundárias' })
+
+    fireEvent.click(
+      within(secondary).getByRole('button', { name: 'Esc: sair da tela cheia ou fechar sobreposição' }),
+    )
+
+    expect(onKey).toHaveBeenCalledWith('ESCAPE')
+    // E NÃO passa pela fileira de mídia: Esc é tecla, não ação de mídia.
+    expect(onAction).not.toHaveBeenCalled()
   })
 
   it('opens touchpad, keyboard and detailed volume without sending a system action', () => {
@@ -111,7 +178,7 @@ describe('RemoteControlScreen', () => {
 
     expect((screen.getByRole('button', { name: 'Cima' }) as HTMLButtonElement).disabled).toBe(true)
     expect((screen.getByRole('button', { name: 'Play/Pause' }) as HTMLButtonElement).disabled).toBe(true)
-    expect((screen.getByRole('button', { name: 'Diminuir volume' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('slider', { name: 'Nível do volume' }) as HTMLInputElement).disabled).toBe(true)
     expect((screen.getByRole('button', { name: 'Ativar mudo' }) as HTMLButtonElement).disabled).toBe(true)
     expect((screen.getByRole('button', { name: 'Abrir touchpad' }) as HTMLButtonElement).disabled).toBe(false)
     expect((screen.getByRole('button', { name: 'Voltar' }) as HTMLButtonElement).disabled).toBe(false)
@@ -123,5 +190,65 @@ describe('RemoteControlScreen', () => {
     renderScreen({ statusMessage: 'Nenhuma mídia ativa foi identificada.', statusError: true })
 
     expect(screen.getByRole('alert').textContent).toBe('Nenhuma mídia ativa foi identificada.')
+  })
+})
+
+describe('RemoteControlScreen em tela de login', () => {
+  it('manda Tab para andar entre campos, sem sair do controle', () => {
+    // Tela de login e seleção de perfil não andam com seta: andam com Tab.
+    // Sem isto, entrar numa conta exigia ir para a tela de teclado ou mirar
+    // cada campo com o cursor.
+    const { onKey, onNavigationAction } = renderScreen()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Próximo campo' }))
+
+    expect(onKey).toHaveBeenCalledWith('TAB')
+    expect(onNavigationAction).not.toHaveBeenCalled()
+  })
+})
+
+describe('RemoteControlScreen sem mídia tocando', () => {
+  it('trata "nada tocando" como estado normal, não como erro', () => {
+    // Antes, cada toque no play virava "nenhuma plataforma de mídia ativa" — o
+    // controle parecia quebrado justamente na situação mais comum: pegar o
+    // celular antes de começar a assistir.
+    renderScreen({ nowPlaying: null })
+
+    expect(screen.getByRole('region', { name: 'Nada tocando' })).toBeTruthy()
+    expect(screen.getByText('Nada tocando agora')).toBeTruthy()
+  })
+
+  it('desliga só os controles de reprodução, não a tela inteira', () => {
+    renderScreen({ nowPlaying: null })
+
+    // Sem o que controlar, o play mente se ficar ativo.
+    expect((screen.getByRole('button', { name: 'Play/Pause' }) as HTMLButtonElement).disabled).toBe(true)
+    expect((screen.getByRole('button', { name: 'Tela cheia: entrar ou sair' }) as HTMLButtonElement).disabled).toBe(true)
+    // O resto não depende de mídia e continua valendo.
+    expect((screen.getByRole('button', { name: 'Cima' }) as HTMLButtonElement).disabled).toBe(false)
+    expect((screen.getByRole('slider', { name: 'Nível do volume' }) as HTMLInputElement).disabled).toBe(false)
+    expect((screen.getByRole('button', { name: 'Próximo campo' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  it('oferece a saída em vez de deixar a pessoa parada', () => {
+    const { onNavigate } = renderScreen({ nowPlaying: null })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Abrir plataformas' }))
+
+    expect(onNavigate).toHaveBeenCalledWith('PLATFORMS')
+  })
+
+  it('com mídia tocando, os controles voltam e o cartão some', () => {
+    renderScreen({ nowPlaying: TOCANDO })
+
+    expect(screen.queryByRole('region', { name: 'Nada tocando' })).toBeNull()
+    expect((screen.getByRole('button', { name: 'Play/Pause' }) as HTMLButtonElement).disabled).toBe(false)
+    expect(screen.getByRole('region', { name: 'Tocando agora' })).toBeTruthy()
+  })
+
+  it('enquanto não conectou, diz que está procurando em vez de afirmar', () => {
+    renderScreen({ nowPlaying: null, connected: false })
+
+    expect(screen.getByText('Procurando o que está tocando…')).toBeTruthy()
   })
 })

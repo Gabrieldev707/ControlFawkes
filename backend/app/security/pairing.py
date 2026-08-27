@@ -62,9 +62,17 @@ class PairingService:
         return new_pin
 
     def _print_pin(self) -> None:
-        print("\nCONTROLFAWKES — PAREAMENTO LOCAL")
-        print(f"PIN: {self.current_pin}")
-        print("Validade: 5 minutos\n")
+        # flush obrigatório: sob `npm run dev` a saída passa por um pipe do
+        # concurrently, e aí o stdout do Python vira bufferizado em bloco. Sem
+        # o flush o PIN fica preso no buffer e só aparece muito depois, quando
+        # algum log de acesso esvazia o buffer — para o usuário, o terminal
+        # simplesmente nunca mostra o PIN.
+        print(
+            "\nCONTROLFAWKES — PAREAMENTO LOCAL\n"
+            f"PIN: {self.current_pin}\n"
+            "Validade: 5 minutos\n",
+            flush=True,
+        )
 
     def initialize(self) -> str:
         if self.current_pin is None:

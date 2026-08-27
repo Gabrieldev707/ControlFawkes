@@ -23,20 +23,13 @@ from app.schemas.pointer import (
 )
 from app.schemas.keyboard import KeyboardAction, KeyboardKeyMessage, KeyboardTextMessage
 from app.schemas.navigation import NavigationAction, NavigationMessage
+# Reexportados: moram em `platform.py` para as mensagens da tela poderem
+# usá-los sem fechar um ciclo de importação com este módulo.
+from app.schemas.platform import Platform, SearchablePlatform
+from app.schemas.screen import ProfileSelectMessage, ScreenCommandData, ScreenTapMessage
 
 
 ProtocolVersion = Literal[1]
-Platform = Literal[
-    "NETFLIX",
-    "MAX",
-    "PRIME_VIDEO",
-    "DISNEY_PLUS",
-    "YOUTUBE",
-    "SPOTIFY",
-]
-# Plataformas com URL de busca estável e verificada. Max e Disney+ não entram;
-# ver a nota em app/platforms/registry.py.
-SearchablePlatform = Literal["YOUTUBE", "SPOTIFY", "NETFLIX", "PRIME_VIDEO"]
 # LOCAL: só o aplicativo. GLOBAL: o volume do Windows inteiro.
 VolumeScope = Literal["LOCAL", "GLOBAL"]
 LaunchStrategy = Literal["CHROME", "SPOTIFY_APP", "SPOTIFY_WEB_CHROME"]
@@ -67,6 +60,9 @@ ErrorCode = Literal[
     "KEYBOARD_CONTROL_FAILED",
     "NAVIGATION_FAILED",
     "NAVIGATION_RATE_LIMITED",
+    # Tela: a janela não está aberta, ou o perfil cadastrado sumiu.
+    "SCREEN_CONTROL_FAILED",
+    "PROFILE_NOT_FOUND",
     "INTERNAL_ERROR",
 ]
 
@@ -75,6 +71,10 @@ class PlatformSelectedPayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     platform: Platform
+    # Escolhida a partir de uma consulta que a plataforma não aceita por URL:
+    # cai na tela de busca dela em vez da home, para o texto poder ser
+    # digitado de imediato.
+    openSearch: bool = False
 
 
 class TextCommandPayload(BaseModel):
@@ -150,7 +150,9 @@ ClientMessage = Annotated[
     | PointerUpMessage
     | KeyboardTextMessage
     | KeyboardKeyMessage
-    | NavigationMessage,
+    | NavigationMessage
+    | ScreenTapMessage
+    | ProfileSelectMessage,
     Field(discriminator="type"),
 ]
 
@@ -197,6 +199,10 @@ class MediaCommandData(BaseModel):
     action: MediaAction
     platform: Platform
     session: Literal["WEB", "APP"]
+    # Se a janela da plataforma foi trazida para frente antes da tecla. Quando
+    # é falso, a tecla saiu mas pode ter caído em outra janela — e a interface
+    # precisa poder dizer isso em vez de afirmar sucesso.
+    focused: bool = True
     executed: Literal[True] = True
 
 
@@ -265,14 +271,125 @@ class CommandResultMessage(BaseModel):
         | KeyboardCommandData
         | NavigationCommandData
         | MediaLinkCommandData
+        | ScreenCommandData
     )
+
+
+class HeartbeatMessage(BaseModel):
+    """Sinal de vida periódico, do servidor para quem já se autenticou.
+
+    O ping do próprio protocolo WebSocket é respondido pelo navegador sem
+    passar pelo JavaScript, então a página não tem como saber que ele parou.
+    Quando o Wi-Fi troca de rede ou o celular dorme, a conexão pode ficar
+    meio aberta: o `onclose` nunca dispara e o controle segue mostrando
+    "conectado" enquanto nenhum comando chega do outro lado.
+
+    Uma mensagem visível resolve isso: se ela para de chegar, a página sabe
+    que a conexão morreu e reconecta em vez de mentir.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    protocolVersion: ProtocolVersion = 1
+    type: Literal["HEARTBEAT"] = "HEARTBEAT"
+
+
+class NowPlayingMessage(BaseModel):
+    """O que está tocando, empurrado sem o celular pedir.
+
+    `session` nulo quer dizer "nada tocando" — é um estado legítimo e precisa
+    chegar, senão o cartão anterior ficaria congelado na tela depois de o filme
+    acabar.
+
+    A posição vem uma vez por mudança, não a cada segundo: o celular conta
+    sozinho a partir de `positionSeconds`. Empurrar o relógio pela rede gastaria
+    uma mensagem por segundo por dispositivo para dizer o óbvio.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    protocolVersion: ProtocolVersion = 1
+    type: Literal["NOW_PLAYING"] = "NOW_PLAYING"
+    session: "NowPlayingSession | None" = None
+
+
+class NowPlayingSession(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    title: str
+    # O episódio, quando o título é o de uma série. Separado porque o cartão
+    # quer mostrar os dois — "Rick and Morty" e, embaixo, "Campo dos Sonhos" —
+    # enquanto o histórico e o catálogo só têm o que fazer com a série.
+    episode: str | None = None
+    artist: str | None = None
+    app: str | None = None
+    platform: Platform | None = None
+    playing: bool
+    positionSeconds: float | None = None
+    durationSeconds: float | None = None
+    # A posição é desta reprodução, mas o site parou de atualizá-la. O celular
+    # mostra o número e para de contar sozinho a partir dele — sem isto, ou a
+    # minutagem sumia inteira, ou ela avançava inventando um tempo que não
+    # passou. Ver `RelogioDaMidia`.
+    positionStale: bool = False
+    # Quantas vezes o histórico foi escrito nesta execução do servidor.
+    #
+    # O celular não usa o VALOR: ele compara com o anterior e, quando muda,
+    # recarrega a tela de "continuar assistindo". Sem isto ela dependia de um
+    # relógio de sessenta segundos, e uma obra recém-gravada levava até dois
+    # minutos e meio para aparecer — mesmo já estando no disco.
+    #
+    # Vai junto do NOW_PLAYING em vez de virar mensagem própria porque é um
+    # inteiro e a mensagem já vai: um tipo novo de mensagem para empurrar um
+    # número seria protocolo a mais para dado nenhum.
+    historyRevision: int = 0
+    # O `title` acima é o nome da OBRA, ou é só o que deu para ler?
+    #
+    # Medido em 18/08/2026 com Ben 10 tocando: a janela do Max publica
+    # "⁨Fame⁩ • HBO Max", e "Fame" é o nome do EPISÓDIO — o Max nunca publica o
+    # nome da série. Com a API de mídia do Windows pendurada, não sobra
+    # ninguém que saiba dizer "Ben 10".
+    #
+    # O cartão mostrava "Fame" no lugar da obra, como se fosse o nome do que
+    # está tocando. O número está certo e a frase é que era falsa. Com este
+    # campo o celular pode dizer a verdade: este é o episódio, e a série não
+    # foi identificada.
+    titleIsWork: bool = True
+    # Identidade da capa publicada pelo próprio aplicativo — o Spotify manda,
+    # o Chrome não. A imagem vem por HTTP, porque alguns milhares de bytes em
+    # base64 estourariam o limite de mensagem.
+    thumbnailId: str | None = None
+    # Pôster do catálogo, para quando o aplicativo não publica capa nenhuma:
+    # é o caso de todo filme assistido pelo navegador.
+    posterUrl: str | None = None
+
+
+class TitleAvailabilityData(BaseModel):
+    """O que o catálogo sabe sobre o título pedido.
+
+    Existe para a escolha deixar de ser um chute: em vez de listar seis
+    plataformas, o controle diz em qual delas o título está.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str
+    year: StrictInt | None = None
+    posterUrl: str | None = None
+    platforms: list[Platform] = Field(default_factory=list)
+    # "MOVIE" ou "TV": deixa a tela perguntar em vez de escolher sozinha
+    # quando filme e série respondem igualmente bem à consulta.
+    kind: Literal["MOVIE", "TV"] = "MOVIE"
 
 
 class NeedsPlatformMessage(BaseModel):
     """Consulta entendida, mas sem plataforma: o usuário escolhe onde procurar.
 
-    Só entram plataformas com busca funcional — oferecer uma que não busca
-    levaria a um beco sem saída.
+    Duas listas separadas porque as duas levam a ações diferentes:
+    `suggestedPlatforms` recebe a consulta e cai direto na busca;
+    `openOnlyPlatforms` só abre a plataforma, porque Max e Disney+ não têm URL
+    de busca estável. A separação é o que permite oferecer as duas sem prometer
+    o que não dá para cumprir.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -282,6 +399,23 @@ class NeedsPlatformMessage(BaseModel):
     requestId: str
     query: str = Field(min_length=1, max_length=200)
     suggestedPlatforms: list[SearchablePlatform] = Field(min_length=1)
+    openOnlyPlatforms: list[Platform] = Field(default_factory=list)
+    # Ausente quando o catálogo está desligado ou não achou nada. As duas
+    # listas acima continuam valendo nesse caso: o catálogo acrescenta, nunca
+    # substitui o caminho manual.
+    availability: TitleAvailabilityData | None = None
+    # A outra leitura do mesmo nome. "O Justiceiro" é filme de 2004 no Max
+    # e série da Marvel no Disney+; adivinhar erraria metade das vezes.
+    availabilityAlternative: TitleAvailabilityData | None = None
+    # A lista inteira — e os dois campos acima passam a ser os dois primeiros
+    # dela, mantidos para não quebrar cliente antigo.
+    #
+    # Dois slots era o formato de "adivinhar a obra e oferecer a alternativa".
+    # Para BUSCAR é pouco, e o quanto ficou medido em 25/08/2026: "capitão
+    # américa" tinha os quatro filmes da Marvel entre os candidatos e a tela
+    # mostrava o de 1990 — que não está em serviço nenhum — mais um. Os quatro
+    # que qualquer pessoa quis dizer não cabiam no protocolo.
+    availabilityOptions: list[TitleAvailabilityData] = Field(default_factory=list)
 
 
 class ErrorMessage(BaseModel):
@@ -292,3 +426,8 @@ class ErrorMessage(BaseModel):
     requestId: str
     code: ErrorCode
     message: str
+
+
+# `NowPlayingSession` é declarada depois de quem a usa, para a mensagem ficar
+# no topo; o rebuild resolve a referência adiada.
+NowPlayingMessage.model_rebuild()

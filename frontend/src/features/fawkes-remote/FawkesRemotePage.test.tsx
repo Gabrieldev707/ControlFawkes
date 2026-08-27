@@ -264,7 +264,10 @@ describe('FawkesRemotePage authentication', () => {
     expect(screen.getByRole('button', { name: 'Teclado' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Volume' })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Plataformas' })).toBeTruthy()
-    expect(screen.getByRole('button', { name: 'Configurações' })).toBeTruthy()
+    // A barra de baixo, o atalho da home e o título da tela dizem o mesmo
+    // nome. Antes o atalho levava a "Configurações" e a aba dizia "Ajustes":
+    // dois nomes para o mesmo lugar.
+    expect(screen.getAllByRole('button', { name: 'Ajustes' }).length).toBeGreaterThan(0)
 
     fireEvent.click(screen.getByRole('button', { name: 'Controle' }))
 
@@ -281,7 +284,7 @@ describe('FawkesRemotePage authentication', () => {
       ['Teclado', 'Teclado'],
       ['Volume', 'Volume'],
       ['Plataformas', 'Plataformas'],
-      ['Configurações', 'Configurações'],
+      ['Ajustes', 'Ajustes'],
     ] as const
 
     for (const [buttonName, headingName] of destinations) {
@@ -375,6 +378,23 @@ describe('FawkesRemotePage authentication', () => {
         type: 'STATE_UPDATE',
         state: 'READY',
         message: 'Computador pronto.',
+      })
+      // O servidor manda isto logo após autenticar. Sem sessão de mídia os
+      // controles de reprodução ficam desligados de propósito: não há o que
+      // controlar, e deixá-los ativos só levaria a um erro no toque.
+      websocketMock.onMessage?.({
+        protocolVersion: 1,
+        type: 'NOW_PLAYING',
+        session: {
+          title: 'Duna',
+          artist: null,
+          app: 'Chrome',
+          platform: null,
+          playing: true,
+          positionSeconds: 12,
+          durationSeconds: 600,
+          thumbnailId: null,
+        },
       })
     })
 
@@ -922,5 +942,140 @@ describe('FawkesRemotePage platform choice', () => {
     offerPlatforms('request-antigo')
 
     expect(screen.queryByText(/Onde você quer procurar/)).toBeNull()
+  })
+})
+
+describe('FawkesRemotePage play/pause repetido', () => {
+  function preparar() {
+    render(<FawkesRemotePage />)
+    act(() => {
+      websocketMock.onMessage?.({
+        protocolVersion: 1,
+        type: 'PAIR_RESULT',
+        requestId: 'pair-1',
+        success: true,
+        message: 'Pareamento concluído.',
+        deviceId: 'device-1',
+        token: 'new-secure-token-value',
+      })
+      websocketMock.onMessage?.({
+        protocolVersion: 1,
+        type: 'STATE_UPDATE',
+        state: 'READY',
+        message: 'Computador pronto.',
+      })
+      websocketMock.onMessage?.({
+        protocolVersion: 1,
+        type: 'NOW_PLAYING',
+        session: {
+          title: 'Duna',
+          artist: null,
+          app: 'Chrome',
+          platform: null,
+          playing: true,
+          positionSeconds: 12,
+          durationSeconds: 600,
+          thumbnailId: null,
+        },
+      })
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Controle' }))
+  }
+
+  it('aceita o segundo toque sem esperar a resposta do primeiro', () => {
+    // Pausar e voltar logo em seguida é o uso normal do play/pause. O ciclo
+    // "executando → sucesso → 2s" descartava o segundo toque em silêncio.
+    preparar()
+    websocketMock.sendMessage.mockClear()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Play/Pause' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Play/Pause' }))
+
+    const enviados = websocketMock.sendMessage.mock.calls
+      .map(([m]) => (m as { type: string }).type)
+      .filter((type) => type === 'MEDIA_PLAY_PAUSE')
+    expect(enviados).toHaveLength(2)
+  })
+})
+
+
+describe('retomar do Perfil', () => {
+  beforeEach(() => {
+    window.history.replaceState({}, '', '/')
+    localStorage.clear()
+    websocketMock.connectionState = 'connected'
+    websocketMock.onMessage = undefined
+    websocketMock.sendMessage.mockReset()
+    websocketMock.sendMessage.mockReturnValue(true)
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('leva para a tela onde a resposta aparece, em vez de ficar no Perfil', async () => {
+    // Medido clicando no cartão de verdade: o comando ia e o servidor achava o
+    // título, mas a escolha de onde assistir só é desenhada na tela inicial.
+    // Quem tocava em "continuar assistindo" ficava no Perfil olhando uma frase
+    // solta, e o toque parecia não fazer nada.
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => ({
+      ok: true,
+      json: async () => (
+        String(url).includes('recommendations')
+          ? { enabled: true, base: null, titles: [], filtrado: false }
+          : {
+            continuar: [{
+              titulo: 'A Casa do Dragão',
+              platform: 'MAX',
+              segundos: 400,
+              posicao: null,
+              duracao: null,
+              posterUrl: null,
+            }],
+            generos: [],
+            plataformas: [],
+            totalDeTitulos: 1,
+            totalDeSegundos: 400,
+            conquistas: [],
+            progresso: null,
+          }
+      ),
+    })))
+
+    render(<FawkesRemotePage />)
+    act(() => {
+      websocketMock.onMessage?.({
+        protocolVersion: 1,
+        type: 'PAIR_RESULT',
+        requestId: 'pair-1',
+        success: true,
+        message: 'Pareamento concluído.',
+        deviceId: 'device-1',
+        token: 'new-secure-token-value',
+      })
+    })
+
+    act(() => {
+      websocketMock.onMessage?.({
+        protocolVersion: 1,
+        type: 'STATE_UPDATE',
+        state: 'READY',
+        message: 'Computador pronto.',
+      })
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Perfil' }))
+    const cartao = await screen.findByRole('button', { name: 'Retomar A Casa do Dragão' })
+
+    await act(async () => {
+      fireEvent.click(cartao)
+    })
+
+    // De volta à tela inicial, que é onde a escolha de plataforma é desenhada.
+    expect(screen.getByLabelText('Comando de texto')).toBeTruthy()
+    const enviados = websocketMock.sendMessage.mock.calls
+      .map(([m]) => m as { type: string; payload?: { query?: string } })
+      .filter((m) => m.type === 'TEXT_COMMAND')
+    expect(enviados.at(-1)?.payload?.query).toBe('A Casa do Dragão')
   })
 })

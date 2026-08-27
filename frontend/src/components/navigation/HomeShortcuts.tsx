@@ -5,6 +5,7 @@ import {
   LayoutGrid,
   MousePointer2,
   Settings,
+  UserRound,
   Volume2,
 } from 'lucide-react'
 
@@ -20,8 +21,9 @@ const SHORTCUTS = [
   { screen: 'TOUCHPAD', label: 'Touchpad', icon: MousePointer2 },
   { screen: 'KEYBOARD', label: 'Teclado', icon: Keyboard },
   { screen: 'VOLUME', label: 'Volume', icon: Volume2 },
+  { screen: 'PROFILE', label: 'Perfil', icon: UserRound },
   { screen: 'PLATFORMS', label: 'Plataformas', icon: LayoutGrid },
-  { screen: 'SETTINGS', label: 'Configurações', icon: Settings },
+  { screen: 'SETTINGS', label: 'Ajustes', icon: Settings },
 ] as const satisfies ReadonlyArray<{
   screen: NavigableScreen
   label: string
@@ -31,6 +33,8 @@ const SHORTCUTS = [
 export function HomeShortcuts({ onNavigate }: HomeShortcutsProps) {
   return (
     <section className="home-shortcuts" aria-labelledby="home-shortcuts-title">
+      {/* Sobrenome em cima do nome, como em toda tela interna. Lado a lado,
+          as duas linhas liam como dois rótulos soltos em vez de um título. */}
       <div className="home-shortcuts__heading">
         <p className="home-shortcuts__eyebrow">Controle rápido</p>
         <h2 id="home-shortcuts-title">Para onde vamos?</h2>

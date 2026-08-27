@@ -4,6 +4,24 @@ import pytest
 
 from app.media.session import MediaSession, WindowsMediaSessionDetector
 from app.media.windows_adapter import WindowsMediaAdapter
+from app.windows.focus import DesktopWindow
+
+
+def detector(title=None, audio=(), windows=()):
+    """Detector isolado do desktop real.
+
+    Sem `window_lister`, o detector varre as janelas de verdade da máquina e o
+    teste passa a depender do que estiver aberto na hora.
+    """
+    return WindowsMediaSessionDetector(
+        foreground_title_reader=lambda: title,
+        audio_process_reader=lambda: list(audio),
+        window_lister=lambda: list(windows),
+    )
+
+
+def janela(titulo, processo="chrome.exe", handle=1):
+    return DesktopWindow(handle=handle, process=processo, title=titulo)
 
 
 @pytest.mark.parametrize(
@@ -23,22 +41,47 @@ def test_media_session_detector_identifies_only_known_foreground_players(
     platform,
     kind,
 ):
-    detector = WindowsMediaSessionDetector(
-        foreground_title_reader=lambda: title,
-        audio_process_reader=lambda: [],
-    )
-
-    assert detector.detect() == MediaSession(platform=platform, kind=kind)
+    assert detector(title=title).detect() == MediaSession(platform=platform, kind=kind)
 
 
 @pytest.mark.parametrize("title", [None, "", "Documentos - Google Chrome", "Bloco de Notas"])
 def test_media_session_detector_rejects_unknown_or_missing_foreground_window(title):
-    detector = WindowsMediaSessionDetector(
-        foreground_title_reader=lambda: title,
-        audio_process_reader=lambda: [],
-    )
+    assert detector(title=title).detect() is None
 
-    assert detector.detect() is None
+
+def test_the_detector_finds_a_platform_behind_the_control_page():
+    """Com a página do controle aberta no computador, ela é a janela em foco.
+
+    Antes o detector só olhava a janela da frente e respondia "nenhuma
+    plataforma ativa" justamente quando havia uma tocando atrás.
+    """
+    found = detector(
+        title="Control Fawkes - Google Chrome",
+        audio=["chrome.exe"],
+        windows=[
+            janela("Control Fawkes - Google Chrome"),
+            janela("Não Beba Da Água • HBO Max - Google Chrome", handle=2),
+        ],
+    ).detect()
+
+    assert found == MediaSession(platform="MAX", kind="WEB")
+
+
+def test_the_control_page_itself_is_never_taken_for_a_platform():
+    assert detector(
+        title="Control Fawkes - Google Chrome",
+        windows=[janela("Control Fawkes - Google Chrome")],
+    ).detect() is None
+
+
+def test_the_window_in_front_wins_over_one_only_open():
+    """Quem está assistindo importa mais do que o que ficou aberto atrás."""
+    found = detector(
+        title="Interestelar - Netflix - Google Chrome",
+        windows=[janela("Não Beba Da Água • HBO Max - Google Chrome")],
+    ).detect()
+
+    assert found.platform == "NETFLIX"
 
 
 @pytest.mark.parametrize(

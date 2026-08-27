@@ -1,0 +1,553 @@
+"""Spike A da Fase 1 — Native Messaging.
+
+O que estes testes provam sem Chrome, sem registro do Windows e sem servidor no
+ar: o enquadramento que o Chrome usa, o laço do host, e o relay até o
+ControlFawkes. O que eles NÃO provam está registrado no Master Loop — carregar
+a extensão descompactada é clique humano em `chrome://extensions`.
+
+O valor de separar assim: quando o cano falhar em produção, dá para saber de
+imediato se o defeito está no enquadramento (coberto aqui) ou na instalação
+(não coberto, e por isso documentado passo a passo).
+"""
+
+from __future__ import annotations
+
+import io
+import json
+import struct
+
+import pytest
+
+from app.bridge import framing
+from app.bridge import native_host
+from app.bridge.native_host import PROTOCOL_VERSION, responder, servir
+
+
+def _enquadrar(conteudo: dict) -> bytes:
+    bruto = json.dumps(conteudo).encode("utf-8")
+    return struct.pack("@I", len(bruto)) + bruto
+
+
+def _desenquadrar(bruto: bytes) -> list[dict]:
+    mensagens = []
+    posicao = 0
+    while posicao < len(bruto):
+        (tamanho,) = struct.unpack("@I", bruto[posicao:posicao + 4])
+        posicao += 4
+        mensagens.append(json.loads(bruto[posicao:posicao + tamanho].decode("utf-8")))
+        posicao += tamanho
+    return mensagens
+
+
+# ── Enquadramento ─────────────────────────────────────────────────────────
+
+
+def test_ida_e_volta_do_enquadramento():
+    saida = io.BytesIO()
+    framing.escrever_mensagem(saida, {"messageType": "PING", "acentuação": "ção"})
+
+    lido = framing.ler_mensagem(io.BytesIO(saida.getvalue()))
+
+    assert lido == {"messageType": "PING", "acentuação": "ção"}
+
+
+def test_o_tamanho_vai_na_ordem_nativa_e_nao_na_de_rede():
+    """`@I` e não `!I`.
+
+    Trocar por ordem de rede passaria em qualquer teste que use o mesmo
+    `struct` dos dois lados e devolveria lixo em produção — porque quem escreve
+    do outro lado é o Chrome, que usa a ordem da máquina.
+    """
+    saida = io.BytesIO()
+    framing.escrever_mensagem(saida, {"a": 1})
+
+    cabecalho = saida.getvalue()[:4]
+
+    assert struct.unpack("@I", cabecalho)[0] == len(saida.getvalue()) - 4
+
+
+def test_cano_fechado_e_fim_normal():
+    with pytest.raises(framing.PonteFechada):
+        framing.ler_mensagem(io.BytesIO(b""))
+
+
+def test_mensagem_truncada_nao_passa_por_completa():
+    completa = _enquadrar({"messageType": "PING"})
+
+    with pytest.raises(framing.MensagemInvalida, match="truncada"):
+        framing.ler_mensagem(io.BytesIO(completa[:-3]))
+
+
+def test_leitura_em_pedacos_nao_trunca_a_mensagem():
+    """`read(n)` pode devolver menos do que se pediu, e em cano quase sempre
+    devolve. Um `read` solto funciona no teste e trunca em produção."""
+    completa = _enquadrar({"messageType": "PING", "recheio": "x" * 500})
+
+    class _AosPoucos(io.BytesIO):
+        def read(self, tamanho=-1):
+            # Nunca mais de 7 bytes por vez, que é o comportamento hostil.
+            return super().read(min(tamanho, 7) if tamanho and tamanho > 0 else tamanho)
+
+    assert framing.ler_mensagem(_AosPoucos(completa))["messageType"] == "PING"
+
+
+def test_tamanho_absurdo_e_recusado_antes_de_alocar():
+    cabecalho = struct.pack("@I", framing.MAXIMO_DE_ENTRADA + 1)
+
+    with pytest.raises(framing.MensagemInvalida, match="acima do limite"):
+        framing.ler_mensagem(io.BytesIO(cabecalho + b"x"))
+
+
+def test_tamanho_zero_e_recusado():
+    with pytest.raises(framing.MensagemInvalida, match="tamanho zero"):
+        framing.ler_mensagem(io.BytesIO(struct.pack("@I", 0)))
+
+
+def test_conteudo_que_nao_e_json_nao_derruba_o_host():
+    bruto = b"nao sou json"
+
+    with pytest.raises(framing.MensagemInvalida, match="JSON"):
+        framing.ler_mensagem(io.BytesIO(struct.pack("@I", len(bruto)) + bruto))
+
+
+def test_json_que_nao_e_objeto_e_recusado():
+    """O envelope tem campos com nome. Aceitar uma lista aqui empurraria o erro
+    para dentro de quem consome."""
+    bruto = b'["ping"]'
+
+    with pytest.raises(framing.MensagemInvalida, match="objeto JSON"):
+        framing.ler_mensagem(io.BytesIO(struct.pack("@I", len(bruto)) + bruto))
+
+
+def test_resposta_grande_demais_e_recusada():
+    with pytest.raises(framing.MensagemInvalida, match="acima do limite"):
+        framing.escrever_mensagem(
+            io.BytesIO(), {"recheio": "x" * (framing.MAXIMO_DE_SAIDA + 1)},
+        )
+
+
+# ── O relay ───────────────────────────────────────────────────────────────
+
+
+def test_ping_alcanca_o_controlfawkes_e_volta():
+    resposta = responder(
+        {"protocolVersion": 1, "messageType": "PING"},
+        sonda=lambda: {"status": "ok", "service": "fawkes-remote"},
+    )
+
+    assert resposta["messageType"] == "PONG"
+    assert resposta["ok"] is True
+    assert resposta["controlfawkes"]["status"] == "ok"
+
+
+def test_controlfawkes_fora_do_ar_e_dado_e_nao_silencio():
+    """O Chrome pode abrir antes do servidor. Isso é estado normal, e a
+    extensão precisa recebê-lo como resposta em vez de esperar para sempre."""
+    def recusada():
+        raise ConnectionRefusedError("connection refused")
+
+    resposta = responder({"protocolVersion": 1, "messageType": "PING"}, sonda=recusada)
+
+    assert resposta["ok"] is False
+    assert resposta["code"] == "CONTROLFAWKES_UNREACHABLE"
+
+
+def test_versao_de_protocolo_diferente_e_recusada():
+    resposta = responder({"protocolVersion": 99, "messageType": "PING"}, sonda=dict)
+
+    assert resposta["code"] == "PROTOCOL_VERSION_MISMATCH"
+
+
+def test_tipo_desconhecido_e_recusado_explicitamente():
+    """A Fase 1 conhece uma mensagem só. Recusar o resto é o que impede o spike
+    de virar protocolo por acidente."""
+    resposta = responder(
+        {"protocolVersion": 1, "messageType": "POSITION_UPDATE"}, sonda=dict,
+    )
+
+    assert resposta["code"] == "UNKNOWN_MESSAGE_TYPE"
+
+
+def test_o_host_nao_confia_na_extensao_so_porque_ela_e_nossa():
+    """Mensagem sem nada dentro não pode virar exceção não tratada."""
+    resposta = responder({}, sonda=dict)
+
+    assert resposta["ok"] is False
+
+
+# ── O laço ────────────────────────────────────────────────────────────────
+
+
+def test_o_laco_responde_cada_mensagem_e_termina_quando_o_cano_fecha():
+    entrada = io.BytesIO(
+        _enquadrar({"protocolVersion": 1, "messageType": "PING"})
+        + _enquadrar({"protocolVersion": 1, "messageType": "PING"}),
+    )
+    saida = io.BytesIO()
+
+    servir(entrada, saida, sonda=lambda: {"status": "ok"})
+
+    respostas = _desenquadrar(saida.getvalue())
+    assert [r["messageType"] for r in respostas] == ["PONG", "PONG"]
+
+
+def test_uma_mensagem_invalida_nao_mata_o_laco():
+    """Derrubar o host daria à extensão o poder de matá-lo com um byte errado,
+    e o Chrome respawnaria em seguida — um ciclo de processos invisível."""
+    lixo = b"{{{"
+    entrada = io.BytesIO(
+        struct.pack("@I", len(lixo)) + lixo
+        + _enquadrar({"protocolVersion": 1, "messageType": "PING"}),
+    )
+    saida = io.BytesIO()
+
+    servir(entrada, saida, sonda=lambda: {"status": "ok"})
+
+    respostas = _desenquadrar(saida.getvalue())
+    assert respostas[0]["code"] == "INVALID_MESSAGE"
+    assert respostas[1]["messageType"] == "PONG"
+
+
+def test_o_host_se_recupera_de_um_restart_do_controlfawkes_sem_reiniciar():
+    """O host não guarda conexão com o ControlFawkes: cada mensagem sonda de
+    novo.
+
+    É o que faz um restart do servidor ser transparente. Se ele mantivesse um
+    cliente vivo, o primeiro restart deixaria a ponte morta até o Chrome
+    resolver reconectar — e o Chrome não tem motivo para reconectar, porque do
+    lado dele nada caiu.
+    """
+    tentativas = {"n": 0}
+
+    def instavel():
+        tentativas["n"] += 1
+        if tentativas["n"] == 1:
+            raise ConnectionRefusedError("servidor reiniciando")
+        return {"status": "ok"}
+
+    entrada = io.BytesIO(
+        _enquadrar({"protocolVersion": 1, "messageType": "PING"})
+        + _enquadrar({"protocolVersion": 1, "messageType": "PING"}),
+    )
+    saida = io.BytesIO()
+
+    servir(entrada, saida, sonda=instavel)
+
+    respostas = _desenquadrar(saida.getvalue())
+    assert respostas[0]["code"] == "CONTROLFAWKES_UNREACHABLE"
+    assert respostas[1]["messageType"] == "PONG"
+
+
+def test_porta_fechada_sem_mensagem_nenhuma_sai_limpo():
+    saida = io.BytesIO()
+
+    servir(io.BytesIO(b""), saida, sonda=dict)
+
+    assert saida.getvalue() == b""
+
+
+# ── Identidade e instalação ───────────────────────────────────────────────
+
+
+def test_o_id_da_extensao_sai_da_chave_e_nao_do_caminho():
+    """Sem `key` no manifest, o ID vem do CAMINHO da pasta — muda de máquina
+    para máquina e o `allowed_origins` deixa de casar, sem erro visível."""
+    from scripts.gerar_identidade_da_extensao import id_da_extensao
+
+    identificador = id_da_extensao(b"chave de teste")
+
+    assert len(identificador) == 32
+    # O alfabeto do Chrome é 'a'-'p', e não hexadecimal.
+    assert set(identificador) <= set("abcdefghijklmnop")
+    # Determinístico: a mesma chave sempre dá o mesmo ID.
+    assert identificador == id_da_extensao(b"chave de teste")
+
+
+def test_a_chave_do_manifesto_bate_com_a_identidade_gerada():
+    """Se divergirem, o Chrome deriva outro ID e recusa a conexão em silêncio."""
+    import scripts.instalar_native_host as instalador
+
+    if not instalador.IDENTIDADE.exists():
+        pytest.skip("identidade ainda não gerada nesta máquina")
+
+    identidade = json.loads(instalador.IDENTIDADE.read_text(encoding="utf-8"))
+
+    # Não levanta: é isso que o instalador confere antes de tocar no registro.
+    instalador._conferir_o_manifesto_da_extensao(identidade)
+
+
+def test_o_manifesto_do_host_aponta_para_caminho_absoluto():
+    """Caminho relativo é ignorado em silêncio pelo Chrome."""
+    import scripts.instalar_native_host as instalador
+
+    if not instalador.IDENTIDADE.exists():
+        pytest.skip("identidade ainda não gerada nesta máquina")
+
+    identidade = json.loads(instalador.IDENTIDADE.read_text(encoding="utf-8"))
+    destino = instalador.escrever_manifesto_do_host(identidade)
+    conteudo = json.loads(destino.read_text(encoding="utf-8"))
+
+    from pathlib import Path
+
+    assert Path(conteudo["path"]).is_absolute()
+    assert conteudo["type"] == "stdio"
+    assert conteudo["allowed_origins"] == [
+        f"chrome-extension://{identidade['extensionId']}/"
+    ]
+
+
+# ── A entrega no ControlFawkes (Fase 7) ───────────────────────────────────
+
+
+def _evento(**payload) -> dict:
+    return {
+        "protocolVersion": 1,
+        "messageType": "POSITION_SYNC",
+        "timestamp": 0,
+        "payload": {"sessionId": "sessao-1", **payload},
+    }
+
+
+def test_um_evento_valido_e_entregue_no_controlfawkes():
+    """O host deixou de responder ACK por conta própria: agora ele ENTREGA. Um
+    ACK sem entrega era o host fingindo que o evento chegou a algum lugar."""
+    entregues: list[dict] = []
+
+    resposta = responder(
+        _evento(currentTime=10.0, duration=100.0),
+        entregar=lambda mensagem: entregues.append(mensagem) or {"ok": True},
+    )
+
+    assert resposta["messageType"] == "ACK"
+    assert len(entregues) == 1
+    assert entregues[0]["payload"]["sessionId"] == "sessao-1"
+
+
+def test_um_evento_invalido_nao_chega_a_ser_entregue():
+    """O host valida ANTES de entregar. Um relay que repassa lixo obriga o
+    servidor a se defender sozinho de um cano em que ele confia."""
+    entregues: list[dict] = []
+
+    resposta = responder(
+        _evento(currentTime=500.0, duration=100.0),
+        entregar=lambda mensagem: entregues.append(mensagem) or {"ok": True},
+    )
+
+    assert resposta["code"] == "IMPOSSIBLE_POSITION"
+    assert entregues == []
+
+
+def test_controlfawkes_fora_do_ar_na_entrega_tambem_e_dado():
+    """Mesma resposta do PING: o servidor fora do ar é estado normal, e a
+    extensão precisa disso como dado em vez de silêncio."""
+    def recusada(_mensagem):
+        raise ConnectionRefusedError("connection refused")
+
+    resposta = responder(_evento(), entregar=recusada)
+
+    assert resposta["ok"] is False
+    assert resposta["code"] == "CONTROLFAWKES_UNREACHABLE"
+
+
+def test_a_falta_da_credencial_nao_derruba_o_host():
+    """Sem credencial no disco a entrega falha — e falhar é responder, não
+    morrer. O Chrome respawnaria o host num laço que ninguém veria."""
+    def sem_credencial(_mensagem):
+        raise RuntimeError("credencial da ponte ausente")
+
+    resposta = responder(_evento(), entregar=sem_credencial)
+
+    assert resposta["ok"] is False
+    assert resposta["code"] == "CONTROLFAWKES_UNREACHABLE"
+
+
+def test_o_host_continua_sem_saber_o_que_o_evento_significa():
+    """A trava do relay: ele confere que a mensagem é utilizável e entrega. Não
+    há merger, histórico, relógio nem regra de sessão neste arquivo."""
+    from pathlib import Path
+
+    import app.bridge.native_host as host
+
+    fonte = Path(host.__file__).read_text(encoding="utf-8")
+    for proibido in ("historico", "history", "merger", "RelogioDaMidia", "NowPlaying"):
+        assert proibido not in fonte
+
+
+def test_o_log_rotaciona_em_vez_de_crescer_para_sempre(tmp_path, monkeypatch):
+    """Medido em 25/08/2026: 61.006 linhas, 7,5 MB, e nada apagava nada.
+
+    Cada batimento de cada aba vira uma linha, e o batimento não para enquanto
+    houver vídeo aberto. Num computador que fica ligado, isso não tem fim.
+    """
+    from app.bridge import native_host
+
+    log = tmp_path / "host.log"
+    log.write_text("o que havia antes", encoding="utf-8")
+
+    monkeypatch.setattr(native_host, "TAMANHO_MAXIMO_DO_LOG", 10)
+    monkeypatch.setattr(native_host, "caminho_do_log", lambda: log)
+    monkeypatch.delenv(native_host.VARIAVEL_SEM_LOG, raising=False)
+
+    native_host.anotar("TESTE", "depois da rotacao")
+
+    assert "depois da rotacao" in log.read_text(encoding="utf-8")
+    # A geração anterior é PRESERVADA: o diagnóstico mais útil costuma ser o
+    # que aconteceu ANTES de parar.
+    anterior = log.with_suffix(".log.anterior")
+    assert anterior.exists()
+    assert anterior.read_text(encoding="utf-8") == "o que havia antes"
+
+
+def test_o_log_pequeno_nao_rotaciona(tmp_path, monkeypatch):
+    """Rotacionar cedo demais jogaria fora o rastro que interessa."""
+    from app.bridge import native_host
+
+    log = tmp_path / "host.log"
+    monkeypatch.setattr(native_host, "caminho_do_log", lambda: log)
+    monkeypatch.delenv(native_host.VARIAVEL_SEM_LOG, raising=False)
+
+    native_host.anotar("UM", "primeiro")
+    native_host.anotar("DOIS", "segundo")
+
+    assert not log.with_suffix(".log.anterior").exists()
+    conteudo = log.read_text(encoding="utf-8")
+    assert "primeiro" in conteudo and "segundo" in conteudo
+
+
+# ── O sentido inverso — Fase 16 ───────────────────────────────────────────
+#
+# O host passou a ter DUAS bocas no stdout: a resposta do laço de `servir()` e
+# o comando do laço de comandos, de outra thread. stdout É o canal do Native
+# Messaging — duas escritas entrelaçadas desalinham o enquadramento e derrubam
+# a conexão sem nenhuma mensagem de erro.
+
+class TestResultadoQueSobe:
+    def test_o_resultado_da_pagina_vai_para_a_rota_de_resultado(self):
+        """E NÃO para a de eventos: um resultado não é um evento de mídia."""
+        entregues = []
+        resposta = native_host.responder(
+            {
+                "protocolVersion": 1,
+                "messageType": "RESULTADO",
+                "payload": {"id": "abc123", "ok": True, "detalhe": None},
+            },
+            resultado_padrao=entregues.append,
+        )
+
+        assert resposta["messageType"] == "ACK"
+        assert entregues == [{"id": "abc123", "ok": True, "detalhe": None}]
+
+    def test_um_resultado_sem_id_e_recusado(self):
+        resposta = native_host.responder(
+            {"protocolVersion": 1, "messageType": "RESULTADO", "payload": {}},
+            resultado_padrao=lambda _: None,
+        )
+
+        assert resposta["messageType"] == "ERROR"
+        assert resposta["code"] == "INVALID_MESSAGE"
+
+    def test_o_servidor_fora_do_ar_vira_dado_e_nao_silencio(self):
+        """O Chrome pode abrir antes do ControlFawkes. É estado normal."""
+        def explodir(_payload):
+            raise ConnectionError("recusou")
+
+        resposta = native_host.responder(
+            {
+                "protocolVersion": 1,
+                "messageType": "RESULTADO",
+                "payload": {"id": "abc", "ok": True},
+            },
+            resultado_padrao=explodir,
+        )
+
+        assert resposta["code"] == "CONTROLFAWKES_UNREACHABLE"
+
+
+class TestLacoDeComandos:
+    def test_o_comando_encontrado_e_escrito_para_a_extensao(self):
+        import io
+        import threading
+
+        saida = io.BytesIO()
+        parar = threading.Event()
+        entregues = [{"id": "c1", "acao": "PAUSE", "tabId": 7}]
+
+        def buscar():
+            if entregues:
+                return entregues.pop()
+            parar.set()
+            return None
+
+        native_host.laco_de_comandos(saida, parar, buscar=buscar)
+
+        escrito = saida.getvalue()
+        assert b'"COMANDO"' in escrito
+        assert b'"PAUSE"' in escrito
+
+    def test_nenhum_comando_nao_escreve_nada(self):
+        import io
+        import threading
+
+        saida = io.BytesIO()
+        parar = threading.Event()
+        voltas = {"n": 0}
+
+        def buscar():
+            voltas["n"] += 1
+            if voltas["n"] >= 3:
+                parar.set()
+            return None
+
+        native_host.laco_de_comandos(saida, parar, buscar=buscar)
+
+        assert saida.getvalue() == b""
+
+    def test_o_servidor_fora_do_ar_nao_vira_laco_apertado(self):
+        """Sem pausa, um ControlFawkes fora do ar viraria milhares de
+        tentativas por minuto — o mesmo defeito que a enxurrada de
+        `ERR_BLOCKED_BY_CLIENT` do player do Max mostrou ao vivo: cinquenta e
+        três mil tentativas, sem limite nenhum."""
+        import io
+        import threading
+        import time as _time
+
+        saida = io.BytesIO()
+        parar = threading.Event()
+        tentativas = {"n": 0}
+
+        original = native_host.SEGUNDOS_ANTES_DE_TENTAR_DE_NOVO
+        native_host.SEGUNDOS_ANTES_DE_TENTAR_DE_NOVO = 0.05
+
+        def buscar():
+            tentativas["n"] += 1
+            if tentativas["n"] >= 3:
+                parar.set()
+            raise ConnectionError("fora do ar")
+
+        try:
+            comeco = _time.monotonic()
+            native_host.laco_de_comandos(saida, parar, buscar=buscar)
+            gasto = _time.monotonic() - comeco
+        finally:
+            native_host.SEGUNDOS_ANTES_DE_TENTAR_DE_NOVO = original
+
+        # Três tentativas com pausa entre elas, e não três mil sem pausa.
+        assert tentativas["n"] == 3
+        assert gasto >= 0.08
+
+    def test_o_cano_fechado_encerra_o_laco(self):
+        """Escrever num cano fechado não pode virar laço infinito de erro."""
+        import threading
+
+        class CanoFechado:
+            def write(self, _dados):
+                raise BrokenPipeError("cano fechado")
+
+            def flush(self):
+                pass
+
+        parar = threading.Event()
+        native_host.laco_de_comandos(
+            CanoFechado(), parar, buscar=lambda: {"id": "c", "acao": "PLAY"},
+        )
+        # Se ele não tivesse retornado, o teste não chegaria aqui.
