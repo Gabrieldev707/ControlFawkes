@@ -22,6 +22,35 @@
 const PROTOCOL_VERSION = 1
 
 /**
+ * A cópia anterior desta aba sai de cena antes de esta entrar.
+ *
+ * Reinjetar NÃO substitui o content script que já estava rodando: ele continua
+ * inteiro na página, com os `setInterval` girando e os ouvintes pendurados no
+ * mesmo `<video>`. Cada reinjeção empilhava mais uma camada, e o único jeito
+ * de limpar era um F5.
+ *
+ * Até agora o dano era pequeno porque a cópia velha fica ÓRFÃ — o
+ * `chrome.runtime` dela morre junto com o worker antigo, então ela não
+ * consegue mandar nada e só desperdiça timer. Com a vigia do worker
+ * reinjetando sozinha isso deixaria de ser barato: a mesma aba acumularia uma
+ * camada por cutucão.
+ *
+ * O mundo isolado do content script é COMPARTILHADO entre injeções da mesma
+ * extensão, então este `globalThis` é o mesmo objeto para as duas cópias — e é
+ * por isso que a nova alcança a função da velha. Ela é JavaScript puro
+ * (`clearInterval`, nada de `chrome.*`), então funciona mesmo com o contexto
+ * da velha já invalidado.
+ */
+if (typeof globalThis.__fawkesDesmontar === 'function') {
+  try {
+    globalThis.__fawkesDesmontar()
+  } catch {
+    // Uma cópia velha que não consegue se desmontar não pode impedir a nova de
+    // subir: sem script na aba o silêncio é total, que é pior do que a sobra.
+  }
+}
+
+/**
  * Batimento esparso, e não um por segundo.
  *
  * A posição real é observada continuamente aqui dentro; o que é caro é
@@ -71,8 +100,27 @@ async function enviar(messageType, payload) {
     )
     return resposta?.ok === true
   } catch {
-    // O worker pode estar morto neste instante. Não é erro: ele volta na
-    // próxima mensagem, e é justamente por isso que o relógio não mora lá.
+    // Aqui moram DOIS casos que o código tratava como um só, e a diferença
+    // entre eles é a diferença entre esperar e desistir:
+    //
+    //   worker dormindo      passageiro. Ele volta na próxima mensagem, e é
+    //                        justamente por isso que o relógio não mora lá.
+    //
+    //   contexto invalidado  PERMANENTE. A extensão foi recarregada ou
+    //                        atualizada, e este content script virou órfão:
+    //                        nenhum `chrome.*` dele volta a funcionar, nunca.
+    //
+    // Tratar o segundo como o primeiro é o que fazia uma aba órfã girar o
+    // relógio para sempre sem mandar nada — silêncio total, sem erro, sem log,
+    // e sem nada na tela dizendo que aquela aba parou de existir para a ponte.
+    // Medido no host.log em 30/08/2026: 28 minutos de silêncio com o filme
+    // tocando e a aba ativa, e o que devolveu a ponte foi o usuário
+    // recarregando a extensão na mão (o PING das 13:45:46).
+    //
+    // `chrome.runtime.id` é o teste certo, e não a mensagem do erro: ele fica
+    // `undefined` exatamente quando o contexto morreu, sem depender do texto
+    // que o Chrome escolheu escrever.
+    if (chrome.runtime?.id === undefined) desmontar()
     return false
   }
 }
@@ -163,7 +211,7 @@ function emFracaoDaJanela(r) {
 }
 
 function ondeEstaOVideo() {
-  const video = observador.elemento()
+  const video = observador?.elemento() ?? null
   if (video === null) return {}
   let ponto = null
   try {
@@ -317,7 +365,32 @@ function metadataAtual() {
 
 let ultimaMetadata = null
 
-const observador = criarObservador((tipo, leitura) => {
+/**
+ * `let` e atribuição em duas etapas, e isto NÃO é estilo.
+ *
+ * `criarObservador` termina chamando `reconferir()` de forma SÍNCRONA. Se já
+ * houver um `<video>` na página nesse instante, ele prende o elemento e
+ * dispara `aoMudar('bound', ...)` ainda DENTRO da própria construção — e o
+ * callback abaixo chama `contexto()`, que chama `ondeEstaOVideo()`, que lê
+ * `observador`.
+ *
+ * Com `const`, essa leitura cai na zona morta temporal e estoura
+ * `ReferenceError: Cannot access 'observador' before initialization`. O erro
+ * sobe por `criarObservador` e MATA o content script inteiro: sem relógio, sem
+ * vigia de metadata, sem observador. A aba fica muda e nada acusa.
+ *
+ * Quando isso acontece: só quando já existe vídeo na página no momento da
+ * injeção. Num carregamento normal o player da Netflix ainda não está no DOM
+ * no `document_idle`, e por isso o defeito ficou escondido. Ele aparece
+ * exatamente no caso que mais importa — reinjetar numa aba que JÁ está
+ * tocando, que é o que a vigia do worker faz e o que `reinjetarNasAbasAbertas`
+ * já fazia a cada reload da extensão.
+ *
+ * O `let` tira a zona morta; os `observador?.` abaixo cobrem a janela em que
+ * ele ainda é `null`.
+ */
+let observador = null
+observador = criarObservador((tipo, leitura) => {
   // Os carimbos são atualizados para TODO evento, inclusive os que não geram
   // envio imediato — é o que faz `msDesdeUltimoEvento` medir atividade real da
   // aba, e não só a atividade que por acaso atravessou a ponte.
@@ -351,7 +424,7 @@ function olharAMetadata() {
   const agora = typeof lerMetadata === 'function' ? lerMetadata(document, location) : null
   if (mesmaMetadata(agora, ultimaMetadata)) return
   ultimaMetadata = agora
-  const leitura = observador.ler()
+  const leitura = observador?.ler() ?? null
   void enviar('MEDIA_CHANGED', { ...contexto(), ...(leitura ?? {}) })
 }
 
@@ -395,7 +468,7 @@ function executarComando(payload) {
   const executar = ACOES[payload.acao]
   if (executar === undefined) return { ok: false, detalhe: `ação desconhecida: ${payload.acao}` }
 
-  const video = observador.elemento()
+  const video = observador?.elemento() ?? null
   if (video === null) return { ok: false, detalhe: 'sem elemento' }
 
   const numero = typeof payload.valor === 'number' && Number.isFinite(payload.valor)
@@ -418,6 +491,19 @@ function executarComando(payload) {
 }
 
 chrome.runtime.onMessage.addListener((mensagem, _remetente, responder) => {
+  // O cutucão da vigia do worker. Responder É o serviço: o worker não tem como
+  // saber se esta aba ainda tem content script vivo a não ser perguntando, e
+  // uma aba órfã simplesmente não responde — é assim que ela é descoberta e
+  // reinjetada. Ver `vigiar` no service worker.
+  if (mensagem?.messageType === 'CUTUCAO') {
+    responder({ ok: true })
+    // E já bate na hora: quem cutucou está sem notícia desta aba, e esperar o
+    // próximo tique do relógio seria mais dez segundos de tela desatualizada.
+    // É também o que devolve o batimento quando o Chrome estrangulou o timer
+    // desta aba por ela estar em segundo plano.
+    baterAgora()
+    return false
+  }
   if (mensagem?.messageType !== 'COMANDO') return false
   responder(executarComando(mensagem.payload))
   return false
@@ -429,7 +515,7 @@ let vigiaDaMetadata = setInterval(olharAMetadata, 2000)
 let relogio = null
 
 function baterAgora() {
-  const leitura = observador.ler()
+  const leitura = observador?.ler() ?? null
   // Sem elemento não há o que sincronizar. Mandar um batimento vazio faria o
   // backend achar que a aba tem mídia parada, em vez de mídia nenhuma.
   if (leitura === null) return
@@ -444,6 +530,33 @@ function desligarRelogio() {
   if (relogio !== null) clearInterval(relogio)
   relogio = null
 }
+
+/**
+ * Esta cópia sai de cena — de vez.
+ *
+ * Duas portas levam aqui, e as duas precisam do mesmo desfecho:
+ *
+ *   uma cópia NOVA chegou   a reinjeção da vigia, ou um reload da extensão.
+ *                           Quem manda é a nova; a velha só atrapalharia.
+ *   o contexto morreu       a extensão foi recarregada e este script virou
+ *                           órfão. Continuar girando é gastar bateria para
+ *                           falar com ninguém.
+ *
+ * Solta o `<video>` também: sem isso os ouvintes da cópia velha continuam
+ * pendurados no mesmo elemento que a nova vai observar.
+ */
+function desmontar() {
+  desligarRelogio()
+  clearInterval(vigiaDaMetadata)
+  try {
+    observador?.parar()
+  } catch {
+    // Um observador que já soltou o elemento não pode impedir o resto.
+  }
+}
+
+// Publicado para a PRÓXIMA cópia encontrar. Ver a guarda no topo do arquivo.
+globalThis.__fawkesDesmontar = desmontar
 
 ligarRelogio()
 
@@ -483,7 +596,7 @@ addEventListener('pagehide', (evento) => {
   })
   // Só solta o observador quando a página não volta. No bfcache o `<video>`
   // continua lá, e reencontrá-lo depois seria trabalho à toa.
-  if (!evento.persisted) observador.parar()
+  if (!evento.persisted) observador?.parar()
 })
 
 // E a volta. Sem isto, tudo acima é despedida sem reencontro.

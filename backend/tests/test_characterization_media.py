@@ -359,6 +359,14 @@ async def test_timeline_que_volta_a_andar_volta_a_ser_confiavel(monkeypatch):
         ("Preseason 2 - Netflix - Google Chrome", "Preseason 2"),
         # Sobrar nada não corta: "Temporada 2" é tudo o que a janela sabe.
         ("Temporada 2 - Netflix - Google Chrome", "Temporada 2"),
+        # O aviso de intervalo de anúncio da Netflix não é nome de obra.
+        # Medido no histórico real: quatro obras com duas linhas cada, e o
+        # mesmo `reproducao` nas duas.
+        ("Kill Bill: Vol. 1 resumes after ads - Netflix", "Kill Bill: Vol. 1"),
+        # Sem o serviço atrás, que é como o adapter entrega.
+        ("Naruto resumes after ads", "Naruto"),
+        # Sobrar nada não corta, pelo mesmo motivo de "Temporada 2".
+        ("resumes after ads", "resumes after ads"),
         # Só o nome do serviço sobrevive como está: não há obra ali.
         ("Netflix", "Netflix"),
         # Só espaço vira vazio, não estoura. O `or titulo.strip()` do fim

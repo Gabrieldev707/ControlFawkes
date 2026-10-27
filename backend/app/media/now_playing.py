@@ -165,6 +165,25 @@ class NowPlaying:
 # serviço, nem o fim do nome do episódio.
 _SEPARADORES = (" - ", " — ", " | ", " · ", " • ")
 
+# O aviso de intervalo de anúncio, que a Netflix pendura no fim do nome.
+#
+# Durante o intervalo ela reescreve o título da aba para "<Obra> resumes after
+# ads". O adapter já corta isso na origem; aqui é a segunda tranca, e é ela que
+# alcança o que JÁ está gravado — `consolidar` reaplica esta limpeza sobre o
+# histórico antigo no arranque do servidor.
+#
+# Medido no histórico real em 30/08/2026: quatro obras com duas linhas cada, e
+# o MESMO `reproducao` nas duas, provando que era uma reprodução só:
+#
+#     NETFLIX::once upon a time in hollywood                    5327s  id:81064867
+#     NETFLIX::once upon a time in hollywood resumes after ads  3043s  id:81064867
+#
+# O tempo partido é o menor dos danos: o `concluida` caiu na linha do anúncio,
+# então o filme de verdade nunca saía de "continuar assistindo", e o título com
+# o aviso não existe em catálogo nenhum — "Naruto resumes after ads" ficou sem
+# capa para sempre.
+_AVISO_DE_ANUNCIO = re.compile(r"\s+resumes?\s+after\s+ads\s*$", re.IGNORECASE)
+
 
 def _sem_invisiveis(texto: str) -> str:
     """Sem as marcas de formatação que não se veem na tela.
@@ -299,6 +318,16 @@ def _limpar_o_ruido(titulo: str) -> str:
                 if sobra:
                     limpo = sobra
                 break
+
+    # O aviso de intervalo de anúncio sai DEPOIS dos sufixos, porque ele pode
+    # vir com o nome do serviço grudado atrás ("... resumes after ads |
+    # Netflix"): só depois que aquele fim saiu é que este vira o fim do texto.
+    # Ver `_AVISO_DE_ANUNCIO` para o que isso custou no histórico real.
+    sem_aviso = _AVISO_DE_ANUNCIO.sub("", limpo).strip()
+    # Só corta se sobrar nome — um título que fosse SÓ o aviso não é obra
+    # nenhuma, e devolver vazio aqui faria o chamador cair no título bruto.
+    if sem_aviso:
+        limpo = sem_aviso
 
     # "Obra: Season 2: Nome do Episódio" — a forma que a Netflix usa quando
     # publica tudo no título da janela.

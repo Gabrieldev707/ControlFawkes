@@ -198,6 +198,26 @@ const RUIDO_DO_TITULO = [
   /\s*\|\s*site oficial d[ao]\s+netflix\s*$/i,
   /\s*\|\s*netflix official site\s*$/i,
   /\s*[-|]\s*netflix\s*$/i,
+  // O intervalo de anúncio. Durante ele a Netflix reescreve o título da aba
+  // para "<Obra> resumes after ads", e isso NÃO é o nome de nada — é um aviso
+  // ao espectador que por acidente vinha parar no histórico como obra.
+  //
+  // Medido no histórico real (30/08/2026): quatro obras ocupavam duas linhas
+  // cada, com o MESMO `reproducao` nas duas — prova de que era a mesma
+  // reprodução, só que renomeada no meio dela:
+  //
+  //     NETFLIX::kill bill: vol. 1                    9291s  id:60031236
+  //     NETFLIX::kill bill: vol. 1 resumes after ads  2216s  id:60031236
+  //
+  // O estrago passa do tempo partido. O `concluida` do filme ficou na linha
+  // do anúncio, então a obra de verdade nunca saía de "continuar assistindo";
+  // e "Naruto resumes after ads" não existe em catálogo nenhum, então aquela
+  // linha ficou para sempre sem capa.
+  //
+  // Fica por ÚLTIMO porque a lista é aplicada em ordem: o aviso pode vir com o
+  // sufixo do serviço depois dele ("... resumes after ads | Netflix"), e só
+  // depois que aquele fim sai é que este vira o fim do texto.
+  /\s+resumes?\s+after\s+ads\s*$/i,
 ]
 
 function doTituloDaAba(titulo) {

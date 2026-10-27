@@ -194,6 +194,26 @@ describe('o título da aba, como segunda estratégia', () => {
 
     expect(lerNetflix(document, emWatch)?.workTitle).toBe('Sherlock')
   })
+
+  it('o aviso de intervalo de anúncio não é o nome da obra', () => {
+    // Medido no histórico real em 30/08/2026: quatro obras com DUAS linhas
+    // cada e o mesmo `reproducao` nas duas, porque a Netflix renomeia a aba
+    // no meio da reprodução.
+    //
+    //     NETFLIX::kill bill: vol. 1                    9291s  id:60031236
+    //     NETFLIX::kill bill: vol. 1 resumes after ads  2216s  id:60031236
+    document.title = 'Kill Bill: Vol. 1 resumes after ads'
+
+    expect(lerNetflix(document, emWatch)?.workTitle).toBe('Kill Bill: Vol. 1')
+  })
+
+  it('o aviso sai mesmo com o nome do serviço grudado atrás', () => {
+    // A ordem da lista de ruído é o que se exercita aqui: o "- Netflix" sai
+    // primeiro, e só então o aviso vira o fim do texto.
+    document.title = 'Naruto resumes after ads - Netflix'
+
+    expect(lerNetflix(document, emWatch)?.workTitle).toBe('Naruto')
+  })
 })
 
 

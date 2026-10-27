@@ -11,3 +11,8 @@ backend/data/
 .pytest_cache/
 backend/.pytest-tmp/
 .playwright-mcp/
+
+# Pastas de ferramentas locais (IA/automação)
+.agents/
+.claude/
+graphify-out/

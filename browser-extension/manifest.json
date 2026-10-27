@@ -29,7 +29,8 @@
     "nativeMessaging",
     "storage",
     "tabs",
-    "scripting"
+    "scripting",
+    "alarms"
   ],
   "action": {
     "default_title": "ControlFawkes Bridge"

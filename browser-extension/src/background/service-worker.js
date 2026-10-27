@@ -152,6 +152,11 @@ chrome.runtime.onMessage.addListener((mensagem, sender, responder) => {
     tabId: sender.tab?.id ?? null,
   })
 
+  // Esta aba acabou de falar. É o único dado de que a vigia precisa, e ele
+  // entra aqui porque aqui passa TODA mensagem de toda aba — inclusive as que
+  // não são batimento, que também provam que há script vivo do outro lado.
+  void anotarQueFalou(sender.tab?.id ?? null)
+
   responder({ ok: enviarAoHost(enriquecida) })
   return false
 })
@@ -252,9 +257,158 @@ async function reinjetarNasAbasAbertas() {
   void registrar('REINJETADO', { abas: injetadas })
 }
 
+/**
+ * A vigia — e por que ela NÃO viola a regra do relógio.
+ *
+ * O Master Loop proíbe o worker de ser responsável pelo relógio, e continua
+ * proibindo: quem conta tempo é o content script, e nada aqui conta tempo.
+ * Isto é outra coisa — é conferir se as abas ainda estão FALANDO, e o worker é
+ * o único lado que pode fazer isso, porque é o único que sabe endereçar abas.
+ *
+ * `chrome.alarms` e não `setInterval` justamente por causa da regra: alarme
+ * sobrevive à morte do worker e o ACORDA para disparar. Um `setInterval` aqui
+ * morreria junto com o worker, em silêncio, que é o defeito que a regra existe
+ * para evitar.
+ *
+ * ## O que a vigia conserta
+ *
+ * Medido no host.log em 30/08/2026, os dois modos de silêncio:
+ *
+ *   aba em segundo plano   o Chrome estrangula `setInterval` para uma vez por
+ *                          minuto e depois congela a aba. O batimento de dez
+ *                          segundos chegou a passar 840 segundos sem sair, e a
+ *                          cadência ficou em exatos 60s — a assinatura do
+ *                          estrangulamento.
+ *
+ *   content script órfão   a extensão recarregou e a aba ficou sem `chrome.*`.
+ *                          Vinte e oito minutos de silêncio com o filme
+ *                          tocando e a aba ativa; o que devolveu a ponte foi o
+ *                          usuário recarregando a extensão na mão.
+ *
+ * O cutucão resolve o primeiro (a aba responde e bate na hora) e DESCOBRE o
+ * segundo (a órfã não responde), e aí a reinjeção resolve.
+ */
+const ALARME_DA_VIGIA = 'vigia-das-abas'
+
+/**
+ * Quanto tempo de silêncio de uma aba já é motivo de suspeita.
+ *
+ * O batimento é de dez segundos. Noventa dá folga para o estrangulamento
+ * brando do Chrome e para uma volta perdida, sem deixar o silêncio real passar
+ * de um minuto e meio — que já é mais do que a tela deveria mentir.
+ */
+const SEGUNDOS_DE_SILENCIO_SUSPEITO = 90
+
+/**
+ * Quando cada aba falou pela última vez.
+ *
+ * Em `chrome.storage.session` e não em memória porque memória de worker morto
+ * não é memória — a mesma razão do diário. `session` e não `local`: isto
+ * descreve esta execução do navegador e não faz sentido sobreviver a ela.
+ */
+async function anotarQueFalou(tabId) {
+  if (tabId === null || chrome.storage?.session === undefined) return
+  try {
+    const { ultimaFala = {} } = await chrome.storage.session.get('ultimaFala')
+    ultimaFala[tabId] = Date.now()
+    await chrome.storage.session.set({ ultimaFala })
+  } catch {
+    // Sem o registro a vigia cutuca a aba à toa, que é barato. Derrubar a
+    // mensagem que estava passando não seria.
+  }
+}
+
+async function vigiar() {
+  if (chrome.storage?.session === undefined) return
+  let ultimaFala = {}
+  try {
+    ({ ultimaFala = {} } = await chrome.storage.session.get('ultimaFala'))
+  } catch {
+    return
+  }
+
+  const agora = Date.now()
+  const vivas = {}
+  for (const [chave, quando] of Object.entries(ultimaFala)) {
+    const tabId = Number(chave)
+    // A aba sumiu do Chrome: esquecer é o certo, e tentar cutucá-la só geraria
+    // erro. Sem isto o registro cresceria para sempre.
+    let existe = true
+    try {
+      await chrome.tabs.get(tabId)
+    } catch {
+      existe = false
+    }
+    if (!existe) continue
+    vivas[tabId] = quando
+
+    if (agora - quando < SEGUNDOS_DE_SILENCIO_SUSPEITO * 1000) continue
+
+    // Cutucar primeiro. Uma aba viva e só estrangulada responde na hora e bate
+    // junto — e reinjetar uma aba que estava boa custaria trocar o observador
+    // e o `sessionId` dela por nada.
+    let respondeu = false
+    try {
+      const resposta = await chrome.tabs.sendMessage(tabId, {
+        messageType: 'CUTUCAO',
+      })
+      respondeu = resposta?.ok === true
+    } catch {
+      // Não respondeu: órfã, congelada, ou página que nunca teve script.
+    }
+    if (respondeu) {
+      void registrar('VIGIA_CUTUCOU', { tabId, silencio: Math.round((agora - quando) / 1000) })
+      continue
+    }
+
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        files: ARQUIVOS_DO_CONTENT_SCRIPT,
+      })
+      void registrar('VIGIA_REINJETOU', { tabId, silencio: Math.round((agora - quando) / 1000) })
+      // Conta como falado agora: a aba acabou de ganhar script novo, e cobrar
+      // dela um batimento imediato só a reinjetaria de novo no próximo alarme.
+      vivas[tabId] = agora
+    } catch {
+      // Aba do próprio Chrome, PDF, página de erro. Não dá para injetar, e
+      // insistir a cada minuto não muda isso.
+    }
+  }
+
+  try {
+    await chrome.storage.session.set({ ultimaFala: vivas })
+  } catch {
+    // O próximo alarme reconstrói o que se perdeu aqui.
+  }
+}
+
+chrome.alarms?.onAlarm.addListener((alarme) => {
+  if (alarme.name === ALARME_DA_VIGIA) void vigiar()
+})
+
+/**
+ * Um minuto é o piso do `chrome.alarms` em produção, e serve.
+ *
+ * `create` com o mesmo nome substitui o alarme existente, então chamar isto a
+ * cada start do worker é idempotente — e é preciso, porque o worker morre e
+ * volta o tempo todo.
+ */
+function ligarAVigia() {
+  try {
+    chrome.alarms?.create(ALARME_DA_VIGIA, { periodInMinutes: 1 })
+  } catch {
+    // Sem a API de alarmes a ponte continua funcionando como antes: o
+    // batimento da aba é o caminho normal, e a vigia é a rede embaixo dele.
+  }
+}
+
+ligarAVigia()
+
 chrome.runtime.onInstalled.addListener(() => {
   void registrar('INSTALLED')
   void reinjetarNasAbasAbertas()
+  ligarAVigia()
   enviarAoHost(envelope('PING'))
 })
 
